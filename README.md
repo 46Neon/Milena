@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/milena-cover.jpg" alt="Milena — lenguaje para análisis de datos" width="100%">
+</p>
+
 # 🌿 Milena
 
 ## Análisis de datos intuitivo y nativo en español
@@ -64,10 +68,50 @@ cd Milena
 ./build.sh
 ```
 
+### Validación estricta en Linux
+
+Para compilar con GCC y tratar todas las advertencias como errores:
+
+```bash
+make strict
+```
+
+Este objetivo ejecuta la compilación completa y la suite de pruebas con C17, `-Wall`, `-Wextra`, `-Wpedantic`, `-Wshadow`, `-Wconversion` y `-Werror`.
+
+También se recomienda validar con Clang:
+
+```bash
+make clean
+make CC=clang CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror -O2 -Iinclude' LDFLAGS='-lm'
+make CC=clang CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror -O2 -Iinclude' LDFLAGS='-lm' test
+```
+
+### Termux
+
+Milena incluye un script de compilación para Termux/Android:
+
+```bash
+bash packaging/termux/build-termux.sh
+```
+
+El script instala Clang y Make, compila con C17 y ejecuta las pruebas disponibles. La confirmación final de compatibilidad debe hacerse en un dispositivo Android con Termux.
+
+### Validación Windows
+
+La compilación Windows se ejecuta en GitHub Actions sobre un runner `windows-latest` con LLVM. El workflow valida el ejecutable, el checksum, los smoke tests de arreglos, bosques y finanzas, y genera el artefacto portable `.zip`.
+
+Colab puede utilizarse para compilar Linux y, con un toolchain cruzado MinGW, producir una prueba experimental para Windows. No sustituye al runner Windows, porque no valida el comportamiento real de PowerShell, CMD, rutas, permisos ni la ejecución nativa del `.exe`.
+
 Ejecutar un script:
 
 ```bash
-./milena run ejemplos/estadistica.milena
+./milena run examples/ventas.milena
+```
+
+Compilar un programa y mostrar su IR:
+
+```bash
+./milena compile examples/ventas.milena
 ```
 
 Analizar un archivo tabular:
