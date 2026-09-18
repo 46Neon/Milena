@@ -2,7 +2,7 @@
 
 ## 1. Alcance ejecutado
 
-Se convirtió la capa numérica de `MilenaArray` en un runtime coherente, autocontenido en `src/array.c`, sin crear `dtype.c`, sin tocar Makefile y sin modificar ownership/vistas más allá de consumir el modelo de memoria del Trabajador 2.
+Se convirtió la capa numérica de `MilenaArray` en un runtime coherente, autocontenido en `src/array.c`, sin crear `dtype.c` y sin modificar ownership/vistas más allá de consumir el modelo de memoria del Trabajador 2. La fase correctiva posterior unificó la división real, estabilizó el diagnóstico de overflow e integró las suites Worker 2 y Worker 3 en el Makefile.
 
 ### Implementado
 
@@ -10,8 +10,9 @@ Se convirtió la capa numérica de `MilenaArray` en un runtime coherente, autoco
 - API pública de promoción `milena_dtype_promote` y matriz exacta 11×11;
 - casts completos entre bool/signed/unsigned/float, con rango y failure atomicity;
 - complex64/128 declarado y aplicado como storage-only;
-- add/subtract/multiply/divide con promoción y broadcasting;
-- aritmética integer checked, sin wraparound ni UB;
+- add/subtract/multiply con promoción y broadcasting;
+- `divide` como división real: dos operandos enteros/`bool` producen `float64`, sin truncamiento;
+- aritmética integer checked, sin wraparound ni UB, con `MILENA_ERR_OVERFLOW` y diagnóstico estable que incluye `fuera de rango`;
 - recorrido shape/strides para arrays contiguos, transpose, slices positivos/negativos y broadcast stride cero;
 - sum/prod globales y por eje;
 - mean/min/max/variance/std globales y por eje;
@@ -20,9 +21,10 @@ Se convirtió la capa numérica de `MilenaArray` en un runtime coherente, autoco
 - percentil lineal `[0,100]`, strided y con propagación de NaN;
 - nuevas APIs `prod`, `equal`, `less`, `greater`, `isnan`, `isfinite`, `argmin`, `argmax`;
 - soporte `keepdims` y ejes negativos compatibles con el sentinel histórico;
-- pruebas exhaustivas nuevas en un único `tests/test_array_worker3.c`;
-- regresión real de Worker 2, array heredado, table y forest;
-- ASan + UBSan + detección de leaks.
+- pruebas numéricas en `tests/test_array_worker3.c` y regresión canónica de división en `tests/test_array.c`;
+- regresión real de Worker 2, Worker 3 y array heredado;
+- suites Worker 2 y Worker 3 integradas en los objetivos `test` y `clean` del Makefile;
+- ASan + UBSan + detección de leaks para Worker 2 y Worker 3.
 
 ## 2. Matriz exacta de soporte
 
@@ -45,8 +47,8 @@ La matriz completa dtype×dtype de promoción está en `docs/DTYPE_AND_NUMERICAL
 - Mezclas signed/unsigned eligen un signed capaz de representar ambos dominios; si intervienen `uint64` y signed, el resultado es `float64`.
 - Operaciones integer que no caben en el dtype promovido devuelven `MILENA_ERR_OVERFLOW`.
 - División por cero integer o float devuelve `MILENA_ERR_ARGUMENT`.
-- División integer trunca hacia cero.
-- Float→integer trunca hacia cero; NaN/Inf devuelve `MILENA_ERR_TYPE`; fuera de rango devuelve `MILENA_ERR_OVERFLOW`.
+- `milena_array_divide` y el operador `/` hacen división real; dos operandos enteros/`bool` producen `float64` (`-7 / 2 == -3.5`). No existe una segunda semántica truncada bajo `/`.
+- Float→integer en un cast explícito sí trunca hacia cero; NaN/Inf devuelve `MILENA_ERR_TYPE`; fuera de rango devuelve `MILENA_ERR_OVERFLOW`.
 - NaN/Inf se conservan en casts float→float y se propagan con reglas IEEE en estadísticas. Min/max/percentile propagan NaN.
 - `argmin`/`argmax` rechazan NaN y seleccionan la primera posición C-order en empates.
 - `sum(empty)=0`, `prod(empty)=1`; estadísticas y orden de un conjunto reducido vacío devuelven `MILENA_ERR_ARGUMENT`.
@@ -69,114 +71,81 @@ No se revirtió ni modificó el diseño de:
 
 Todos los kernels nuevos publican la salida solo tras completar con éxito. Un overflow, cast inválido, dtype no soportado o división por cero deja intacta una salida previa válida.
 
-## 5. Archivos de entrega
+## 5. Archivos de la fase correctiva
 
-Modificados respecto del baseline Worker 2:
+Modificados respecto del head inicial `8dc6a2f32369d612fd444beae2a43d3af5f6240a`:
 
 1. `include/array.h`
 2. `src/array.c`
+3. `tests/test_array_worker3.c`
+4. `tests/test_array.c`
+5. `tests/run_tests.sh`
+6. `docs/DTYPE_AND_NUMERICAL_SEMANTICS.md`
+7. `docs/REPORTE_WORKER3_IMPLEMENTADO.md`
+8. `Makefile` (en un commit separado del cambio numérico)
 
-Nuevos:
+No se modificaron `script.c`, `common.*`, `main.c`, frontend/parser, table/dataset, finance, SST, forest, workflows ni packaging.
 
-3. `docs/DTYPE_AND_NUMERICAL_SEMANTICS.md`
-4. `docs/REPORTE_WORKER3_IMPLEMENTADO.md`
-5. `tests/test_array_worker3.c`
-
-No se modificaron `common.*`, `main.c`, Makefile, build scripts, script/frontend/parser, table/dataset, finance, SST, forest, workflows ni packaging.
-
-## 6. Verificación real
+## 6. Verificación real de la fase correctiva (2026-09-18)
 
 ### Toolchain detectado
 
-No había `cc` ni `make` en PATH. Se instaló temporalmente el paquete `ziglang==0.16.0` y se compiló mediante:
+No había `cc` ni `make` en PATH. Se instaló temporalmente `ziglang==0.16.0` y se usó `python3 -m ziglang cc` (versión confirmada `0.16.0`). No se afirma haber usado GCC/Clang independientes ni haber ejecutado `make test`. Las recetas pertinentes se ejecutaron manualmente.
 
-```sh
-python3 -m ziglang cc
-```
+### Worker 2 y Worker 3 con warnings estrictos
 
-Versión confirmada: `0.16.0`. Esto es el driver C incluido por Zig; no se afirma haber usado GCC o un Clang del sistema.
-
-### Worker 3, warnings estrictos
+Ambas suites se compilaron con C17 y `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror`:
 
 ```sh
 python3 -m ziglang cc -std=c17 -Iinclude \
   -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror \
-  src/common.c src/array.c tests/test_array_worker3.c -lm \
-  -o test_worker3
+  src/common.c src/array.c tests/test_array_worker2.c -lm -o test_worker2
+./test_worker2
+
+python3 -m ziglang cc -std=c17 -Iinclude \
+  -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror \
+  src/common.c src/array.c tests/test_array_worker3.c -lm -o test_worker3
 ./test_worker3
 ```
 
-Resultado:
-
-```text
-OK: worker3 dtype, kernels, broadcasting and reductions
-```
-
-### ASan + UBSan + leaks
-
-```sh
-python3 -m ziglang cc -std=c17 -Iinclude \
-  -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror \
-  -fsanitize=address,undefined -fno-omit-frame-pointer \
-  src/common.c src/array.c tests/test_array_worker3.c -lm \
-  -o test_worker3_san
-ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-UBSAN_OPTIONS=halt_on_error=1 ./test_worker3_san
-```
-
-Resultado: test completo OK, sin diagnóstico de ASan, UBSan ni LeakSanitizer.
-
-También se ejecutaron con los mismos sanitizadores `tests/test_array_worker2.c` y `tests/test_array.c`; ambos terminaron OK y sin diagnósticos.
-
-### Regresión Worker 2
-
-```sh
-python3 -m ziglang cc -std=c17 -Iinclude \
-  -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror \
-  src/common.c src/array.c tests/test_array_worker2.c -lm \
-  -o test_worker2
-./test_worker2
-```
-
-Resultado:
+Resultados:
 
 ```text
 OK: worker2 array memory model, views, buffers and atomic outputs
+OK: worker3 dtype, kernels, broadcasting and reductions
 ```
 
 ### Regresión array heredada
 
-El test heredado tiene cuatro conversiones signed/unsigned preexistentes en aritmética de punteros (`size_t × ptrdiff_t`). La implementación `src/array.c` sí compila con todos los warnings y `-Werror`; únicamente para ese archivo de test heredado se añadió la supresión mínima:
-
-```sh
--Wno-sign-conversion
-```
-
-Comando:
+Se compiló con el mismo set estricto y la supresión mínima preexistente `-Wno-sign-conversion`, necesaria solo por conversiones signed/unsigned del propio test heredado:
 
 ```sh
 python3 -m ziglang cc -std=c17 -Iinclude \
   -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror \
-  -Wno-sign-conversion \
-  src/common.c src/array.c tests/test_array.c -lm \
-  -o test_array_legacy
+  -Wno-sign-conversion src/common.c src/array.c tests/test_array.c \
+  -lm -o test_array_legacy
 ./test_array_legacy
 ```
 
-Resultado:
+Resultado: `OK: MilenaArray creation, views, broadcasting and reductions`.
 
-```text
-OK: MilenaArray creation, views, broadcasting and reductions
+### ASan y UBSan
+
+Worker 2 y Worker 3 se recompilaron con el set estricto más `-fsanitize=address,undefined -fno-omit-frame-pointer` y se ejecutaron con `ASAN_OPTIONS=detect_leaks=1:halt_on_error=1` y `UBSAN_OPTIONS=halt_on_error=1`. Ambas suites terminaron OK sin diagnósticos de ASan, UBSan ni LeakSanitizer.
+
+### Producto completo y E2E
+
+El producto completo se compiló manualmente con la lista `SOURCES` y flags por defecto equivalentes del Makefile (`-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude`, `-lm`). Terminó correctamente; persiste un warning heredado y fuera de alcance en `src/finance.c` por `decimal_negate` no usada.
+
+Con ese binario se ejecutó realmente:
+
+```sh
+bash tests/run_tests.sh
 ```
 
-### Table y forest
+Resultado: PASS y `OK: pruebas con datos sintéticos temporales completadas`. La salida verificó `Operacion enteros / otros: dtype=float64, shape=(3)` y la regresión de overflow exigió el código/mensaje completo `Milena [OVERFLOW]: La operación entera está fuera de rango`.
 
-Ambos compilaron sin supresiones bajo el set estricto completo y ejecutaron OK:
-
-```text
-OK: MilenaTable columns, validity and filtering
-OK: Milena forest classifier
-```
+El Makefile quedó preparado para incluir Worker 2 y Worker 3 en `test` y sus binarios en `clean`; no se afirma ejecución de `make test` porque `make` no estaba disponible.
 
 ## 7. Cobertura de `tests/test_array_worker3.c`
 
@@ -191,7 +160,8 @@ OK: Milena forest classifier
 - signed/unsigned mixto;
 - overflow int8;
 - underflow uint8;
-- división signed hacia cero y división por cero;
+- división real signed (`-7/2 == -3.5`), dtype `float64` para integer/integer y división por cero;
+- código `MILENA_ERR_OVERFLOW` y mensaje exacto estable para overflow entero;
 - promoción uint64+int64;
 - broadcasting 2D+1D;
 - transpose, slice negativo y broadcast stride cero;
@@ -213,11 +183,14 @@ No se usa NumPy ni otra dependencia de ejecución.
 
 ## 8. Desviaciones y coordinación pendiente
 
-1. **Complex:** intencionalmente storage-only. Implementar aritmética complex correctamente requiere una política de promoción real↔complex, orden/comparaciones y estadísticas separada; no se fingió soporte.
-2. **Axis tuples:** fuera del ABI actual (`int axis`). No se añadieron.
-3. **Sentinel histórico:** `axis=-1` continúa significando global para no romper `tests/test_array.c` y consumidores existentes. Los negativos adicionales `-2`, `-3`, … cuentan desde el final. Conviene decidir en coordinación futura si una API v2 separa explícitamente “global/all axes” de los ejes negativos estilo NumPy.
-4. **Arg extrema por eje:** las nuevas APIs `argmin`/`argmax` son globales. Variantes axis/keepdims se dejaron para una decisión coordinada de ABI.
-5. **Array-escalar:** no se tocó `script.c`, según la restricción. Array-array quedó como base única coherente; la migración del adaptador escalar de script debe coordinarse con el propietario de frontend/runtime.
-6. **Min/max integer:** conservan el resultado `float64` de las APIs estadísticas previas. Valores integer de 64 bits pueden redondearse al representarse en `float64`; cambiar el dtype de salida sería una ruptura observable y debe decidirse de forma coordinada.
+1. **Complex:** continúa intencionalmente storage-only. Falta definir promoción real↔complex, comparaciones y estadísticas antes de implementar aritmética.
+2. **Axis tuples:** el ABI actual recibe un solo `int axis`; no se añadieron tuples.
+3. **`ddof` público:** variance/std mantienen `ddof=0`; falta una API pública para elegirlo.
+4. **Arg extrema por eje:** `argmin`/`argmax` siguen siendo globales; faltan variantes axis/keepdims.
+5. **Separación completa de `array.c`:** el dispatcher continúa autocontenido en este archivo; la partición física queda para un bloque posterior.
+6. **Sentinel histórico:** `axis=-1` continúa significando global. Los negativos adicionales `-2`, `-3`, … cuentan desde el final; una API v2 debería separar explícitamente “todos los ejes” del último eje estilo NumPy.
+7. **Min/max integer:** conservan salida `float64`; enteros de 64 bits pueden redondearse y cualquier cambio de dtype requiere una decisión coordinada.
+
+La ruta array/escalar ya coincidía con división real. No fue necesario modificar `script.c`: al usar `milena_array_divide`, array/array adoptó la misma semántica canónica sin duplicar kernels.
 
 No se declara implementado nada fuera de esta lista.

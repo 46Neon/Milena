@@ -1754,7 +1754,7 @@ static MilenaStatus calculate_binary(NumericValue left, NumericValue right,
     }
 overflow:
     array_error(error, MILENA_ERR_OVERFLOW,
-                "La operación entera no es representable");
+                "La operación entera está fuera de rango");
     return MILENA_ERR_OVERFLOW;
 }
 
@@ -1802,6 +1802,9 @@ static MilenaStatus binary_operation(MilenaArray *out,
     status = milena_dtype_promote(left->dtype, right->dtype,
                                   &result_dtype, error);
     if (status != MILENA_OK) return status;
+    if (operation == BINARY_DIVIDE &&
+        dtype_kernel(result_dtype)->kind != NUMERIC_FLOAT)
+        result_dtype = MILENA_DTYPE_FLOAT64;
     bool comparison = operation >= BINARY_EQUAL;
     size_t ndim = 0;
     size_t *shape = NULL;
@@ -1844,6 +1847,10 @@ static MilenaStatus binary_operation(MilenaArray *out,
             if (status == MILENA_OK)
                 status = store_numeric(destination, result_dtype,
                                        result, error);
+            if (status == MILENA_ERR_OVERFLOW &&
+                dtype_kernel(result_dtype)->kind != NUMERIC_FLOAT)
+                array_error(error, MILENA_ERR_OVERFLOW,
+                            "La operación entera está fuera de rango");
             if (status != MILENA_OK) {
                 free(shape);
                 free(coordinates);

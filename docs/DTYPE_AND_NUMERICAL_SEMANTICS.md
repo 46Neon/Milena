@@ -63,7 +63,7 @@ La implementación evita conversiones C fuera de rango. La salida se construye e
 
 `add`, `subtract`, `multiply` y `divide` comparten:
 
-- la misma promoción;
+- la matriz central de promoción como punto de partida;
 - el mismo dispatcher central `DTypeKernel`;
 - el mismo recorrido broadcast lógico;
 - los mismos helpers checked signed/unsigned;
@@ -71,7 +71,9 @@ La implementación evita conversiones C fuera de rango. La salida se construye e
 
 Los enteros usan aritmética comprobada. No hay wraparound como semántica pública. Underflow unsigned, overflow signed/unsigned o un resultado que no cabe en el dtype promovido producen `MILENA_ERR_OVERFLOW`.
 
-La división entera trunca hacia cero. División por `+0`, `-0.0` o cero entero devuelve `MILENA_ERR_ARGUMENT`, también para float. Operaciones float conservan la propagación IEEE de NaN/Inf; si operandos finitos producen un resultado no finito o fuera del dtype de salida, se devuelve `MILENA_ERR_OVERFLOW`.
+`milena_array_divide` implementa **división real**: cuando ambos operandos son enteros o `bool`, el dtype de salida es `float64` y no hay truncamiento (`-7 / 2 == -3.5`). Esto alinea array/array con la ruta array/escalar del lenguaje. No se expone división entera truncada y el operador `/` tiene una sola semántica. División por `+0`, `-0.0` o cero entero devuelve `MILENA_ERR_ARGUMENT`. Operaciones float conservan la propagación IEEE de NaN/Inf; si operandos finitos producen un resultado no finito o fuera del dtype de salida, se devuelve `MILENA_ERR_OVERFLOW`.
+
+El overflow de aritmética entera conserva el código `MILENA_ERR_OVERFLOW` y usa el diagnóstico estable `La operación entera está fuera de rango`. La frase `fuera de rango` forma parte del contrato de compatibilidad del diagnóstico E2E.
 
 ## 5. Broadcasting y strides
 

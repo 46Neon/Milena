@@ -175,6 +175,9 @@ static void test_arithmetic_overflow_and_division(void) {
     from_raw(&x, MILENA_DTYPE_INT8, 1, one, x_value, &error);
     from_raw(&y, MILENA_DTYPE_INT8, 1, one, y_value, &error);
     EXPECT(milena_array_add(&result, &x, &y, &error), MILENA_ERR_OVERFLOW);
+    assert(error.code == MILENA_ERR_OVERFLOW);
+    assert(strcmp(error.message,
+                  "La operación entera está fuera de rango") == 0);
     const uint8_t low[] = {1}, high[] = {2};
     MilenaArray u_low = {0}, u_high = {0};
     from_raw(&u_low, MILENA_DTYPE_UINT8, 1, one, low, &error);
@@ -188,7 +191,8 @@ static void test_arithmetic_overflow_and_division(void) {
     from_raw(&q, MILENA_DTYPE_INT64, 1, one, divisor, &error);
     from_raw(&z, MILENA_DTYPE_INT64, 1, one, zero, &error);
     OK(milena_array_divide(&result, &p, &q, &error));
-    assert(scalar_i64(&result) == -3);
+    assert(result.dtype == MILENA_DTYPE_FLOAT64);
+    assert(scalar_f64(&result) == -3.5);
     EXPECT(milena_array_divide(&result, &p, &z, &error),
            MILENA_ERR_ARGUMENT);
 

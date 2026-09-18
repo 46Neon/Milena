@@ -243,6 +243,29 @@ static void test_sum_by_axis(void) {
     milena_array_release(&array);
 }
 
+static void test_integer_true_division(void) {
+    const size_t shape[] = {2};
+    const int64_t dividends[] = {7, -7};
+    const int64_t divisors[] = {2, 2};
+    const double expected[] = {3.5, -3.5};
+    MilenaArray left = {0}, right = {0}, result = {0};
+    MilenaError error;
+    milena_error_clear(&error);
+
+    expect_ok(milena_array_from_i64(&left, 1, shape, dividends, &error),
+              &error);
+    expect_ok(milena_array_from_i64(&right, 1, shape, divisors, &error),
+              &error);
+    expect_ok(milena_array_divide(&result, &left, &right, &error), &error);
+    assert(result.dtype == MILENA_DTYPE_FLOAT64);
+    assert(memcmp(milena_array_const_data(&result), expected,
+                  sizeof(expected)) == 0);
+
+    milena_array_release(&result);
+    milena_array_release(&right);
+    milena_array_release(&left);
+}
+
 static void test_order_statistics_by_axis(void) {
     const size_t shape[] = {3, 3};
     const int64_t values[] = {1, 4, 7, 2, 5, 8, 3, 6, 9};
@@ -279,6 +302,7 @@ int main(void) {
     test_transpose_and_reshape_copy();
     test_boolean_masks_and_where();
     test_sum_by_axis();
+    test_integer_true_division();
     test_order_statistics_by_axis();
     puts("OK: MilenaArray creation, views, broadcasting and reductions");
     return 0;
