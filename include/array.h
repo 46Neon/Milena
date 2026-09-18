@@ -51,6 +51,8 @@ typedef struct {
 
 const char *milena_dtype_name(MilenaDType dtype);
 size_t milena_dtype_size(MilenaDType dtype);
+MilenaStatus milena_dtype_promote(MilenaDType left, MilenaDType right,
+                                  MilenaDType *result, MilenaError *error);
 
 /* A descriptor must be initialized (with this function or {0}) before use. */
 void milena_array_init(MilenaArray *array);
@@ -130,8 +132,21 @@ MilenaStatus milena_array_multiply(MilenaArray *out, const MilenaArray *left,
                                    const MilenaArray *right, MilenaError *error);
 MilenaStatus milena_array_divide(MilenaArray *out, const MilenaArray *left,
                                  const MilenaArray *right, MilenaError *error);
+MilenaStatus milena_array_equal(MilenaArray *out, const MilenaArray *left,
+                                const MilenaArray *right, MilenaError *error);
+MilenaStatus milena_array_less(MilenaArray *out, const MilenaArray *left,
+                               const MilenaArray *right, MilenaError *error);
+MilenaStatus milena_array_greater(MilenaArray *out, const MilenaArray *left,
+                                  const MilenaArray *right, MilenaError *error);
+MilenaStatus milena_array_isnan(MilenaArray *out, const MilenaArray *source,
+                                MilenaError *error);
+MilenaStatus milena_array_isfinite(MilenaArray *out,
+                                   const MilenaArray *source,
+                                   MilenaError *error);
 MilenaStatus milena_array_sum(MilenaArray *out, const MilenaArray *source,
                               int axis, bool keepdims, MilenaError *error);
+MilenaStatus milena_array_prod(MilenaArray *out, const MilenaArray *source,
+                               int axis, bool keepdims, MilenaError *error);
 MilenaStatus milena_array_mean(MilenaArray *out, const MilenaArray *source,
                                MilenaError *error);
 MilenaStatus milena_array_min(MilenaArray *out, const MilenaArray *source,
@@ -178,6 +193,12 @@ MilenaStatus milena_array_percentile_axis(MilenaArray *out,
                                           double percentile, int axis,
                                           bool keepdims,
                                           MilenaError *error);
+MilenaStatus milena_array_argmin(MilenaArray *out,
+                                 const MilenaArray *source,
+                                 MilenaError *error);
+MilenaStatus milena_array_argmax(MilenaArray *out,
+                                 const MilenaArray *source,
+                                 MilenaError *error);
 
 bool milena_array_is_contiguous(const MilenaArray *array);
 /* Compatibility accessor: returns NULL for readonly or invalid arrays. */
