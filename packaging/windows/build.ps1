@@ -26,10 +26,11 @@ $SourceNames = @(
     'logger.c', 'metrics.c'
 )
 $Compiler = if ($env:CC) { $env:CC } else { 'clang' }
-$VersionDefine = '-DMILENA_VERSION=\"' + $Version + '\"'
+$VersionHeader = Join-Path $ObjectDir 'milena-version.h'
+("#define MILENA_VERSION `"$Version`"") | Set-Content -Encoding ascii -Path $VersionHeader
 $Flags = @(
     '-std=c17', '-Wall', '-Wextra', '-Wpedantic', '-Wshadow', '-Wconversion',
-    '-O2', '-Iinclude', $VersionDefine
+    '-O2', '-Iinclude', '-include', $VersionHeader
 )
 $Objects = @()
 
