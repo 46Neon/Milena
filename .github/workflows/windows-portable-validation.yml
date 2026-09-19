@@ -6,7 +6,7 @@ on:
       version:
         description: 'Versión para la carpeta portable (ejemplo: 0.2.0)'
         required: false
-        default: 'ci'
+        default: '0.0.0-ci'
   push:
     branches:
       - windows/ci-cd-hardening
@@ -23,20 +23,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve and validate package version
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if ($env:EVENT_NAME -eq 'workflow_dispatch') {
+            $version = $env:INPUT_VERSION
+          } elseif ($env:REF_TYPE -eq 'tag') {
+            $version = $env:REF_NAME.TrimStart('v')
+          } else {
+            $shortSha = $env:COMMIT_SHA.Substring(0, 12)
+            $version = "0.0.0-ci.$shortSha"
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+            throw "Versión no válida: $version"
+          }
+          "MILENA_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ARTIFACT_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Install LLVM
         shell: pwsh
         run: choco install llvm --no-progress -y
 
       - name: Build Windows executable
         shell: pwsh
-        env:
-          MILENA_VERSION: ${{ github.ref_name }}
         run: ./packaging/windows/build.ps1
 
-      - name: Create portable package
+      - name: Create portable package and external checksum
         shell: pwsh
         run: |
-          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.TrimStart('v') }
+          $version = $env:ARTIFACT_VERSION
           $root = Join-Path $env:RUNNER_TEMP "milena-$version-win-x64"
           New-Item -ItemType Directory -Force -Path $root | Out-Null
           Copy-Item dist/windows/milena.exe $root
@@ -53,21 +74,27 @@ jobs:
           $zip = Join-Path $env:GITHUB_WORKSPACE "dist/milena-$version-win-x64.zip"
           New-Item -ItemType Directory -Force -Path (Split-Path $zip) | Out-Null
           Compress-Archive -Path $root -DestinationPath $zip -Force
-          "PORTABLE_ROOT=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $zipHash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          "$zipHash *$(Split-Path $zip -Leaf)" | Set-Content -NoNewline "$zip.sha256"
           "PORTABLE_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PORTABLE_ZIP_SHA256=$zip.sha256" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Validate ZIP structure and checksum
+      - name: Validate ZIP structure and checksums
         shell: pwsh
         run: |
           if (-not (Test-Path $env:PORTABLE_ZIP)) { throw 'No se generó el ZIP portable' }
+          if (-not (Test-Path $env:PORTABLE_ZIP_SHA256)) { throw 'No se generó el checksum externo del ZIP' }
+          $expectedZip = ((Get-Content $env:PORTABLE_ZIP_SHA256 -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actualZip = (Get-FileHash $env:PORTABLE_ZIP -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expectedZip -ne $actualZip) { throw 'Checksum externo del ZIP incorrecto' }
           $extract = Join-Path $env:RUNNER_TEMP 'Milena Extracted Path'
           Expand-Archive -Path $env:PORTABLE_ZIP -DestinationPath $extract -Force
           $exe = Get-ChildItem -Path $extract -Filter milena.exe -Recurse | Select-Object -First 1
           $sha = Get-ChildItem -Path $extract -Filter milena.exe.sha256 -Recurse | Select-Object -First 1
           if (-not $exe -or -not $sha) { throw 'El ZIP no contiene ejecutable y checksum' }
-          $expected = (Get-Content $sha.FullName -Raw).Trim().ToLowerInvariant()
-          $actual = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($expected -ne $actual) { throw 'Checksum incorrecto dentro del paquete portable' }
+          $expectedExe = ((Get-Content $sha.FullName -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $actualExe = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expectedExe -ne $actualExe) { throw 'Checksum incorrecto dentro del paquete portable' }
 
       - name: Run portable package from PowerShell and CMD
         shell: pwsh
@@ -75,16 +102,28 @@ jobs:
           $exe = (Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'Milena Extracted Path') -Filter milena.exe -Recurse | Select-Object -First 1).FullName
           $work = Join-Path $env:RUNNER_TEMP 'Portable Runtime Working Directory'
           New-Item -ItemType Directory -Force -Path $work | Out-Null
-          $ps = Start-Process -FilePath $exe -WorkingDirectory $work -Wait -PassThru -NoNewWindow
+          $stdout = Join-Path $work 'milena.stdout.txt'
+          $stderr = Join-Path $work 'milena.stderr.txt'
+          $ps = Start-Process -FilePath $exe -WorkingDirectory $work -Wait -PassThru -NoNewWindow `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
           if ($ps.ExitCode -ne 2) { throw "PowerShell portable: código inesperado $($ps.ExitCode)" }
+          $text = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue),
+                   (Get-Content $stderr -Raw -ErrorAction SilentlyContinue) -join "`n")
+          if ($text -notmatch [regex]::Escape("Milena $env:MILENA_VERSION")) {
+            throw 'El ejecutable portable no informa la versión esperada'
+          }
           $cmd = Join-Path $work 'run.cmd'
           "@echo off`r`n`"$exe`"`r`nexit /b %ERRORLEVEL%" | Set-Content -Encoding ascii $cmd
-          $process = Start-Process cmd.exe -ArgumentList '/d', '/c', $cmd -WorkingDirectory $work -Wait -PassThru -NoNewWindow
+          $process = Start-Process -FilePath $env:ComSpec `
+            -ArgumentList @('/d', '/c', 'run.cmd') -WorkingDirectory $work `
+            -Wait -PassThru -NoNewWindow
           if ($process.ExitCode -ne 2) { throw "CMD portable: código inesperado $($process.ExitCode)" }
 
       - name: Upload Windows portable artifact
         uses: actions/upload-artifact@v4
         with:
           name: milena-windows-portable-x64
-          path: dist/milena-*-win-x64.zip
+          path: |
+            dist/milena-*-win-x64.zip
+            dist/milena-*-win-x64.zip.sha256
           if-no-files-found: error

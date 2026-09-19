@@ -2,7 +2,10 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$Version = if ($env:MILENA_VERSION) { $env:MILENA_VERSION } else { '0.1.1' }
+$Version = if ($env:MILENA_VERSION) { $env:MILENA_VERSION.TrimStart('v') } else { '0.1.1' }
+if ($Version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+    throw "MILENA_VERSION no es una versión válida: $Version"
+}
 $OutputDir = Join-Path $Root 'dist/windows'
 $Output = Join-Path $OutputDir 'milena.exe'
 $ObjectDir = Join-Path $OutputDir 'objects'
@@ -23,7 +26,11 @@ $SourceNames = @(
     'logger.c', 'metrics.c'
 )
 $Compiler = if ($env:CC) { $env:CC } else { 'clang' }
-$Flags = @('-std=c17', '-Wall', '-Wextra', '-Wpedantic', '-Wshadow', '-Wconversion', '-O2', '-Iinclude')
+$VersionDefine = '-DMILENA_VERSION=\"' + $Version + '\"'
+$Flags = @(
+    '-std=c17', '-Wall', '-Wextra', '-Wpedantic', '-Wshadow', '-Wconversion',
+    '-O2', '-Iinclude', $VersionDefine
+)
 $Objects = @()
 
 foreach ($SourceName in $SourceNames) {
@@ -42,6 +49,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Falló el enlace Windows de milena.exe' }
 if (-not (Test-Path $Output)) { throw "No se generó el ejecutable: $Output" }
 
 $Hash = (Get-FileHash -Algorithm SHA256 -Path $Output).Hash.ToLowerInvariant()
-$Hash | Set-Content -NoNewline (Join-Path $OutputDir 'milena.exe.sha256')
+"$Hash *milena.exe" | Set-Content -NoNewline (Join-Path $OutputDir 'milena.exe.sha256')
 Write-Host "Milena $Version creado: $Output"
 Write-Host "SHA-256: $Hash"
