@@ -4,24 +4,9 @@
 
 # 🌿 Milena
 
-![Portada de Milena](assets/milena-banner.png)
+![Banner provisional de Milena](assets/milena-banner.png)
 
-<h1 align="center">
-<pre>##      ##  ######  ##          ##########  ##      ##    ######
-##      ##  ##  ##  ##          # ########  ##      ##    ######
-# ##  ## #    ##    ##          ##          # ##    ##  ##      ##
-# ##  ## #    ##    ##          ##          # ##    ##  ##      ##
-##  ##  ##    ##    ##          # ######    ##  ##  ##  # ###### #
-##  ##  ##    ##    ##          # ######    ##  ##  ##  # ###### #
-##      ##    ##    ##          ##          ##    ## #  ##      ##
-##      ##    ##    ##          ##          ##    ## #  ##      ##
-##      ##  ##  ##  # ########  # ########  ##      ##  ##      ##
-##      ##  ######  ##########  ##########  ##      ##  ##      ##</pre>
-</h1>
-
-<p align="center"><strong>Milena</strong> — lenguaje de programación para análisis de datos.</p>
-
-[Logo original de Milena](assets/milena-logo.jpg)
+Lenguaje de programación en español para análisis de datos, estadística y computación científica.
 
 ## Análisis de datos intuitivo y nativo en español
 
@@ -61,7 +46,7 @@ mediana(matriz, eje 1, conservar dimensiones);
 ```
 
 > [!TIP]
-> Los ejemplos nuevos deben usar las palabras españolas. Durante la transición pueden existir nombres históricos compatibles, pero la sintaxis española es la dirección oficial del lenguaje.
+> Los ejemplos nuevos deben usar las palabras españolas. Durante la transición pueden existir nombres históricos compatibles, pero la sintaxis española es la dirección prevista del lenguaje.
 
 ## ¿Qué puede hacer Milena?
 
@@ -215,26 +200,6 @@ Al reportar un problema, incluye cuando sea posible:
 
 Las contribuciones deben mantener la portabilidad, los errores explícitos, las pruebas automatizadas y la claridad de la sintaxis.
 
-## 📄 Licencia
+## 📄 Licencia e identidad visual
 
-Milena se distribuye bajo la licencia MIT.
-
-## Identidad visual y licencia
-
-El bloque ASCII y la imagen de `assets/milena-logo.jpg` forman parte de la identidad visual del proyecto Milena.
-
-El código fuente se distribuye bajo la licencia MIT indicada en `LICENSE`. Milena es actualmente un prototipo no registrado. La licencia MIT cubre el código, pero no concede automáticamente derechos sobre marcas, nombres comerciales o logotipos.
-
-El repositorio tiene una persona responsable de evaluar y aceptar los cambios que se propongan en el perfil y en el proyecto. Enviar una contribución no significa que haya sido aceptada ni que su autor pueda representar el proyecto oficialmente.
-
-Para redistribuir el proyecto de forma responsable:
-
-- conservar `LICENSE`;
-- conservar esta nota de identidad;
-- no presentar una versión modificada como una distribución oficial;
-- no modificar el logotipo para aparentar respaldo oficial;
-- documentar el autor y el origen de la imagen;
-- obtener autorización escrita si la imagen procede de un tercero;
-- considerar un archivo de marcas separado si el proyecto empieza a recibir contribuciones o distribución pública.
-
-La imagen incluida debe considerarse provisional hasta confirmar quién posee sus derechos y bajo qué permiso puede redistribuirse.
+El código fuente de Milena se distribuye bajo la licencia MIT. Los recursos visuales son provisionales: su procedencia y licencia deben documentarse antes de redistribuirlos. Consulta [BRAND.md](BRAND.md) para conocer su estado y los requisitos de uso.

@@ -1,34 +1,29 @@
 # Identidad visual de Milena
 
-## Elementos
+Este archivo concentra el estado y las condiciones de uso de la identidad visual del proyecto. El `README.md` y `CONTRIBUTING.md` remiten aquí para evitar políticas duplicadas.
 
-- Nombre del proyecto: **Milena**.
-- Logotipo original: `assets/milena-logo.jpg`.
-- Banner de presentación: `assets/milena-banner.png`.
-- Logotipo ASCII: bloque incluido al inicio de `README.md`.
+## Recursos incluidos
 
-## Estado legal y responsabilidad del proyecto
+- Banner: [`assets/milena-banner.png`](assets/milena-banner.png).
+- Logotipo: [`assets/milena-logo.jpg`](assets/milena-logo.jpg).
 
-Milena es actualmente un prototipo no registrado. La licencia MIT del repositorio cubre el código fuente, no necesariamente el nombre ni el logotipo.
+Ambos archivos son recursos provisionales. No se presentan como una identidad definitiva ni se les atribuye una autoría que no esté documentada.
 
-El proyecto tiene una persona responsable de mantener el perfil de GitHub y el repositorio. Esa responsabilidad incluye revisar cambios, aceptar o rechazar contribuciones y conservar la coherencia técnica y documental del producto. No se publican datos personales de esa persona en este archivo.
+## Estado de derechos y licencia
 
-Hasta completar la verificación de derechos de la imagen:
+La licencia MIT de [`LICENSE`](LICENSE) se aplica al código fuente del proyecto. No debe interpretarse como una licencia automática sobre el nombre, el banner o el logotipo.
 
-- el logotipo se incorpora como identidad del proyecto;
-- no se afirma que sea una marca registrada;
-- no se concede una licencia independiente sobre la imagen;
-- las redistribuciones deben conservar esta nota y la licencia del código;
-- las versiones modificadas deben indicar que no son oficiales;
-- ninguna contribución se considera aceptada por el solo hecho de ser enviada;
-- toda contribución queda sujeta a revisión del responsable del proyecto.
+El responsable del repositorio confirmó el 19 de septiembre de 2026 que el banner y el logotipo incluidos pueden redistribuirse junto con el proyecto Milena. Esta autorización permite conservar y distribuir los archivos tal como aparecen en el repositorio.
 
-## Próximos pasos legales
+La confirmación de redistribución no atribuye autoría, no transfiere titularidad y no concede por sí sola permiso para modificar los recursos o sublicenciarlos bajo MIT. El repositorio debe conservar esta separación entre la licencia del código y las condiciones de los recursos visuales.
 
-1. Confirmar quién creó la imagen.
-2. Obtener una autorización escrita para usarla, modificarla y redistribuirla.
-3. Registrar autor, fecha, fuente y condiciones en este archivo.
-4. Decidir si el nombre y el logotipo se reservarán como marca.
-5. Publicar una política de uso de marca si el proyecto obtiene distribución externa.
+## Uso responsable
 
-Esta nota es una guía de gestión del proyecto y no sustituye asesoría jurídica local.
+Al redistribuir el proyecto:
+
+1. se debe conservar esta nota y la referencia al proyecto Milena;
+2. no se debe atribuir una autoría que no esté documentada;
+3. no se debe presentar una versión modificada como distribución oficial del proyecto;
+4. cualquier modificación o sublicenciamiento del banner o el logotipo requiere autorización adicional del titular correspondiente.
+
+Si en el futuro se adopta una identidad definitiva, deberá documentarse su autoría, fuente, titularidad, licencia aplicable y requisitos de atribución.
