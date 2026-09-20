@@ -15,23 +15,26 @@ Milena se construye con una visión de largo plazo: convertirse en una herramien
 ### Un primer script
 
 ```milena
-arreglo valores = [1, 2, 3, 4];
+.analisis resumen {
+    arreglo valores = [1, 2, 3, 4];
 
-forma(valores);
-tamaño(valores);
-media(valores);
-mediana(valores);
-percentil(valores, 90);
+    suma(valores);
+    media(valores);
+    mediana(valores);
+    percentil(valores, 90);
+}
 ```
 
 ### Arreglos por eje
 
 ```milena
-arreglo matriz = ceros(2, 3);
+.analisis matriz {
+    arreglo datos = ceros(2, 3);
 
-media(matriz, eje 0);
-mediana(matriz, eje 1);
-percentil(matriz, 90, eje 0);
+    media(datos, eje 0);
+    mediana(datos, eje 1);
+    percentil(datos, 90, eje 0);
+}
 ```
 
 Para conservar la dimensión reducida:

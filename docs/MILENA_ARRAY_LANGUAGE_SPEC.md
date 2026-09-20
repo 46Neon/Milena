@@ -2,19 +2,22 @@
 
 Esta es la primera superficie del lenguaje para exponer `MilenaArray`. La implementación debe construir arrays mediante el runtime C17 existente y no mediante estructuras paralelas del parser.
 
-## Sintaxis inicial
+## Sintaxis canónica
 
 ```milena
-array valores = [1, 2, 3, 4];
-array vacio = zeros(3);
-
-shape(valores);
-sum(valores);
-valores + 10;
-valores + [10, 20, 30, 40];
+.analisis ejemplo {
+    arreglo valores = [1, 2, 3, 4];
+    suma(valores);
+    media(valores, eje 0);
+    mediana(valores);
+    percentil(valores, 90, eje 0, conservar dimensiones);
+}
 ```
 
-La palabra `array` introduce una declaración local. Los nombres siguen las reglas normales de identificadores. Las expresiones terminan en `;`.
+La palabra `arreglo` y las operaciones estadísticas en español son la
+superficie canónica. `array`, `sum`, `mean` y los demás nombres históricos
+pueden mantenerse temporalmente como compatibilidad, pero las funcionalidades
+nuevas deben incorporarse al vocabulario español.
 
 ## Literales 1-D
 
@@ -34,32 +37,44 @@ Reglas:
 - la longitud de la lista es su primera dimensión;
 - no se acepta una segunda dimensión hasta implementar literales multidimensionales.
 
-## `zeros`
+## `ceros`
 
-La primera forma aceptada es:
-
-```milena
-array ceros = zeros(5);
-```
-
-Devuelve un array 1-D de cinco elementos `float64` inicializados en cero. En una extensión posterior se aceptarán dtype y shape explícitos:
+El constructor español acepta una o varias dimensiones positivas:
 
 ```milena
-zeros([2, 3], int64);
+.analisis dimensiones {
+    arreglo vector = ceros(5);
+    arreglo matriz = ceros(2, 3);
+    media(matriz, eje 0);
+}
 ```
 
-## Operaciones básicas
+Devuelve un arreglo `float64` inicializado en cero. Las dimensiones deben ser
+enteros positivos y no se admite una coma final.
 
-La primera superficie pública será:
+## Operaciones estadísticas disponibles
+
+La superficie formal actual expone:
 
 ```milena
-shape(array)       // devuelve la dimensión 1-D
-ndim(array)        // devuelve 1 en esta etapa
-size(array)        // cantidad total de elementos
-sum(array)         // reducción escalar
-array + array      // broadcasting solamente con shape compatible
-array + escalar    // broadcasting del escalar
+suma(arreglo)
+media(arreglo)
+minimo(arreglo)
+maximo(arreglo)
+varianza(arreglo)
+desviacion_estandar(arreglo)
+mediana(arreglo)
+percentil(arreglo, 90)
+
+media(arreglo, eje 0)
+media(arreglo, eje 0, conservar dimensiones)
+media(arreglo, eje 0, sin conservar dimensiones)
 ```
+
+Las reducciones usan el motor `MilenaArray`, conservan el dtype cuando es
+seguro y devuelven un arreglo con la forma correspondiente al eje. La
+aritmética y el broadcasting siguen siendo capacidades del motor numérico y
+se irán exponiendo mediante AST/runtime, no mediante un segundo parser.
 
 El resultado de una operación aritmética es un nuevo `MilenaArray`, salvo que una operación futura declare explícitamente una salida reutilizable.
 
@@ -85,12 +100,10 @@ No se debe guardar un `MilenaArray` dentro del AST. El AST contiene la descripci
 
 ## Orden de implementación
 
-1. tokens `[` y `]`;
-2. nodo AST para literal 1-D;
-3. nodo AST para declaración `array`;
-4. tabla de valores del runtime;
-5. llamada `zeros(n)`;
-6. `shape`, `ndim`, `size` y `sum`;
-7. operadores `+`, `-`, `*` y `/` con scalar y arrays compatibles;
-8. tests de lexer, parser, runtime y ejecución `.milena`;
-9. integración con VM y compiler sin duplicar kernels.
+1. Mantener un único lexer y parser para la sintaxis canónica;
+2. ampliar el AST para tablas y transformaciones;
+3. conectar el runtime de arrays con el modelo común de valores;
+4. migrar datasets y tablas sin duplicar kernels;
+5. exponer aritmética y broadcasting mediante AST/runtime;
+6. ejecutar todos los ejemplos desde `milena run`;
+7. integrar VM y compiler solo después de lograr paridad con el intérprete.
