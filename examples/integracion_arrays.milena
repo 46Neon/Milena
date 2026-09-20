@@ -1,0 +1,8 @@
+.analisis prueba {
+    arreglo valores = [1, 2, 3, 4];
+
+    suma(valores);
+    media(valores, eje 0);
+    mediana(valores);
+    percentil(valores, 75, eje 0, conservar dimensiones);
+}
