@@ -66,6 +66,17 @@ make check-source-manifest
 Si se añade una fuente C sin decidir su responsabilidad, la validación falla.
 Esto evita que el proyecto acumule módulos sin dueño arquitectónico.
 
+La frontera con las implementaciones experimentales se comprueba además con:
+
+```bash
+make check-experimental-isolation
+```
+
+Esta validación garantiza que `SOURCES` no enlace arena, IR, compilador,
+ensamblador, VM, GC, módulos alternativos ni bosque, y que las capas del
+producto no incluyan sus headers. Estos módulos pueden compilarse en pruebas
+específicas, pero no pueden convertirse accidentalmente en una ruta oficial.
+
 ## Puerta de unificación
 
 Mientras la ruta canónica no tenga paridad con las capacidades que se desean

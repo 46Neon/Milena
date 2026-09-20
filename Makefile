@@ -14,7 +14,7 @@ SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest debug
+.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -128,6 +128,9 @@ SST_TEST_SOURCES = src/common.c src/sst_dates.c src/sst_model.c \
 
 check-source-manifest:
 	python3 scripts/check_source_manifest.py
+
+check-experimental-isolation:
+	python3 scripts/check_experimental_isolation.py
 
 all: $(TARGET)
 
