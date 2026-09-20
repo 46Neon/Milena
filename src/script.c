@@ -1032,6 +1032,7 @@ array_cleanup_error:
  * so adding functions cannot change statistical/array semantics. */
 typedef enum {
     SCRIPT_PIPELINE_CANONICAL_ARRAY,
+    SCRIPT_PIPELINE_CANONICAL_DATASET,
     SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT,
     SCRIPT_PIPELINE_ARRAY_COMPAT,
     SCRIPT_PIPELINE_DATASET_COMPAT
@@ -1044,6 +1045,10 @@ typedef enum {
  */
 static ScriptPipeline script_pipeline_for_source(const char *script) {
     if (!script) return SCRIPT_PIPELINE_DATASET_COMPAT;
+    if (strstr(script, "analisis") != NULL &&
+        strstr(script, "dataset cargar") != NULL) {
+        return SCRIPT_PIPELINE_CANONICAL_DATASET;
+    }
     if (strstr(script, "analisis") != NULL &&
         strstr(script, "arreglo") != NULL &&
         strstr(script, "dataset cargar") == NULL) {
@@ -1101,6 +1106,12 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     ScriptPipeline pipeline = script_pipeline_for_source(script);
     if (pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) {
         MilenaStatus canonical_status = milena_run_array_program(script, stdout, error);
+        free(script);
+        return canonical_status;
+    }
+    if (pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET) {
+        MilenaStatus canonical_status = milena_run_dataset_program(script, filename,
+                                                                    stdout, error);
         free(script);
         return canonical_status;
     }

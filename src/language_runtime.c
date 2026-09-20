@@ -1,11 +1,13 @@
 #include "language_runtime.h"
 
 #include "array.h"
+#include "dataset.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
 
 #include <float.h>
+#include <ctype.h>
 
 #define MILENA_RUNTIME_MAX_ARRAYS 128u
 
@@ -337,6 +339,239 @@ MilenaStatus milena_run_array_program(const char *source, FILE *output,
     }
 
     runtime_release(&runtime);
+    ast_destroy(program);
+    parser_release(&parser);
+    return status;
+}
+
+typedef struct {
+    Dataset dataset;
+    bool loaded;
+} MilenaDatasetRuntime;
+
+static bool dataset_runtime_file_exists(const char *path) {
+    FILE *file = path ? fopen(path, "rb") : NULL;
+    if (!file) return false;
+    fclose(file);
+    return true;
+}
+
+static bool dataset_runtime_absolute(const char *path) {
+    return path && (path[0] == '/' ||
+                    (isalpha((unsigned char)path[0]) && path[1] == ':' &&
+                     (path[2] == '\\' || path[2] == '/')));
+}
+
+static MilenaStatus dataset_runtime_path(const char *requested,
+                                         const char *script_filename,
+                                         bool output,
+                                         char *resolved, size_t resolved_size,
+                                         MilenaError *error) {
+    if (!requested || !resolved || resolved_size == 0) {
+        runtime_error(error, MILENA_ERR_ARGUMENT, "Ruta de dataset inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (dataset_runtime_absolute(requested)) {
+        if (strlen(requested) + 1 > resolved_size) {
+            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        strcpy(resolved, requested);
+        if (!output && !dataset_runtime_file_exists(resolved)) {
+            runtime_error(error, MILENA_ERR_IO, "No se pudo abrir el dataset");
+            return MILENA_ERR_IO;
+        }
+        return MILENA_OK;
+    }
+    if (!output && dataset_runtime_file_exists(requested)) {
+        if (strlen(requested) + 1 > resolved_size) {
+            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        strcpy(resolved, requested);
+        return MILENA_OK;
+    }
+
+    char base[1024] = ".";
+    if (script_filename && script_filename[0]) {
+        size_t length = strlen(script_filename);
+        if (length >= sizeof(base)) {
+            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta del script demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        memcpy(base, script_filename, length + 1);
+        char *slash = strrchr(base, '/');
+        if (slash) {
+            if (slash == base) base[1] = '\0';
+            else *slash = '\0';
+        } else {
+            strcpy(base, ".");
+        }
+    }
+    int written = snprintf(resolved, resolved_size, "%s/%s", base, requested);
+    if (written < 0 || (size_t)written >= resolved_size) {
+        runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (!output && !dataset_runtime_file_exists(resolved)) {
+        runtime_error(error, MILENA_ERR_IO, "No se pudo abrir el dataset indicado");
+        return MILENA_ERR_IO;
+    }
+    return MILENA_OK;
+}
+
+static const ASTNode *dataset_runtime_find_child(const ASTNode *block,
+                                                 ASTNodeType type) {
+    if (!block) return NULL;
+    for (size_t i = 0; i < block->child_count; i++) {
+        if (block->children[i] && block->children[i]->type == type) {
+            return block->children[i];
+        }
+    }
+    return NULL;
+}
+
+static MilenaStatus dataset_runtime_transform(const ASTNode *block,
+                                              Dataset *dataset,
+                                              MilenaError *error) {
+    if (!block || !dataset) return MILENA_ERR_ARGUMENT;
+    for (size_t i = 0; i < block->child_count; i++) {
+        const ASTNode *command = block->children[i];
+        if (!command) continue;
+        if (command->type == AST_COMANDO_TOTAL) {
+            char left[128] = {0}, right[128] = {0};
+            if (!command->value ||
+                sscanf(command->value, " %127s * %127s", left, right) != 2) {
+                runtime_error(error, MILENA_ERR_PARSE,
+                              "La transformación total debe tener la forma columna * columna");
+                return MILENA_ERR_PARSE;
+            }
+            MilenaStatus status = dataset_add_product(dataset, left, right,
+                                                       "total", error);
+            if (status != MILENA_OK) return status;
+        } else if (command->type == AST_COMANDO_PERIODO) {
+            if (!command->value || strcmp(command->value, "mes de fecha") != 0) {
+                runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                              "Solo se admite extraer el mes de fecha");
+                return MILENA_ERR_UNSUPPORTED;
+            }
+            MilenaStatus status = dataset_add_month(dataset, "fecha", "periodo", error);
+            if (status != MILENA_OK) return status;
+        }
+    }
+    return MILENA_OK;
+}
+
+static MilenaStatus dataset_runtime_clean(const ASTNode *block,
+                                          Dataset *dataset,
+                                          MilenaError *error) {
+    if (!block || !dataset) return MILENA_ERR_ARGUMENT;
+    for (size_t i = 0; i < block->child_count; i++) {
+        const ASTNode *command = block->children[i];
+        if (!command || !command->value) continue;
+        if (command->type == AST_COMANDO_NULOS &&
+            strcmp(command->value, "eliminar") == 0) {
+            MilenaStatus status = dataset_remove_null_rows(dataset, error);
+            if (status != MILENA_OK) return status;
+        } else if (command->type == AST_COMANDO_DUPLICADOS &&
+                   strcmp(command->value, "eliminar") == 0) {
+            MilenaStatus status = dataset_remove_duplicates(dataset, error);
+            if (status != MILENA_OK) return status;
+        } else if (command->type == AST_COMANDO_NULOS ||
+                   command->type == AST_COMANDO_DUPLICADOS) {
+            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                          "La acción de limpieza todavía no está integrada");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+    }
+    return MILENA_OK;
+}
+
+MilenaStatus milena_run_dataset_program(const char *source,
+                                        const char *script_filename,
+                                        FILE *output,
+                                        MilenaError *error) {
+    if (!source) {
+        runtime_error(error, MILENA_ERR_ARGUMENT,
+                      "El programa Milena no puede ser nulo");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (error) milena_error_clear(error);
+
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, source);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    if (!program || parser.has_error) {
+        if (error) *error = parser.error;
+        ast_destroy(program);
+        parser_release(&parser);
+        return error && error->code != MILENA_OK ? error->code : MILENA_ERR_PARSE;
+    }
+
+    const ASTNode *analysis = NULL;
+    for (size_t i = 0; i < program->child_count; i++) {
+        if (program->children[i]->type == AST_BLOQUE_ANALISIS) {
+            analysis = program->children[i];
+            break;
+        }
+    }
+    const ASTNode *load = dataset_runtime_find_child(analysis, AST_LLAMADA_CARGAR);
+    if (!analysis || !load || !load->value) {
+        ast_destroy(program);
+        parser_release(&parser);
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "El análisis necesita dataset cargar datos(\"...\")");
+        return MILENA_ERR_PARSE;
+    }
+
+    char input[2048];
+    MilenaStatus status = dataset_runtime_path(load->value, script_filename, false,
+                                               input, sizeof(input), error);
+    if (status != MILENA_OK) {
+        ast_destroy(program);
+        parser_release(&parser);
+        return status;
+    }
+
+    MilenaDatasetRuntime runtime = {0};
+    dataset_init(&runtime.dataset);
+    status = dataset_load_csv(&runtime.dataset, input, ',', error);
+    if (status == MILENA_OK) runtime.loaded = true;
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < analysis->child_count; i++) {
+            const ASTNode *node = analysis->children[i];
+            if (!node) continue;
+            if (node->type == AST_BLOQUE_LIMPIAR) {
+                status = dataset_runtime_clean(node, &runtime.dataset, error);
+            } else if (node->type == AST_BLOQUE_TRANSFORMAR) {
+                status = dataset_runtime_transform(node, &runtime.dataset, error);
+            }
+            if (status != MILENA_OK) break;
+        }
+    }
+
+    char output_path[2048];
+    const ASTNode *export_node = dataset_runtime_find_child(analysis,
+                                                              AST_BLOQUE_EXPORTAR);
+    const char *requested_output = export_node && export_node->value
+        ? export_node->value : "reporte_dataset.json";
+    if (status == MILENA_OK) {
+        status = dataset_runtime_path(requested_output, script_filename, true,
+                                      output_path, sizeof(output_path), error);
+    }
+    if (status == MILENA_OK) {
+        status = dataset_save_json(&runtime.dataset, output_path, error);
+    }
+    if (status == MILENA_OK) {
+        FILE *stream = output ? output : stdout;
+        fprintf(stream, "Programa canónico ejecutado: %s\n", script_filename ? script_filename : "<memoria>");
+        fprintf(stream, "Filas: %zu | Columnas: %zu | Salida: %s\n",
+                runtime.dataset.row_count, runtime.dataset.column_count, output_path);
+    }
+
+    if (runtime.loaded) dataset_destroy(&runtime.dataset);
     ast_destroy(program);
     parser_release(&parser);
     return status;

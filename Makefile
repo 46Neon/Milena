@@ -77,7 +77,7 @@ tests/test_lexer_safety: tests/test_lexer_safety.c src/lexer.c src/common.c
 test-language-runtime: tests/test_language_runtime
 	./tests/test_language_runtime
 
-tests/test_language_runtime: tests/test_language_runtime.c src/language_runtime.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/common.c
+tests/test_language_runtime: tests/test_language_runtime.c src/language_runtime.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/common.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 .PHONY: test-parser-array

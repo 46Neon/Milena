@@ -73,6 +73,34 @@ int main(void) {
     CHECK(strstr(error.message, "no ha sido declarado") != NULL,
           "El primer diagnóstico fue sobrescrito");
 
-    puts("language runtime: parser + AST + arrays OK");
+    const char *csv_path = "test-language-runtime.csv";
+    const char *json_path = "test-language-runtime.json";
+    FILE *csv = fopen(csv_path, "wb");
+    CHECK(csv != NULL, "No se pudo crear el CSV de runtime");
+    fputs("precio,cantidad\n10,2\n5,3\n", csv);
+    CHECK(fclose(csv) == 0, "No se pudo cerrar el CSV de runtime");
+    const char *dataset_source =
+        ".analisis ventas {\n"
+        "  dataset cargar datos(\"test-language-runtime.csv\")\n"
+        "  .limpiar dataset { #nulos(\"eliminar\") }\n"
+        "  .transformar dataset { #total(\"precio * cantidad\") }\n"
+        "  .exportar { (\"test-language-runtime.json\") }\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(dataset_source, "test-language-runtime.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    FILE *json = fopen(json_path, "rb");
+    CHECK(json != NULL, "El runtime no creó el JSON del dataset");
+    char json_text[4096];
+    size_t json_size = fread(json_text, 1, sizeof(json_text) - 1, json);
+    json_text[json_size] = '\0';
+    fclose(json);
+    CHECK(strstr(json_text, "total") != NULL,
+          "La transformación no llegó al reporte unificado");
+    remove(csv_path);
+    remove(json_path);
+
+    puts("language runtime: parser + AST + arrays + datasets OK");
     return 0;
 }

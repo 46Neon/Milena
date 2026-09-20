@@ -575,11 +575,34 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             } else if (parser_match(parser, TOKEN_KW_EXPORTAR)) {
                 parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
-                    // Saltar contenido
-                    while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
-                        parser_advance(parser);
+                    ASTNode *exportar = NULL;
+                    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                        if (parser_match(parser, TOKEN_PAR_IZQ)) {
+                            parser_advance(parser);
+                            if (!parser_expect(parser, TOKEN_CADENA,
+                                               "Se esperaba archivo de exportación")) break;
+                            exportar = ast_create_leaf(AST_BLOQUE_EXPORTAR,
+                                                       parser->previous.lexeme);
+                            if (!exportar) {
+                                parser_error(parser, "Sin memoria para exportar");
+                                break;
+                            }
+                            if (!parser_expect(parser, TOKEN_PAR_DER,
+                                               "Se esperaba ')' después del archivo")) {
+                                ast_destroy(exportar);
+                                exportar = NULL;
+                                break;
+                            }
+                        } else {
+                            parser_advance(parser);
+                        }
                     }
-                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
+                        ast_destroy(exportar);
+                    } else if (exportar) {
+                        ast_add_child(node, exportar);
+                    }
                 }
             } else {
                 // Otros bloques
