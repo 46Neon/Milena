@@ -531,7 +531,9 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
         }
     }
     
-    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+    if (!parser->has_error) {
+        parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+    }
     milena_symbols_leave_scope(&parser->symbols);
     return node;
 }
