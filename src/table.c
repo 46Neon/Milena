@@ -2551,3 +2551,77 @@ MilenaStatus milena_table_add_product(MilenaTable *table,
     free(validity);
     return status;
 }
+
+
+MilenaStatus milena_table_add_month(MilenaTable *table,
+                                   const char *date_column,
+                                   const char *output_column,
+                                   MilenaError *error) {
+    if (!table || !date_column || !output_column) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Columnas inválidas para periodo");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(table, error);
+    if (status != MILENA_OK) return status;
+    int date_index = milena_table_column_index(table, date_column);
+    if (date_index < 0) {
+        table_error(error, MILENA_ERR_DATA, "Columna de fecha inexistente");
+        return MILENA_ERR_DATA;
+    }
+    const MilenaTableColumn *date_data = milena_table_column(table, (size_t)date_index);
+    if (!date_data || date_data->type != MILENA_COLUMN_STRING) {
+        table_error(error, MILENA_ERR_TYPE, "La extracción de periodo requiere texto de fecha");
+        return MILENA_ERR_TYPE;
+    }
+    if (milena_table_column_index(table, output_column) >= 0) {
+        table_error(error, MILENA_ERR_DATA, "La columna de periodo ya existe");
+        return MILENA_ERR_DATA;
+    }
+    char **values = NULL;
+    bool *validity = NULL;
+    if (table->row_count > 0) {
+        values = (char **)calloc(table->row_count, sizeof(*values));
+        validity = (bool *)calloc(table->row_count, sizeof(*validity));
+        if (!values || !validity) {
+            free(values); free(validity);
+            table_error(error, MILENA_ERR_MEMORY, "Sin memoria para periodo");
+            return MILENA_ERR_MEMORY;
+        }
+    }
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)date_index, row)) continue;
+        const char *date = NULL;
+        status = milena_table_get_string(table, (size_t)date_index, row, &date, error);
+        if (status != MILENA_OK) break;
+        int year = 0, month = 0, day = 0;
+        if (!date || sscanf(date, "%d-%d-%d", &year, &month, &day) != 3 ||
+            year < 1 || month < 1 || month > 12 || day < 1 || day > 31) {
+            table_error(error, MILENA_ERR_TYPE, "Fecha inválida para extraer periodo");
+            status = MILENA_ERR_TYPE;
+            break;
+        }
+        char buffer[32];
+        int written = snprintf(buffer, sizeof(buffer), "%04d-%02d", year, month);
+        if (written < 0 || (size_t)written >= sizeof(buffer)) {
+            table_error(error, MILENA_ERR_OVERFLOW, "Periodo demasiado largo");
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
+        values[row] = milena_strdup(buffer);
+        if (!values[row]) {
+            status = MILENA_ERR_MEMORY;
+            break;
+        }
+        validity[row] = true;
+    }
+    if (status == MILENA_OK) {
+        const char *const *column_values = (const char *const *)values;
+        status = milena_table_add_string_column_copy(table, output_column,
+                                                     column_values, table->row_count,
+                                                     validity, error);
+    }
+    for (size_t row = 0; row < table->row_count; row++) free(values ? values[row] : NULL);
+    free(values);
+    free(validity);
+    return status;
+}

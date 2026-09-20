@@ -77,17 +77,18 @@ int main(void) {
     const char *json_path = "test-language-runtime.json";
     FILE *csv = fopen(csv_path, "wb");
     CHECK(csv != NULL, "No se pudo crear el CSV de runtime");
-    fputs("precio,cantidad,ciudad,compro\n10,2,Caracas,1\n5,3,Maracaibo,0\n9,4,,1\n5,3,Maracaibo,0\n", csv);
+    fputs("precio,cantidad,ciudad,compro,fecha\n10,2,Caracas,1,2026-01-10\n5,3,Maracaibo,0,2026-02-11\n9,4,,1,2026-03-12\n5,3,Maracaibo,0,2026-02-11\n", csv);
     CHECK(fclose(csv) == 0, "No se pudo cerrar el CSV de runtime");
     const char *dataset_source =
         ".analisis ventas {\n"
         "  dataset cargar datos(\"test-language-runtime.csv\")\n"
         "  variable precio numerica\n"
         "  variable cantidad numerica\n"
+        "  variable fecha texto\n"
         "  entrada categorica \"ciudad\"\n"
         "  salida binaria \"compro\"\n"
         "  .limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") }\n"
-        "  .transformar dataset { #total(\"precio * cantidad\") }\n"
+        "  .transformar dataset { #total(\"precio * cantidad\") #periodo(\"mes de fecha\") }\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -102,6 +103,9 @@ int main(void) {
     fclose(json);
     CHECK(strstr(json_text, "total") != NULL,
           "La transformación no llegó al reporte unificado");
+    CHECK(strstr(json_text, "periodo") != NULL &&
+          strstr(json_text, "2026-02") != NULL,
+          "La extracción de periodo no llegó al reporte unificado");
     CHECK(strstr(json_text, "\"filas\": 2") != NULL,
           "La limpieza de nulos no se ejecutó sobre la tabla canónica");
     CHECK(strstr(json_text, "numerica") != NULL,

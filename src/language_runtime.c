@@ -446,13 +446,9 @@ static MilenaStatus dataset_runtime_transform(const ASTNode *block,
              * el esquema; aquí solo se conserva el comando AST. */
             (void)dataset;
         } else if (command->type == AST_COMANDO_PERIODO) {
-            if (!command->value || strcmp(command->value, "mes de fecha") != 0) {
-                runtime_error(error, MILENA_ERR_UNSUPPORTED,
-                              "Solo se admite extraer el mes de fecha");
-                return MILENA_ERR_UNSUPPORTED;
-            }
-            MilenaStatus status = dataset_add_month(dataset, "fecha", "periodo", error);
-            if (status != MILENA_OK) return status;
+            /* La extracción se ejecuta sobre MilenaTable después de cargar
+             * el esquema tipado. */
+            (void)dataset;
         }
     }
     return MILENA_OK;
@@ -636,20 +632,34 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (block->type == AST_BLOQUE_TRANSFORMAR) {
                 for (size_t j = 0; j < block->child_count; j++) {
                     const ASTNode *command = block->children[j];
-                    if (!command || command->type != AST_COMANDO_TOTAL ||
-                        !command->value) continue;
-                    char left[128] = {0}, right[128] = {0};
-                    if (sscanf(command->value, " %127s * %127s", left, right) != 2) {
-                        runtime_error(error, MILENA_ERR_PARSE,
-                                      "La transformación total debe tener la forma columna * columna");
-                        status = MILENA_ERR_PARSE;
-                        break;
-                    }
-                    status = milena_table_add_product(&canonical_table, left, right,
-                                                      "total", error);
-                    if (status == MILENA_OK) {
-                        status = schema_add(&schema, "total", MILENA_VAR_NUMERIC,
-                                            MILENA_ROLE_FEATURE, error);
+                    if (!command || !command->value) continue;
+                    if (command->type == AST_COMANDO_TOTAL) {
+                        char left[128] = {0}, right[128] = {0};
+                        if (sscanf(command->value, " %127s * %127s", left, right) != 2) {
+                            runtime_error(error, MILENA_ERR_PARSE,
+                                          "La transformación total debe tener la forma columna * columna");
+                            status = MILENA_ERR_PARSE;
+                            break;
+                        }
+                        status = milena_table_add_product(&canonical_table, left, right,
+                                                          "total", error);
+                        if (status == MILENA_OK) {
+                            status = schema_add(&schema, "total", MILENA_VAR_NUMERIC,
+                                                MILENA_ROLE_FEATURE, error);
+                        }
+                    } else if (command->type == AST_COMANDO_PERIODO) {
+                        if (strcmp(command->value, "mes de fecha") != 0) {
+                            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                          "Solo se admite extraer el mes de fecha");
+                            status = MILENA_ERR_UNSUPPORTED;
+                            break;
+                        }
+                        status = milena_table_add_month(&canonical_table, "fecha",
+                                                        "periodo", error);
+                        if (status == MILENA_OK) {
+                            status = schema_add(&schema, "periodo", MILENA_VAR_TEXT,
+                                                MILENA_ROLE_FEATURE, error);
+                        }
                     }
                     if (status != MILENA_OK) break;
                 }

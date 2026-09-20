@@ -180,6 +180,10 @@ MilenaStatus milena_table_add_product(MilenaTable *table,
                                      const char *right_column,
                                      const char *output_column,
                                      MilenaError *error);
+MilenaStatus milena_table_add_month(MilenaTable *table,
+                                   const char *date_column,
+                                   const char *output_column,
+                                   MilenaError *error);
 MilenaStatus milena_table_drop_null_columns(MilenaTable *out,
                                             const MilenaTable *source,
                                             const char *const *column_names,
