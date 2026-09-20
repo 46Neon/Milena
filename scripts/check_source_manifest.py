@@ -9,7 +9,7 @@ CATEGORIES = {
     "producto": {
         "analysis.c", "array.c", "common.c", "dataset.c", "finance.c",
         "language_runtime.c", "logger.c", "main.c", "metrics.c", "schema.c",
-        "script.c", "sst_advanced.c", "sst_contingency.c", "sst_correlation.c",
+        "script.c", "interpreter.c", "sst_advanced.c", "sst_contingency.c", "sst_correlation.c",
         "sst_dates.c", "sst_histogram.c", "sst_inference.c", "sst_model.c",
         "sst_normality.c", "sst_rates.c", "sst_report.c",
         "sst_report_advanced.c", "sst_stats.c", "table.c",
@@ -22,7 +22,7 @@ CATEGORIES = {
     },
     "experimental": {
         "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c",
-        "instructions.c", "interpreter.c", "ir.c", "module.c", "semantic.c",
+        "instructions.c", "ir.c", "module.c", "semantic.c",
         "temp_scope.c", "vm.c",
     },
 }

@@ -48,7 +48,8 @@ static void column_destroy(MilenaTableColumn *column) {
 
 void milena_table_init(MilenaTable *table) {
     if (table == NULL) return;
-    if (table_has_magic(table)) milena_table_destroy(table);
+    /* Initialization must be safe for an uninitialized automatic object.
+     * Callers must destroy a live table before reinitializing it. */
     memset(table, 0, sizeof(*table));
     table->_table_magic = MILENA_TABLE_MAGIC;
 }
@@ -758,7 +759,7 @@ static MilenaStatus table_take_rows(MilenaTable *out,
                                     const MilenaTable *source,
                                     const size_t *rows, size_t row_count,
                                     MilenaError *error) {
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = row_count;
@@ -851,7 +852,7 @@ MilenaStatus milena_table_select_columns(MilenaTable *out,
     }
     MilenaStatus status = milena_table_validate(source, error);
     if (status != MILENA_OK) return status;
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = source->row_count;
@@ -1669,7 +1670,7 @@ MilenaStatus milena_table_group_by(MilenaTable *out,
             group_of[row] = group_count++;
         } else group_of[row] = slots[slot].value_plus_one - 1;
     }
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = group_count;
@@ -1909,7 +1910,7 @@ MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
             if (!matched[r]) {
                 left_rows[at] = SIZE_MAX; right_rows[at] = r; ++at;
             }
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = pair_count;
@@ -1993,7 +1994,7 @@ MilenaStatus milena_table_unpivot(MilenaTable *out,
     for (size_t row = 0; status == MILENA_OK && row < source->row_count; ++row)
         for (size_t v = 0; v < value_count; ++v)
             source_rows[row * value_count + v] = row;
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = output_rows;
@@ -2180,7 +2181,7 @@ MilenaStatus milena_table_from_dataset(MilenaTable *out,
         table_error(error, MILENA_ERR_ARGUMENT, "Dataset o esquema inválido");
         return MILENA_ERR_ARGUMENT;
     }
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     milena_table_init(&temporary);
     MilenaStatus status = MILENA_OK;
     for (size_t column = 0; column < dataset->column_count; column++) {
@@ -2216,10 +2217,9 @@ MilenaStatus milena_table_from_dataset(MilenaTable *out,
             milena_array_release(&codes);
             free(dictionary);
         } else {
-            const char *const *values = (const char *const *)dataset->rows[0];
-            if (dataset->row_count == 0) values = NULL;
-            else {
-                /* rows are column-major only through this temporary view. */
+            {
+                /* rows are row-major; build a temporary column view without
+                 * touching rows[0] when an empty dataset is supplied. */
                 const char **column_values = (const char **)calloc(
                     dataset->row_count, sizeof(*column_values));
                 if (!column_values) {

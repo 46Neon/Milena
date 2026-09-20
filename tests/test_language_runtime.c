@@ -20,7 +20,6 @@ static bool read_stream(FILE *stream, char *buffer, size_t size) {
 }
 
 int main(void) {
-    fprintf(stderr, "language runtime: arrays begin\n");
     const char *source =
         ".analisis prueba {\n"
         "  arreglo valores = [1, 2, 3, 4];\n"
@@ -48,7 +47,6 @@ int main(void) {
           "Percentil incorrecto");
     CHECK(strstr(text, "shape=(1)") != NULL, "keepdims no se conservó");
 
-    fprintf(stderr, "language runtime: arrays first complete\n");
     const char *zeros =
         ".analisis matriz {\n"
         "  arreglo matriz = ceros(2, 3);\n"
@@ -67,7 +65,6 @@ int main(void) {
           "La forma de la reducción de ceros es incorrecta");
     fclose(output);
 
-    fprintf(stderr, "language runtime: zeros complete\n");
     const char *invalid =
         ".analisis error { media(variable_no_declarada); }";
     milena_error_clear(&error);
@@ -76,7 +73,6 @@ int main(void) {
     CHECK(strstr(error.message, "no ha sido declarado") != NULL,
           "El primer diagnóstico fue sobrescrito");
 
-    fprintf(stderr, "language runtime: invalid parse complete\n");
     const char *csv_path = "test-language-runtime.csv";
     const char *json_path = "test-language-runtime.json";
     const char *right_csv_path = "test-language-runtime-right.csv";
@@ -103,7 +99,6 @@ int main(void) {
         "  .seleccionar { #columnas(\"ciudad,total_suma,region\") }\n"
         "  #perfil_avanzado(\"total_suma\")\n"
         "  #histograma(\"total_suma\")\n"
-        "  #normalidad(\"total_suma\")\n"
         "  #tasa(\"total_suma,total_suma,200000\")\n"
         "  #poisson(\"total_suma,total_suma,200000\")\n"
         "  #correlacion(\"total_suma,total_suma\")\n"
@@ -114,12 +109,10 @@ int main(void) {
         "  #interes_simple(\"total_suma,total_suma,2\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
-    fprintf(stderr, "language runtime: dataset begin\n");
     milena_error_clear(&error);
     CHECK(milena_run_dataset_program(dataset_source, "test-language-runtime.milena",
                                      NULL, &error) == MILENA_OK,
           error.message);
-    fprintf(stderr, "language runtime: dataset complete\n");
     FILE *json = fopen(json_path, "rb");
     CHECK(json != NULL, "El runtime no creó el JSON del dataset");
     char json_text[4096];
@@ -165,15 +158,6 @@ int main(void) {
     CHECK(strstr(histogram_text, "histograma") != NULL &&
           strstr(histogram_text, "total_suma") != NULL,
           "El histograma SST no usó la tabla canónica");
-    FILE *normality_json = fopen("test-language-runtime.json.normalidad.json", "rb");
-    CHECK(normality_json != NULL, "La normalidad SST canónica no creó su reporte");
-    char normality_text[2048];
-    size_t normality_size = fread(normality_text, 1, sizeof(normality_text) - 1, normality_json);
-    normality_text[normality_size] = '\0';
-    fclose(normality_json);
-    CHECK(strstr(normality_text, "normalidad") != NULL &&
-          strstr(normality_text, "total_suma") != NULL,
-          "La normalidad SST no usó la tabla canónica");
     FILE *rate_json = fopen("test-language-runtime.json.tasa.json", "rb");
     CHECK(rate_json != NULL, "La tasa SST canónica no creó su reporte");
     char rate_text[2048];
@@ -245,7 +229,36 @@ int main(void) {
     CHECK(strstr(finance_text, "interes_simple") != NULL &&
           strstr(finance_text, "finance") != NULL,
           "Finanzas no usó la tabla canónica");
-    fprintf(stderr, "language runtime: reports complete\n");
+    const char *normality_csv_path = "test-language-runtime-normality.csv";
+    const char *normality_json_path = "test-language-runtime-normality.json";
+    FILE *normality_csv = fopen(normality_csv_path, "wb");
+    CHECK(normality_csv != NULL, "No se pudo crear el CSV de normalidad");
+    fputs("valor\n1\n2\n3\n4\n5\n6\n7\n9\n", normality_csv);
+    CHECK(fclose(normality_csv) == 0, "No se pudo cerrar el CSV de normalidad");
+    const char *normality_source =
+        ".analisis normalidad {\n"
+        "  dataset cargar datos(\"test-language-runtime-normality.csv\")\n"
+        "  variable valor numerica\n"
+        "  #normalidad(\"valor\")\n"
+        "  .exportar { (\"test-language-runtime-normality.json\") }\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(normality_source,
+                                     "test-language-runtime-normality.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    FILE *normality_json = fopen(normality_json_path, "rb");
+    CHECK(normality_json != NULL, "La normalidad SST canónica no creó su reporte");
+    char normality_text[2048];
+    size_t normality_size = fread(normality_text, 1, sizeof(normality_text) - 1, normality_json);
+    normality_text[normality_size] = '\0';
+    fclose(normality_json);
+    CHECK(strstr(normality_text, "normalidad") != NULL &&
+          strstr(normality_text, "valor") != NULL,
+          "La normalidad SST no usó la tabla canónica");
+    remove(normality_csv_path);
+    remove(normality_json_path);
+
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -256,7 +269,6 @@ int main(void) {
         "  .resumir dataset { #suma(\"total\") #media(\"total\") #conteo(\"total\") #varianza(\"total\") #desviacion_estandar(\"total\") #mediana(\"total\") #percentil(\"total,50\") }\n"
         "  .exportar { (\"test-language-runtime-summary.json\") }\n"
         "}\n";
-    fprintf(stderr, "language runtime: summary begin\n");
     milena_error_clear(&error);
     CHECK(milena_run_dataset_program(summary_source, "test-language-runtime-summary.milena",
                                      NULL, &error) == MILENA_OK,
@@ -279,7 +291,6 @@ int main(void) {
     remove(json_path);
     remove("test-language-runtime.json.sst.json");
     remove("test-language-runtime.json.histograma.json");
-    remove("test-language-runtime.json.normalidad.json");
     remove("test-language-runtime.json.tasa.json");
     remove("test-language-runtime.json.poisson.json");
     remove("test-language-runtime.json.correlacion.json");

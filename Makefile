@@ -150,7 +150,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance \
+test: check-source-manifest check-experimental-isolation $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance \
       test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics \
       test-parser-variables test-functions test-script-functions test-user-functions
 	./tests/run_tests.sh

@@ -735,6 +735,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                     parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del conteo");
                                 }
                             }
+                        } else {
+                            parser_error(parser, "Comando desconocido en agrupar");
                         }
                     }
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
@@ -769,7 +771,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                    strcmp(parser->current.lexeme, "conteo") == 0) {
                             metric = "conteo";
                         }
-                        if (!metric) continue;
+                        if (!metric) {
+                            parser_error(parser, "Métrica desconocida en resumir");
+                            break;
+                        }
                         parser_advance(parser);
                         if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                             if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de resumen")) {
