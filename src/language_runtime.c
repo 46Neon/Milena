@@ -8,6 +8,7 @@
 #include "sst_advanced.h"
 #include "sst_histogram.h"
 #include "sst_normality.h"
+#include "sst_rates.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -661,6 +662,68 @@ static MilenaStatus runtime_write_sst_normality(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_rate(const MilenaTable *table,
+                                               const char *specification,
+                                               const char *output_path,
+                                               MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *event_name = strtok(spec, ",");
+    char *exposure_name = strtok(NULL, ",");
+    char *factor_text = strtok(NULL, ",");
+    if (!event_name || !exposure_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "La tasa requiere evento, exposición y factor");
+        return MILENA_ERR_PARSE;
+    }
+    double factor = factor_text ? strtod(factor_text, NULL) : 200000.0;
+    int event_column = milena_table_column_index(table, event_name);
+    int exposure_column = milena_table_column_index(table, exposure_name);
+    if (event_column < 0 || exposure_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna inexistente para tasa SST");
+        return MILENA_ERR_DATA;
+    }
+    size_t incidents = 0;
+    double exposure = 0.0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (!milena_table_is_null(table, (size_t)event_column, row)) {
+            const char *event = NULL;
+            if (milena_table_get_string(table, (size_t)event_column, row, &event, error) == MILENA_OK &&
+                (strcmp(event, "1") == 0 || strcmp(event, "true") == 0 ||
+                 strcmp(event, "verdadero") == 0)) incidents++;
+        }
+        if (!milena_table_is_null(table, (size_t)exposure_column, row)) {
+            const void *raw = NULL;
+            const MilenaTableColumn *data = milena_table_column(table, (size_t)exposure_column);
+            if (data->type == MILENA_COLUMN_ARRAY &&
+                milena_table_get_array_value(table, (size_t)exposure_column, row, &raw, error) == MILENA_OK) {
+                if (data->values.dtype == MILENA_DTYPE_FLOAT64) exposure += *(const double *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_FLOAT32) exposure += (double)*(const float *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_INT64) exposure += (double)*(const int64_t *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_UINT64) exposure += (double)*(const uint64_t *)raw;
+            }
+        }
+    }
+    SstRateResult result;
+    MilenaStatus status = sst_rate_from_counts(incidents, exposure, factor, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.tasa.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"tasa\",\"evento\":\"%s\",\"exposicion\":\"%s\",\"incidentes\":%zu,\"tasa\":%.10g}\n",
+                        event_name, exposure_name, result.incident_count, result.rate);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1150,6 +1213,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (strcmp(node->type_name, "normalidad") == 0) {
                 status = runtime_write_sst_normality(&canonical_table, node->value,
                                                      output_path, error);
+            } else if (strcmp(node->type_name, "tasa") == 0) {
+                status = runtime_write_sst_rate(&canonical_table, node->value,
+                                                output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;

@@ -101,6 +101,7 @@ int main(void) {
         "  #perfil_avanzado(\"total_suma\")\n"
         "  #histograma(\"total_suma\")\n"
         "  #normalidad(\"total_suma\")\n"
+        "  #tasa(\"compro,cantidad,200000\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -161,6 +162,14 @@ int main(void) {
     CHECK(strstr(normality_text, "normalidad") != NULL &&
           strstr(normality_text, "total_suma") != NULL,
           "La normalidad SST no usó la tabla canónica");
+    FILE *rate_json = fopen("test-language-runtime.json.tasa.json", "rb");
+    CHECK(rate_json != NULL, "La tasa SST canónica no creó su reporte");
+    char rate_text[2048];
+    size_t rate_size = fread(rate_text, 1, sizeof(rate_text) - 1, rate_json);
+    rate_text[rate_size] = '\0';
+    fclose(rate_json);
+    CHECK(strstr(rate_text, "tasa") != NULL && strstr(rate_text, "incidentes") != NULL,
+          "La tasa SST no usó la tabla canónica");
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -194,6 +203,7 @@ int main(void) {
     remove("test-language-runtime.json.sst.json");
     remove("test-language-runtime.json.histograma.json");
     remove("test-language-runtime.json.normalidad.json");
+    remove("test-language-runtime.json.tasa.json");
 
     puts("language runtime: parser + AST + arrays + datasets OK");
     return 0;
