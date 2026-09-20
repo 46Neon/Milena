@@ -13,6 +13,7 @@
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
+#include "interpreter.h"
 #include "user_functions.h"
 #include <ctype.h>
 
@@ -1036,6 +1037,7 @@ array_cleanup_error:
 typedef enum {
     SCRIPT_PIPELINE_CANONICAL_ARRAY,
     SCRIPT_PIPELINE_CANONICAL_DATASET,
+    SCRIPT_PIPELINE_CANONICAL_FUNCTION,
     SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT,
     SCRIPT_PIPELINE_ARRAY_COMPAT,
     SCRIPT_PIPELINE_DATASET_COMPAT
@@ -1048,13 +1050,16 @@ typedef enum {
  */
 static void script_scan_canonical_ast(const ASTNode *node,
                                       bool *has_dataset,
-                                      bool *has_array) {
+                                      bool *has_array,
+                                      bool *has_function) {
     if (!node) return;
     if (node->type == AST_LLAMADA_CARGAR) *has_dataset = true;
     if (node->type == AST_DECLARACION_ARRAY ||
         node->type == AST_EXPRESION_ARRAY) *has_array = true;
+    if (node->type == AST_DECLARACION_FUNCION) *has_function = true;
     for (size_t i = 0; i < node->child_count; i++)
-        script_scan_canonical_ast(node->children[i], has_dataset, has_array);
+        script_scan_canonical_ast(node->children[i], has_dataset, has_array,
+                                  has_function);
 }
 
 static ScriptPipeline script_pipeline_from_ast(const char *script) {
@@ -1063,13 +1068,14 @@ static ScriptPipeline script_pipeline_from_ast(const char *script) {
     lexer_init(&lexer, script);
     parser_init(&parser, &lexer);
     ASTNode *program = parser_parse(&parser);
-    bool has_dataset = false, has_array = false;
+    bool has_dataset = false, has_array = false, has_function = false;
     if (program && !parser.has_error)
-        script_scan_canonical_ast(program, &has_dataset, &has_array);
+        script_scan_canonical_ast(program, &has_dataset, &has_array, &has_function);
     ast_destroy(program);
     parser_release(&parser);
     if (has_dataset) return SCRIPT_PIPELINE_CANONICAL_DATASET;
     if (has_array) return SCRIPT_PIPELINE_CANONICAL_ARRAY;
+    if (has_function) return SCRIPT_PIPELINE_CANONICAL_FUNCTION;
     return SCRIPT_PIPELINE_DATASET_COMPAT;
 }
 
@@ -1086,6 +1092,39 @@ static ScriptPipeline script_pipeline_for_source(const char *script) {
         return SCRIPT_PIPELINE_ARRAY_COMPAT;
     }
     return SCRIPT_PIPELINE_DATASET_COMPAT;
+}
+
+static MilenaStatus run_canonical_functions(const char *script,
+                                             MilenaError *error) {
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, script);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    if (!program || parser.has_error) {
+        if (error) *error = parser.error;
+        ast_destroy(program);
+        parser_release(&parser);
+        return MILENA_ERR_PARSE;
+    }
+    Interpreter interpreter;
+    if (!interpreter_init(&interpreter, program)) {
+        ast_destroy(program);
+        parser_release(&parser);
+        milena_error_set(error, MILENA_ERR_MEMORY, 0, 0, 0,
+                         "No se pudo inicializar el runtime de funciones");
+        return MILENA_ERR_MEMORY;
+    }
+    bool ok = interpreter_run(&interpreter);
+    interpreter_destroy(&interpreter);
+    ast_destroy(program);
+    parser_release(&parser);
+    if (!ok) {
+        milena_error_set(error, MILENA_ERROR_RUNTIME, 0, 0, 0,
+                         "La ejecución de funciones AST falló");
+        return MILENA_ERROR_RUNTIME;
+    }
+    return MILENA_OK;
 }
 
 static MilenaStatus run_numeric_functions(const char *script, MilenaError *error) {
@@ -1138,6 +1177,11 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
                                                                     stdout, error);
         free(script);
         return canonical_status;
+    }
+    if (pipeline == SCRIPT_PIPELINE_CANONICAL_FUNCTION) {
+        MilenaStatus function_status = run_canonical_functions(script, error);
+        free(script);
+        return function_status;
     }
     if (pipeline == SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT) {
         MilenaStatus fn_status = run_numeric_functions(script, error);
