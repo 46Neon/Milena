@@ -3,6 +3,7 @@
 
 #include "dataset.h"
 #include "schema.h"
+#include "table.h"
 
 typedef struct {
     size_t rows_seen;
@@ -18,6 +19,11 @@ MilenaStatus analysis_dataset_report(const Dataset *dataset,
                                   const MilenaSchema *schema,
                                   const char *output_json,
                                   MilenaError *error);
+
+MilenaStatus analysis_table_report(const MilenaTable *table,
+                                const MilenaSchema *schema,
+                                const char *output_json,
+                                MilenaError *error);
 
 MilenaStatus analysis_sales(const Dataset *dataset,
                           const char *date_column,

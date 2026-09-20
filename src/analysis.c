@@ -1,5 +1,7 @@
 #include "analysis.h"
 
+#include <inttypes.h>
+
 static void write_json_string(FILE *out, const char *text) {
     fputc('"', out);
     for (const unsigned char *p = (const unsigned char *)(text ? text : ""); *p; p++) {
@@ -191,6 +193,113 @@ MilenaStatus analysis_dataset_report(const Dataset *dataset,
     if (fclose(out) != 0) io_error = true;
     if (io_error) {
         milena_error_set(error, MILENA_ERR_IO, 0, 0, 0, "Error escribiendo reporte de dataset");
+        return MILENA_ERR_IO;
+    }
+    return MILENA_OK;
+}
+
+
+static void write_table_json_value(FILE *out, const MilenaTable *table,
+                                   size_t column, size_t row) {
+    if (milena_table_is_null(table, column, row)) {
+        fputs("null", out);
+        return;
+    }
+    const MilenaTableColumn *data = milena_table_column(table, column);
+    if (data->type == MILENA_COLUMN_STRING) {
+        const char *value = NULL;
+        if (milena_table_get_string(table, column, row, &value, NULL) == MILENA_OK)
+            write_json_string(out, value);
+        else fputs("null", out);
+        return;
+    }
+    if (data->type == MILENA_COLUMN_CATEGORICAL) {
+        const char *label = NULL;
+        uint32_t code = 0;
+        if (milena_table_get_category(table, column, row, &code, &label, NULL) == MILENA_OK)
+            write_json_string(out, label);
+        else fputs("null", out);
+        return;
+    }
+    const void *raw = NULL;
+    if (milena_table_get_array_value(table, column, row, &raw, NULL) != MILENA_OK) {
+        fputs("null", out);
+        return;
+    }
+    switch (data->values.dtype) {
+        case MILENA_DTYPE_BOOL: fprintf(out, "%s", *(const bool *)raw ? "true" : "false"); break;
+        case MILENA_DTYPE_INT8: fprintf(out, "%d", (int)*(const int8_t *)raw); break;
+        case MILENA_DTYPE_INT16: fprintf(out, "%d", (int)*(const int16_t *)raw); break;
+        case MILENA_DTYPE_INT32: fprintf(out, "%" PRId32, *(const int32_t *)raw); break;
+        case MILENA_DTYPE_INT64: fprintf(out, "%" PRId64, *(const int64_t *)raw); break;
+        case MILENA_DTYPE_UINT8: fprintf(out, "%u", (unsigned)*(const uint8_t *)raw); break;
+        case MILENA_DTYPE_UINT16: fprintf(out, "%u", (unsigned)*(const uint16_t *)raw); break;
+        case MILENA_DTYPE_UINT32: fprintf(out, "%" PRIu32, *(const uint32_t *)raw); break;
+        case MILENA_DTYPE_UINT64: fprintf(out, "%" PRIu64, *(const uint64_t *)raw); break;
+        case MILENA_DTYPE_FLOAT32: fprintf(out, "%.9g", (double)*(const float *)raw); break;
+        case MILENA_DTYPE_FLOAT64: fprintf(out, "%.17g", *(const double *)raw); break;
+        default: fputs("null", out); break;
+    }
+}
+
+MilenaStatus analysis_table_report(const MilenaTable *table,
+                                const MilenaSchema *schema,
+                                const char *output_json,
+                                MilenaError *error) {
+    if (!table || !schema || !output_json) return MILENA_ERR_ARGUMENT;
+    MilenaStatus status = milena_table_validate(table, error);
+    if (status != MILENA_OK) return status;
+    FILE *out = fopen(output_json, "wb");
+    if (!out) {
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "No se pudo abrir reporte tipado");
+        return MILENA_ERR_IO;
+    }
+    fprintf(out, "{\n  \"analisis\": \"dataset\",\n");
+    fprintf(out, "  \"filas\": %zu,\n  \"columnas\": %zu,\n", table->row_count, table->column_count);
+    fputs("  \"variables\": [", out);
+    for (size_t column = 0; column < table->column_count; column++) {
+        const MilenaTableColumn *data = &table->columns[column];
+        int schema_position = schema_index(schema, data->name);
+        const MilenaVariable *variable = schema_position >= 0 ? &schema->variables[schema_position] : NULL;
+        if (column) fputs(",", out);
+        fputs("{\"nombre\": ", out); write_json_string(out, data->name);
+        fputs(", \"tipo\": ", out);
+        write_json_string(out, variable ? schema_type_name(variable->type) :
+                          (data->type == MILENA_COLUMN_STRING ? "texto" :
+                           data->type == MILENA_COLUMN_CATEGORICAL ? "categorica" : "numerica"));
+        fputs(", \"rol\": ", out);
+        write_json_string(out, variable ? schema_role_name(variable->role) : "variable");
+        fputs(", \"estado\": \"ok\"}", out);
+    }
+    fputs("],\n  \"entradas_categoricas\": [", out);
+    bool first = true;
+    for (size_t i = 0; i < schema->count; i++) if (schema->variables[i].role == MILENA_ROLE_CATEGORICAL_INPUT) {
+        if (!first) fputs(",", out); first = false;
+        fputs("{\"variable\": ", out); write_json_string(out, schema->variables[i].name); fputs("}", out);
+    }
+    fputs("],\n  \"salidas_binarias\": [", out); first = true;
+    for (size_t i = 0; i < schema->count; i++) if (schema->variables[i].role == MILENA_ROLE_BINARY_OUTPUT) {
+        if (!first) fputs(",", out); first = false;
+        fputs("{\"variable\": ", out); write_json_string(out, schema->variables[i].name); fputs("}", out);
+    }
+    fputs("],\n  \"datos\": [", out);
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (row) fputs(",", out);
+        fputs("{", out);
+        for (size_t column = 0; column < table->column_count; column++) {
+            if (column) fputs(",", out);
+            write_json_string(out, table->columns[column].name);
+            fputs(":", out); write_table_json_value(out, table, column, row);
+        }
+        fputs("}", out);
+    }
+    fputs("]\n}\n", out);
+    bool io_error = ferror(out) != 0;
+    if (fclose(out) != 0) io_error = true;
+    if (io_error) {
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "Error escribiendo reporte tipado");
         return MILENA_ERR_IO;
     }
     return MILENA_OK;

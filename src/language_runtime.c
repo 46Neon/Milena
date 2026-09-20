@@ -946,21 +946,13 @@ MilenaStatus milena_run_dataset_program(const char *source,
             if (status != MILENA_OK) break;
         }
     }
-    Dataset canonical_dataset;
-    dataset_init(&canonical_dataset);
     if (status == MILENA_OK) {
-        /* El reporte consume el valor reconstruido desde la tabla, no la
-         * representación CSV heredada que se usó para cargar. */
-        status = milena_dataset_from_table(&canonical_dataset,
-                                           &canonical_table, error);
+        /* La exportación final consume directamente la tabla tipada. */
+        status = analysis_table_report(&canonical_table, &schema,
+                                       output_path, error);
     }
-    if (status == MILENA_OK) {
-        status = analysis_dataset_report(&canonical_dataset, &schema,
-                                         output_path, error);
-    }
-    size_t final_rows = canonical_dataset.row_count;
-    size_t final_columns = canonical_dataset.column_count;
-    dataset_destroy(&canonical_dataset);
+    size_t final_rows = canonical_table.row_count;
+    size_t final_columns = canonical_table.column_count;
     milena_table_destroy(&canonical_table);
     if (status == MILENA_OK) {
         FILE *stream = output ? output : stdout;
