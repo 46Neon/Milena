@@ -2,7 +2,7 @@
 
 ## Estado
 
-Este directorio contiene el primer flujo reproducible para construir un `.deb` local. No publica todavía un repositorio APT.
+Este directorio contiene un flujo reproducible para construir un `.deb` nativo de Termux/aarch64. No publica todavía un repositorio APT.
 
 El flujo correcto es:
 
@@ -43,12 +43,14 @@ El script:
 2. ejecuta las pruebas;
 3. obtiene la arquitectura de Termux;
 4. instala el binario y la documentación bajo `$PREFIX` dentro del staging;
-5. genera `dist/termux/milena_VERSION_ARCH.deb`.
+5. genera `dist/termux/milena_VERSION_aarch64.deb`.
 
 La instalación local de prueba puede hacerse con:
 
 ```bash
 dpkg -i dist/termux/milena_*.deb
+# Verifique que el binario instalado es ejecutable:
+command -v milena
 milena --help
 ```
 
@@ -78,6 +80,8 @@ GitHub Pages puede servir archivos estáticos, pero no genera por sí mismo `Pac
 
 ## Arquitecturas
 
+Este script exige que `dpkg --print-architecture` sea `aarch64`; no crea por accidente un paquete Debian/Ubuntu ni uno para otra ABI. El control declara sin dependencias adicionales: Milena es un binario C enlazado con la libc de Termux.
+
 Cada arquitectura necesita su propio binario y paquete:
 
 ```text
@@ -95,7 +99,8 @@ El paquete usa `$PREFIX`, no `/usr/local/bin` ni `sudo`. El script convierte el 
 
 ## Pendientes antes de publicar
 
-- ejecutar compilación real en Termux;
+- ejecutar compilación real en Termux/aarch64;
+- instalar y probar el `.deb` con `dpkg -i` antes de publicarlo;
 - compilar con Clang y validar con GCC en CI o Linux;
 - ejecutar pruebas unitarias e integración;
 - ejecutar ASan, UBSan y LeakSanitizer/Valgrind donde estén disponibles;

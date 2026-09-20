@@ -5,7 +5,7 @@
 #include "token.h"
 
 typedef enum {
-    AST_PROGRAMA = 0,
+    AST_PROGRAMA,
     AST_BLOQUE_ANALISIS,
     AST_DECLARACION_DATOS,
     AST_DECLARACION_ESTADISTICA,
@@ -23,7 +23,14 @@ typedef enum {
     AST_EXPRESION_IDENTIFICADOR,
     AST_EXPRESION_FUNCION,
     AST_EXPRESION_ARRAY,
+    AST_EXPRESION_LLAMADA,
+    AST_BLOQUE_FUNCION,
+    AST_COMANDO_RETORNAR,
+    AST_CONDICION_SI,
+    AST_DECLARACION_FUNCION,
     AST_DECLARACION_ARRAY,
+    AST_DECLARACION_VARIABLE,
+    AST_ASIGNACION_VARIABLE,
     AST_COMANDO_NULOS,
     AST_COMANDO_DUPLICADOS,
     AST_COMANDO_CONDICION,
@@ -37,7 +44,8 @@ typedef enum {
 } ASTNodeType;
 
 typedef enum {
-    AST_ESTADISTICA_SUMA = 0,
+    AST_ESTADISTICA_NINGUNA,
+    AST_ESTADISTICA_SUMA,
     AST_ESTADISTICA_MEDIA,
     AST_ESTADISTICA_MINIMO,
     AST_ESTADISTICA_MAXIMO,
@@ -64,15 +72,15 @@ typedef struct ASTNode {
     struct ASTNode *parent;
 } ASTNode;
 
-ASTNode *ast_create(ASTNodeType type);
-ASTNode *ast_create_leaf(ASTNodeType type, const char *value);
-ASTNode *ast_create_number(double value);
-ASTNode *ast_create_statistic(ASTStatOperation operation, ASTNode *argument,
+ASTNode* ast_create(ASTNodeType type);
+ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
+ASTNode* ast_create_number(double value);
+ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,
                               int axis, bool keepdims, double percentile);
 bool ast_add_child(ASTNode *parent, ASTNode *child);
 void ast_print(ASTNode *node, int depth);
 void ast_destroy(ASTNode *node);
-const char *ast_type_name(ASTNodeType type);
+const char* ast_type_name(ASTNodeType type);
 const char *ast_stat_operation_name(ASTStatOperation operation);
 
 #endif

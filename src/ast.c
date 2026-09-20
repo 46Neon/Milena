@@ -110,34 +110,18 @@ void ast_destroy(ASTNode *node) {
 
 const char *ast_type_name(ASTNodeType type) {
     static const char *const names[AST_NODE_TYPE_COUNT] = {
-        "PROGRAMA",
-        "BLOQUE_ANALISIS",
-        "DECLARACION_DATOS",
-        "DECLARACION_ESTADISTICA",
-        "ASIGNACION_DATASET",
-        "LLAMADA_CARGAR",
-        "BLOQUE_LIMPIAR",
-        "BLOQUE_TRANSFORMAR",
-        "BLOQUE_FILTRAR",
-        "BLOQUE_AGRUPAR",
-        "BLOQUE_RESUMIR",
-        "BLOQUE_VISUALIZAR",
-        "BLOQUE_EXPORTAR",
-        "EXPRESION_OPERACION",
-        "EXPRESION_LITERAL",
-        "EXPRESION_IDENTIFICADOR",
-        "EXPRESION_FUNCION",
-        "EXPRESION_ARRAY",
-        "DECLARACION_ARRAY",
-        "COMANDO_NULOS",
-        "COMANDO_DUPLICADOS",
-        "COMANDO_CONDICION",
-        "COMANDO_EXTRAER",
-        "COMANDO_TOTAL",
-        "COMANDO_PERIODO",
-        "AGRUPACION_POR",
-        "RESUMEN_METRICA",
-        "OPERACION_ESTADISTICA"
+        "PROGRAMA", "BLOQUE_ANALISIS", "DECLARACION_DATOS",
+        "DECLARACION_ESTADISTICA", "ASIGNACION_DATASET", "LLAMADA_CARGAR",
+        "BLOQUE_LIMPIAR", "BLOQUE_TRANSFORMAR", "BLOQUE_FILTRAR",
+        "BLOQUE_AGRUPAR", "BLOQUE_RESUMIR", "BLOQUE_VISUALIZAR",
+        "BLOQUE_EXPORTAR", "EXPRESION_OPERACION", "EXPRESION_LITERAL",
+        "EXPRESION_IDENTIFICADOR", "EXPRESION_FUNCION", "EXPRESION_ARRAY",
+        "EXPRESION_LLAMADA", "BLOQUE_FUNCION", "COMANDO_RETORNAR",
+        "CONDICION_SI", "DECLARACION_FUNCION", "DECLARACION_ARRAY",
+        "DECLARACION_VARIABLE", "ASIGNACION_VARIABLE", "COMANDO_NULOS",
+        "COMANDO_DUPLICADOS", "COMANDO_CONDICION", "COMANDO_EXTRAER",
+        "COMANDO_TOTAL", "COMANDO_PERIODO", "AGRUPACION_POR",
+        "RESUMEN_METRICA", "OPERACION_ESTADISTICA"
     };
     if ((unsigned)type >= (unsigned)AST_NODE_TYPE_COUNT) return "DESCONOCIDO";
     return names[type];
@@ -145,7 +129,7 @@ const char *ast_type_name(ASTNodeType type) {
 
 const char *ast_stat_operation_name(ASTStatOperation operation) {
     static const char *const names[AST_STAT_OPERATION_COUNT] = {
-        "SUMA", "MEDIA", "MINIMO", "MAXIMO", "VARIANZA",
+        "NINGUNA", "SUMA", "MEDIA", "MINIMO", "MAXIMO", "VARIANZA",
         "DESVIACION", "MEDIANA", "PERCENTIL"
     };
     if ((unsigned)operation >= (unsigned)AST_STAT_OPERATION_COUNT) {

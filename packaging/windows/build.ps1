@@ -23,7 +23,7 @@ $SourceNames = @(
     'sst_stats.c', 'sst_histogram.c', 'sst_rates.c', 'sst_report.c',
     'sst_report_advanced.c', 'sst_advanced.c', 'sst_contingency.c',
     'sst_inference.c', 'sst_correlation.c', 'sst_normality.c',
-    'logger.c', 'metrics.c'
+    'logger.c', 'metrics.c', 'function_parser.c', 'user_functions.c' 
 )
 $Compiler = if ($env:CC) { $env:CC } else { 'clang' }
 $VersionHeader = Join-Path $ObjectDir 'milena-version.h'

@@ -11,7 +11,7 @@ typedef enum {
     TOKEN_EOF = 0,
     TOKEN_ERROR,
 
-    /* Palabras clave en español. */
+    // Palabras clave en español
     TOKEN_KW_ANALISIS,
     TOKEN_KW_DATOS,
     TOKEN_KW_ESTADISTICA,
@@ -30,8 +30,9 @@ typedef enum {
     TOKEN_KW_EXTRAER,
     TOKEN_KW_TOTAL,
     TOKEN_KW_PERIODO,
-
-    /* Operaciones y opciones estadísticas en español. */
+    TOKEN_FUNCION_FORMA,
+    TOKEN_FUNCION_DIMENSIONES,
+    TOKEN_FUNCION_TAMANO,
     TOKEN_FUNCION_SUMA,
     TOKEN_FUNCION_MEDIA,
     TOKEN_FUNCION_MINIMO,
@@ -44,8 +45,13 @@ typedef enum {
     TOKEN_CONCEPTO_CONSERVAR,
     TOKEN_CONCEPTO_DIMENSIONES,
     TOKEN_CONCEPTO_SIN,
+    TOKEN_KW_VARIABLE,
+    TOKEN_KW_FUNCION,
+    TOKEN_KW_RETORNAR,
+    TOKEN_KW_SI,
+    TOKEN_KW_SINO,
 
-    /* Separadores. */
+    // Separadores
     TOKEN_PUNTO,
     TOKEN_NUMERAL,
     TOKEN_LLAVE_IZQ,
@@ -58,7 +64,7 @@ typedef enum {
     TOKEN_COMA,
     TOKEN_PUNTO_Y_COMA,
 
-    /* Operadores. */
+    // Operadores
     TOKEN_IGUAL,
     TOKEN_IGUAL_IGUAL,
     TOKEN_DISTINTO,
@@ -72,12 +78,13 @@ typedef enum {
     TOKEN_DIV,
     TOKEN_ASIGNACION,
 
-    /* Literales. */
+    // Literales
     TOKEN_IDENTIFICADOR,
     TOKEN_CADENA,
     TOKEN_NUMERO,
     TOKEN_BOOLEANO,
 
+    // Especiales
     TOKEN_COMMENT,
     TOKEN_TYPE_COUNT
 } TokenType;

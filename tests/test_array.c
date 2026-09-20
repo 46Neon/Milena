@@ -243,6 +243,27 @@ static void test_sum_by_axis(void) {
     milena_array_release(&array);
 }
 
+static void test_memory_ownership(void) {
+    const size_t shape[] = {4};
+    const int64_t values[] = {1, 2, 3, 4};
+    MilenaArray source = {0}, view = {0}, result = {0}, empty = {0};
+    MilenaError error; milena_error_clear(&error);
+    expect_ok(milena_array_from_i64(&source, 1, shape, values, &error), &error);
+    expect_ok(milena_array_slice_view(&view, &source, 0, 1, 3, 1, &error), &error);
+    milena_array_retain(&source);
+    milena_array_release(&source);
+    assert(source.storage == NULL);
+    milena_array_release(&source);
+    assert(view.size == 2);
+    assert(((const int64_t *)milena_array_const_data(&view))[0] == 2);
+    milena_array_release(&view);
+    milena_array_release(&view);
+    assert(view.storage == NULL);
+    assert(milena_array_median(&result, &empty, &error) != MILENA_OK);
+    milena_array_release(&result);
+    milena_array_release(&empty);
+}
+
 static void test_order_statistics_by_axis(void) {
     const size_t shape[] = {3, 3};
     const int64_t values[] = {1, 4, 7, 2, 5, 8, 3, 6, 9};
@@ -279,6 +300,7 @@ int main(void) {
     test_transpose_and_reshape_copy();
     test_boolean_masks_and_where();
     test_sum_by_axis();
+    test_memory_ownership();
     test_order_statistics_by_axis();
     puts("OK: MilenaArray creation, views, broadcasting and reductions");
     return 0;

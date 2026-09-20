@@ -9,15 +9,22 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
           src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c
 OBJECTS = $(SOURCES:.c=.o)
+FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all clean test test-sst test-array test-forest test-table test-finance test-language-array test-parser-array test-parser-statistics debug
+.PHONY: all clean test test-sst test-array test-forest test-arena test-table test-finance test-language-array test-parser-array test-parser-statistics test-parser-variables test-functions debug
 
 test-array: tests/test_array
 	./tests/test_array
 
 test-forest: tests/test_forest
 	./tests/test_forest
+
+test-arena: tests/test_arena
+	./tests/test_arena
+
+tests/test_arena: tests/test_arena.c src/arena.c src/temp_scope.c src/common.c
+	$(CC) $(CFLAGS) tests/test_arena.c src/arena.c src/temp_scope.c src/common.c $(LDFLAGS) -o $@
 
 tests/test_forest: tests/test_forest.c src/forest.c src/array.c src/common.c
 	$(CC) $(CFLAGS) tests/test_forest.c src/forest.c src/array.c src/common.c $(LDFLAGS) -o $@
@@ -52,14 +59,28 @@ tests/test_language_array: tests/test_language_array.c src/lexer.c src/ast.c src
 test-parser-array: tests/test_parser_array
 	./tests/test_parser_array
 
-tests/test_parser_array: tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c
-	$(CC) $(CFLAGS) tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c $(LDFLAGS) -o $@
+tests/test_parser_array: tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
+	$(CC) $(CFLAGS) tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
+
+.PHONY: test-parser-variables
+
+test-parser-variables: tests/test_parser_variables
+	./tests/test_parser_variables
+
+test-functions: tests/test_functions
+	./tests/test_functions
+
+tests/test_functions: tests/test_functions.c src/parser.c src/lexer.c src/ast.c src/interpreter.c src/symbol.c src/symbol_table.c src/dataset.c src/common.c
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+
+tests/test_parser_variables: tests/test_parser_variables.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
+	$(CC) $(CFLAGS) tests/test_parser_variables.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
 
 test-parser-statistics: tests/test_parser_statistics
 	./tests/test_parser_statistics
 
-tests/test_parser_statistics: tests/test_parser_statistics.c src/parser.c src/lexer.c src/ast.c src/common.c
-	$(CC) $(CFLAGS) tests/test_parser_statistics.c src/parser.c src/lexer.c src/ast.c src/common.c $(LDFLAGS) -o $@
+tests/test_parser_statistics: tests/test_parser_statistics.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
+	$(CC) $(CFLAGS) tests/test_parser_statistics.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
 
 SST_TEST_SOURCES = src/common.c src/sst_dates.c src/sst_model.c \
                    src/sst_stats.c src/sst_histogram.c src/sst_rates.c \
@@ -69,8 +90,8 @@ SST_TEST_SOURCES = src/common.c src/sst_dates.c src/sst_model.c \
 
 all: $(TARGET)
 
-$(TARGET): $(OBJECTS)
-	$(CC) $(CFLAGS) $(OBJECTS) $(LDFLAGS) -o $@
+$(TARGET): $(OBJECTS) $(FUNCTION_OBJECTS)
+	$(CC) $(CFLAGS) $(OBJECTS) $(FUNCTION_OBJECTS) $(LDFLAGS) -o $@
 
 test-sst: tests/test_sst_modules
 	./tests/test_sst_modules
@@ -85,11 +106,14 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: $(TARGET) test-sst test-array test-forest test-table test-finance \
-      test-language-array test-parser-array test-parser-statistics
+test: $(TARGET) test-sst test-array test-forest test-arena test-table test-finance \
+      test-language-array test-parser-array test-parser-statistics \
+      test-parser-variables test-functions
 	./tests/run_tests.sh
 
 clean:
-	rm -f $(OBJECTS) $(TARGET) tests/test_sst_modules tests/test_array tests/test_forest tests/test_table \
+	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules \
+		tests/test_array tests/test_forest tests/test_arena tests/test_table \
 		tests/test_finance tests/test_language_array tests/test_parser_array \
-		tests/test_parser_statistics reporte.json resultado.json
+		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
+		tests/test_script_functions tests/test_user_functions reporte.json resultado.json
