@@ -2,11 +2,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${MANO_VERSION:-0.1.1}"
+VERSION="${MILENA_VERSION:-0.1.1}"
+VERSION="${VERSION#v}"
 CC_BIN="${CC:-cc}"
 ARCH="${MILENA_DEB_ARCH:-$(dpkg --print-architecture)}"
 DIST_DIR="$ROOT_DIR/dist/debian"
 STAGE="$DIST_DIR/stage"
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+~-][0-9A-Za-z.-]+)?$ ]]; then
+    printf 'MILENA_VERSION no es válida para Debian: %s\n' "$VERSION" >&2
+    exit 1
+fi
 
 for command in "$CC_BIN" make dpkg dpkg-deb; do
     command -v "$command" >/dev/null 2>&1 || {
@@ -15,10 +21,14 @@ for command in "$CC_BIN" make dpkg dpkg-deb; do
     }
 done
 
+BASE_CFLAGS="${CFLAGS:--std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude}"
+VERSION_DEFINE="-DMILENA_VERSION=\\\"$VERSION\\\""
+BUILD_CFLAGS="$BASE_CFLAGS $VERSION_DEFINE"
+
 cd "$ROOT_DIR"
 make clean
-make CC="$CC_BIN"
-CC="$CC_BIN" make test
+make CC="$CC_BIN" CFLAGS="$BUILD_CFLAGS"
+CC="$CC_BIN" make CFLAGS="$BUILD_CFLAGS" test
 
 rm -rf "$STAGE"
 mkdir -p "$STAGE/usr/bin" "$STAGE/usr/share/doc/milena"
