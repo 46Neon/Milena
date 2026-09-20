@@ -1350,11 +1350,11 @@ static MilenaStatus hash_capacity(size_t rows, size_t *capacity,
 
 static const char *aggregate_suffix(MilenaAggregateOp operation) {
     switch (operation) {
-        case MILENA_AGG_COUNT: return "count";
-        case MILENA_AGG_SUM: return "sum";
-        case MILENA_AGG_MEAN: return "mean";
-        case MILENA_AGG_MIN: return "min";
-        case MILENA_AGG_MAX: return "max";
+        case MILENA_AGG_COUNT: return "conteo";
+        case MILENA_AGG_SUM: return "suma";
+        case MILENA_AGG_MEAN: return "media";
+        case MILENA_AGG_MIN: return "minimo";
+        case MILENA_AGG_MAX: return "maximo";
         default: return "invalid";
     }
 }

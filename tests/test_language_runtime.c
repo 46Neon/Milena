@@ -136,8 +136,8 @@ int main(void) {
     CHECK(strstr(json_text, "\"columnas\": 3") != NULL &&
           strstr(json_text, "region") != NULL &&
           strstr(json_text, "total_suma") != NULL &&
-          strstr(json_text, "total_mean") != NULL &&
-          strstr(json_text, "total_count") != NULL,
+          strstr(json_text, "total_media") != NULL &&
+          strstr(json_text, "total_conteo") != NULL,
           "Las agregaciones no llegaron al reporte unificado");
     CHECK(strstr(json_text, "numerica") != NULL,
           "El esquema del dataset no llegó al reporte unificado");
@@ -268,7 +268,7 @@ int main(void) {
     summary_text[summary_size] = '\0';
     fclose(summary_json);
     CHECK(strstr(summary_text, "\"filas\": 1") != NULL &&
-          strstr(summary_text, "total_mean") != NULL &&
+          strstr(summary_text, "total_media") != NULL &&
           strstr(summary_text, "total_varianza") != NULL &&
           strstr(summary_text, "total_mediana") != NULL &&
           strstr(summary_text, "total_percentil") != NULL,
