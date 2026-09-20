@@ -127,7 +127,7 @@ static void lexer_skip_whitespace_and_comments(Lexer *lexer) {
 void lexer_init(Lexer *lexer, const char *source) {
     lexer->source = source ? source : "";
     lexer->position = 0;
-    lexer->length = strlen(source);
+    lexer->length = strlen(lexer->source);
     lexer->line = 1;
     lexer->column = 1;
     milena_error_init(&lexer->error);
@@ -310,20 +310,36 @@ Token lexer_next_token(Lexer *lexer) {
         char buffer[MAX_TOKEN_LEN];
         size_t idx = 0;
         
+        bool too_long = false;
         while (lexer_current(lexer) != '\0' && lexer_current(lexer) != '"') {
+            char value;
             if (lexer_current(lexer) == '\\') {
                 lexer_advance_char(lexer);
                 char esc = lexer_current(lexer);
-                if (esc == 'n') buffer[idx++] = '\n';
-                else if (esc == 't') buffer[idx++] = '\t';
-                else if (esc == 'r') buffer[idx++] = '\r';
-                else if (esc == '\\') buffer[idx++] = '\\';
-                else if (esc == '"') buffer[idx++] = '"';
-                else buffer[idx++] = esc;
+                if (esc == 'n') value = '\n';
+                else if (esc == 't') value = '\t';
+                else if (esc == 'r') value = '\r';
+                else if (esc == '\\') value = '\\';
+                else if (esc == '"') value = '"';
+                else value = esc;
                 lexer_advance_char(lexer);
             } else {
-                buffer[idx++] = lexer_advance_char(lexer);
+                value = lexer_advance_char(lexer);
             }
+            if (idx + 1 < sizeof(buffer)) buffer[idx++] = value;
+            else too_long = true;
+        }
+        if (too_long) {
+            while (lexer_current(lexer) != '\0' && lexer_current(lexer) != '"') {
+                lexer_advance_char(lexer);
+            }
+            token = lexer_create_token(lexer, TOKEN_ERROR, "cadena demasiado larga");
+            milena_error_set(&lexer->error, MILENA_ERR_PARSE,
+                             (size_t)token.line, (size_t)token.column, 0,
+                             "La cadena supera el límite de 255 caracteres");
+            if (lexer_current(lexer) == '"') lexer_advance_char(lexer);
+            lexer->current_token = token;
+            return token;
         }
         
         if (lexer_current(lexer) != '"') {
@@ -339,21 +355,35 @@ Token lexer_next_token(Lexer *lexer) {
     }
     
     // Números
-    if (isdigit(c) || (c == '-' && isdigit(lexer_peek_char(lexer, 1)))) {
+    if (isdigit((unsigned char)c) || (c == '-' && isdigit((unsigned char)lexer_peek_char(lexer, 1)))) {
         char buffer[MAX_TOKEN_LEN];
         size_t idx = 0;
         bool has_dot = false;
         
+        bool too_long = false;
         if (c == '-') {
-            buffer[idx++] = lexer_advance_char(lexer);
+            char value = lexer_advance_char(lexer);
+            if (idx + 1 < sizeof(buffer)) buffer[idx++] = value;
+            else too_long = true;
         }
         
-        while (isdigit(lexer_current(lexer)) || 
-               (lexer_current(lexer) == '.' && !has_dot && isdigit(lexer_peek_char(lexer, 1)))) {
+        while (isdigit((unsigned char)lexer_current(lexer)) ||
+               (lexer_current(lexer) == '.' && !has_dot &&
+                isdigit((unsigned char)lexer_peek_char(lexer, 1)))) {
             if (lexer_current(lexer) == '.') has_dot = true;
-            buffer[idx++] = lexer_advance_char(lexer);
+            char value = lexer_advance_char(lexer);
+            if (idx + 1 < sizeof(buffer)) buffer[idx++] = value;
+            else too_long = true;
         }
         
+        if (too_long) {
+            token = lexer_create_token(lexer, TOKEN_ERROR, "número demasiado largo");
+            milena_error_set(&lexer->error, MILENA_ERR_PARSE,
+                             (size_t)token.line, (size_t)token.column, 0,
+                             "El número supera el límite de 255 caracteres");
+            lexer->current_token = token;
+            return token;
+        }
         buffer[idx] = '\0';
         token = lexer_create_token(lexer, TOKEN_NUMERO, buffer);
         token.number_value = atof(buffer);
@@ -366,10 +396,21 @@ Token lexer_next_token(Lexer *lexer) {
         char buffer[MAX_TOKEN_LEN];
         size_t idx = 0;
         
+        bool too_long = false;
         while (is_identifier_char(lexer_current(lexer))) {
-            buffer[idx++] = lexer_advance_char(lexer);
+            char value = lexer_advance_char(lexer);
+            if (idx + 1 < sizeof(buffer)) buffer[idx++] = value;
+            else too_long = true;
         }
         
+        if (too_long) {
+            token = lexer_create_token(lexer, TOKEN_ERROR, "identificador demasiado largo");
+            milena_error_set(&lexer->error, MILENA_ERR_PARSE,
+                             (size_t)token.line, (size_t)token.column, 0,
+                             "El identificador supera el límite de 255 caracteres");
+            lexer->current_token = token;
+            return token;
+        }
         buffer[idx] = '\0';
         TokenType type = keyword_type(buffer);
         token = lexer_create_token(lexer, type, buffer);
@@ -411,7 +452,8 @@ Token lexer_peek_token(Lexer *lexer) {
 }
 
 void lexer_advance_token(Lexer *lexer) {
-    lexer->current_token = lexer->previous_token;
+    if (!lexer) return;
+    lexer->current_token = lexer_next_token(lexer);
 }
 
 bool lexer_match(Lexer *lexer, TokenType type) {
