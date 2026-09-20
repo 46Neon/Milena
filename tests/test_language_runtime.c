@@ -93,7 +93,7 @@ int main(void) {
         "  entrada categorica \"ciudad\"\n"
         "  salida binaria \"compro\"\n"
         "  .limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") }\n"
-        "  .transformar dataset { #total(\"precio * cantidad\") #periodo(\"mes de fecha\") }\n"
+        "  .transformar dataset { #total(\"precio * cantidad\") #periodo extraer(\"mes de fecha\") }\n"
         "  .agrupar dataset { #por(\"ciudad\") #suma(\"total\") #media(\"total\") #conteo(\"total\") }\n"
         "  .unir { #derecha(\"test-language-runtime-right.csv\") #clave(\"ciudad\") }\n"
         "  .seleccionar { #columnas(\"ciudad,total_suma,periodo,region\") }\n"
