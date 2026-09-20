@@ -104,6 +104,7 @@ int main(void) {
         "  #tasa(\"total_suma,total_suma,200000\")\n"
         "  #poisson(\"total_suma,total_suma,200000\")\n"
         "  #correlacion(\"total_suma,total_suma\")\n"
+        "  #wilcoxon(\"total_suma,total_suma\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -190,6 +191,15 @@ int main(void) {
     CHECK(strstr(correlation_text, "correlacion") != NULL &&
           strstr(correlation_text, "coeficiente") != NULL,
           "La correlación SST no usó la tabla canónica");
+    FILE *wilcoxon_json = fopen("test-language-runtime.json.wilcoxon.json", "rb");
+    CHECK(wilcoxon_json != NULL, "Wilcoxon SST canónico no creó su reporte");
+    char wilcoxon_text[2048];
+    size_t wilcoxon_size = fread(wilcoxon_text, 1, sizeof(wilcoxon_text) - 1, wilcoxon_json);
+    wilcoxon_text[wilcoxon_size] = '\0';
+    fclose(wilcoxon_json);
+    CHECK(strstr(wilcoxon_text, "wilcoxon") != NULL &&
+          strstr(wilcoxon_text, "estadistico") != NULL,
+          "Wilcoxon SST no usó la tabla canónica");
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -226,6 +236,7 @@ int main(void) {
     remove("test-language-runtime.json.tasa.json");
     remove("test-language-runtime.json.poisson.json");
     remove("test-language-runtime.json.correlacion.json");
+    remove("test-language-runtime.json.wilcoxon.json");
 
     puts("language runtime: parser + AST + arrays + datasets OK");
     return 0;

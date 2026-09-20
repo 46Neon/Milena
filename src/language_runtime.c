@@ -885,6 +885,67 @@ static MilenaStatus runtime_write_sst_correlation(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_wilcoxon(const MilenaTable *table,
+                                                    const char *specification,
+                                                    const char *output_path,
+                                                    MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *before_name = strtok(spec, ",");
+    char *after_name = strtok(NULL, ",");
+    if (!before_name || !after_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "Wilcoxon requiere dos columnas");
+        return MILENA_ERR_PARSE;
+    }
+    int before_column = milena_table_column_index(table, before_name);
+    int after_column = milena_table_column_index(table, after_name);
+    const MilenaTableColumn *before_data = before_column < 0 ? NULL : milena_table_column(table, (size_t)before_column);
+    const MilenaTableColumn *after_data = after_column < 0 ? NULL : milena_table_column(table, (size_t)after_column);
+    if (!before_data || !after_data || before_data->type != MILENA_COLUMN_ARRAY ||
+        after_data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "Wilcoxon requiere columnas numéricas");
+        return MILENA_ERR_TYPE;
+    }
+    double *before = table->row_count ? (double *)malloc(table->row_count * sizeof(*before)) : NULL;
+    double *after = table->row_count ? (double *)malloc(table->row_count * sizeof(*after)) : NULL;
+    if (table->row_count && (!before || !after)) {
+        free(before); free(after);
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para Wilcoxon SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)before_column, row) ||
+            milena_table_is_null(table, (size_t)after_column, row)) continue;
+        const void *br = NULL, *ar = NULL;
+        if (milena_table_get_array_value(table, (size_t)before_column, row, &br, error) != MILENA_OK ||
+            milena_table_get_array_value(table, (size_t)after_column, row, &ar, error) != MILENA_OK) break;
+        before[count] = before_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)br : (double)*(const float *)br;
+        after[count] = after_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)ar : (double)*(const float *)ar;
+        count++;
+    }
+    SstWilcoxonResult result;
+    MilenaStatus status = sst_wilcoxon_signed_rank(before, after, count, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.wilcoxon.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"wilcoxon\",\"pares\":%zu,\"estadistico\":%.10g,\"p\":%.10g}\n",
+                        result.pairs, result.statistic, result.p_value);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    free(before); free(after);
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1383,6 +1444,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (strcmp(node->type_name, "correlacion") == 0) {
                 status = runtime_write_sst_correlation(&canonical_table, node->value,
                                                        output_path, error);
+            } else if (strcmp(node->type_name, "wilcoxon") == 0) {
+                status = runtime_write_sst_wilcoxon(&canonical_table, node->value,
+                                                    output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;
