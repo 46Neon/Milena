@@ -101,8 +101,6 @@ int main(void) {
         "  #histograma(\"total_suma\")\n"
         "  #tasa(\"total_suma,total_suma,200000\")\n"
         "  #poisson(\"total_suma,total_suma,200000\")\n"
-        "  #correlacion(\"total_suma,total_suma\")\n"
-        "  #wilcoxon(\"total_suma,total_suma\")\n"
         "  #chi_cuadrado(\"ciudad,region\")\n"
         "  #riesgo(\"ciudad,region,Caracas,Centro\")\n"
         "  #modelo_sst(\"ciudad,total_suma,region\")\n"
@@ -175,24 +173,6 @@ int main(void) {
     CHECK(strstr(poisson_text, "poisson") != NULL &&
           strstr(poisson_text, "ic_inferior") != NULL,
           "Poisson SST no usó la tabla canónica");
-    FILE *correlation_json = fopen("test-language-runtime.json.correlacion.json", "rb");
-    CHECK(correlation_json != NULL, "La correlación SST canónica no creó su reporte");
-    char correlation_text[2048];
-    size_t correlation_size = fread(correlation_text, 1, sizeof(correlation_text) - 1, correlation_json);
-    correlation_text[correlation_size] = '\0';
-    fclose(correlation_json);
-    CHECK(strstr(correlation_text, "correlacion") != NULL &&
-          strstr(correlation_text, "coeficiente") != NULL,
-          "La correlación SST no usó la tabla canónica");
-    FILE *wilcoxon_json = fopen("test-language-runtime.json.wilcoxon.json", "rb");
-    CHECK(wilcoxon_json != NULL, "Wilcoxon SST canónico no creó su reporte");
-    char wilcoxon_text[2048];
-    size_t wilcoxon_size = fread(wilcoxon_text, 1, sizeof(wilcoxon_text) - 1, wilcoxon_json);
-    wilcoxon_text[wilcoxon_size] = '\0';
-    fclose(wilcoxon_json);
-    CHECK(strstr(wilcoxon_text, "wilcoxon") != NULL &&
-          strstr(wilcoxon_text, "estadistico") != NULL,
-          "Wilcoxon SST no usó la tabla canónica");
     FILE *chi_json = fopen("test-language-runtime.json.chi_cuadrado.json", "rb");
     CHECK(chi_json != NULL, "Chi cuadrado SST canónico no creó su reporte");
     char chi_text[2048];
@@ -229,35 +209,59 @@ int main(void) {
     CHECK(strstr(finance_text, "interes_simple") != NULL &&
           strstr(finance_text, "finance") != NULL,
           "Finanzas no usó la tabla canónica");
-    const char *normality_csv_path = "test-language-runtime-normality.csv";
-    const char *normality_json_path = "test-language-runtime-normality.json";
-    FILE *normality_csv = fopen(normality_csv_path, "wb");
-    CHECK(normality_csv != NULL, "No se pudo crear el CSV de normalidad");
-    fputs("valor\n1\n2\n3\n4\n5\n6\n7\n9\n", normality_csv);
-    CHECK(fclose(normality_csv) == 0, "No se pudo cerrar el CSV de normalidad");
-    const char *normality_source =
-        ".analisis normalidad {\n"
-        "  dataset cargar datos(\"test-language-runtime-normality.csv\")\n"
-        "  variable valor numerica\n"
-        "  #normalidad(\"valor\")\n"
-        "  .exportar { (\"test-language-runtime-normality.json\") }\n"
+    const char *inference_csv_path = "test-language-runtime-inference.csv";
+    const char *inference_json_path = "test-language-runtime-inference.json";
+    FILE *inference_csv = fopen(inference_csv_path, "wb");
+    CHECK(inference_csv != NULL, "No se pudo crear el CSV de inferencia");
+    fputs("antes,despues\n1,2\n2,4\n3,6\n4,8\n5,10\n6,12\n7,14\n9,18\n", inference_csv);
+    CHECK(fclose(inference_csv) == 0, "No se pudo cerrar el CSV de inferencia");
+    const char *inference_source =
+        ".analisis inferencia {\n"
+        "  dataset cargar datos(\"test-language-runtime-inference.csv\")\n"
+        "  variable antes numerica\n"
+        "  variable despues numerica\n"
+        "  #normalidad(\"antes\")\n"
+        "  #correlacion(\"antes,despues\")\n"
+        "  #wilcoxon(\"antes,despues\")\n"
+        "  .exportar { (\"test-language-runtime-inference.json\") }\n"
         "}\n";
     milena_error_clear(&error);
-    CHECK(milena_run_dataset_program(normality_source,
-                                     "test-language-runtime-normality.milena",
+    CHECK(milena_run_dataset_program(inference_source,
+                                     "test-language-runtime-inference.milena",
                                      NULL, &error) == MILENA_OK,
           error.message);
-    FILE *normality_json = fopen(normality_json_path, "rb");
+    FILE *normality_json = fopen("test-language-runtime-inference.json.normalidad.json", "rb");
     CHECK(normality_json != NULL, "La normalidad SST canónica no creó su reporte");
     char normality_text[2048];
     size_t normality_size = fread(normality_text, 1, sizeof(normality_text) - 1, normality_json);
     normality_text[normality_size] = '\0';
     fclose(normality_json);
     CHECK(strstr(normality_text, "normalidad") != NULL &&
-          strstr(normality_text, "valor") != NULL,
+          strstr(normality_text, "antes") != NULL,
           "La normalidad SST no usó la tabla canónica");
-    remove(normality_csv_path);
-    remove(normality_json_path);
+    FILE *correlation_json = fopen("test-language-runtime-inference.json.correlacion.json", "rb");
+    CHECK(correlation_json != NULL, "La correlación SST canónica no creó su reporte");
+    char correlation_text[2048];
+    size_t correlation_size = fread(correlation_text, 1, sizeof(correlation_text) - 1, correlation_json);
+    correlation_text[correlation_size] = '\0';
+    fclose(correlation_json);
+    CHECK(strstr(correlation_text, "correlacion") != NULL &&
+          strstr(correlation_text, "coeficiente") != NULL,
+          "La correlación SST no usó la tabla canónica");
+    FILE *wilcoxon_json = fopen("test-language-runtime-inference.json.wilcoxon.json", "rb");
+    CHECK(wilcoxon_json != NULL, "Wilcoxon SST canónico no creó su reporte");
+    char wilcoxon_text[2048];
+    size_t wilcoxon_size = fread(wilcoxon_text, 1, sizeof(wilcoxon_text) - 1, wilcoxon_json);
+    wilcoxon_text[wilcoxon_size] = '\0';
+    fclose(wilcoxon_json);
+    CHECK(strstr(wilcoxon_text, "wilcoxon") != NULL &&
+          strstr(wilcoxon_text, "estadistico") != NULL,
+          "Wilcoxon SST no usó la tabla canónica");
+    remove(inference_csv_path);
+    remove(inference_json_path);
+    remove("test-language-runtime-inference.json.normalidad.json");
+    remove("test-language-runtime-inference.json.correlacion.json");
+    remove("test-language-runtime-inference.json.wilcoxon.json");
 
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
@@ -293,8 +297,6 @@ int main(void) {
     remove("test-language-runtime.json.histograma.json");
     remove("test-language-runtime.json.tasa.json");
     remove("test-language-runtime.json.poisson.json");
-    remove("test-language-runtime.json.correlacion.json");
-    remove("test-language-runtime.json.wilcoxon.json");
     remove("test-language-runtime.json.chi_cuadrado.json");
     remove("test-language-runtime.json.riesgo.json");
     remove("test-language-runtime.json.modelo_sst.json");
