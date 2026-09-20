@@ -1301,6 +1301,8 @@ MilenaStatus milena_run_dataset_program(const char *source,
     lexer_init(&lexer, source);
     parser_init(&parser, &lexer);
     ASTNode *program = parser_parse(&parser);
+    fprintf(stderr, "runtime trace: parser finished\n");
+    fflush(stderr);
     if (!program || parser.has_error) {
         if (error) *error = parser.error;
         ast_destroy(program);
@@ -1308,7 +1310,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
         return error && error->code != MILENA_OK ? error->code : MILENA_ERR_PARSE;
     }
 
+    fprintf(stderr, "runtime trace: semantic begin\n"); fflush(stderr);
     MilenaStatus semantic_status = milena_validate_ast(program, error);
+    fprintf(stderr, "runtime trace: semantic finished\n"); fflush(stderr);
     if (semantic_status != MILENA_OK) {
         ast_destroy(program);
         parser_release(&parser);
