@@ -652,6 +652,64 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
                     ast_add_child(node, transformar);
                 }
+            } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
+                parser_advance(parser);
+                if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
+                if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
+                    ASTNode *agrupar = ast_create(AST_BLOQUE_AGRUPAR);
+                    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                            parser_advance(parser);
+                            continue;
+                        }
+                        parser_advance(parser);
+                        if (parser_is_identifier(parser) &&
+                            strcmp(parser->current.lexeme, "por") == 0) {
+                            parser_advance(parser);
+                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de agrupación")) {
+                                    if (agrupar) ast_add_child(agrupar,
+                                        ast_create_leaf(AST_AGRUPACION_POR,
+                                                        parser->previous.lexeme));
+                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de por");
+                                }
+                            }
+                        } else if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
+                                   parser_match(parser, TOKEN_FUNCION_MEDIA) ||
+                                   parser_match(parser, TOKEN_FUNCION_MINIMO) ||
+                                   parser_match(parser, TOKEN_FUNCION_MAXIMO)) {
+                            const char *metric = parser->current.lexeme;
+                            parser_advance(parser);
+                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de resumen")) {
+                                    char specification[MAX_TOKEN_LEN * 2];
+                                    (void)snprintf(specification, sizeof(specification),
+                                                   "%s:%s", metric, parser->previous.lexeme);
+                                    if (agrupar) ast_add_child(agrupar,
+                                        ast_create_leaf(AST_RESUMEN_METRICA, specification));
+                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del resumen");
+                                }
+                            }
+                        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                                   strcmp(parser->current.lexeme, "conteo") == 0) {
+                            parser_advance(parser);
+                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de conteo")) {
+                                    char specification[MAX_TOKEN_LEN * 2];
+                                    (void)snprintf(specification, sizeof(specification),
+                                                   "conteo:%s", parser->previous.lexeme);
+                                    if (agrupar) ast_add_child(agrupar,
+                                        ast_create_leaf(AST_RESUMEN_METRICA, specification));
+                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del conteo");
+                                }
+                            }
+                        }
+                    }
+                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                    if (agrupar && agrupar->child_count > 1) ast_add_child(node, agrupar);
+                    else ast_destroy(agrupar);
+                }
             } else if (parser_match(parser, TOKEN_KW_EXPORTAR)) {
                 parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {

@@ -663,6 +663,49 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     }
                     if (status != MILENA_OK) break;
                 }
+            } else if (block->type == AST_BLOQUE_AGRUPAR) {
+                const ASTNode *group_key = NULL;
+                const ASTNode *summary = NULL;
+                for (size_t j = 0; j < block->child_count; j++) {
+                    if (block->children[j]->type == AST_AGRUPACION_POR) group_key = block->children[j];
+                    if (block->children[j]->type == AST_RESUMEN_METRICA) summary = block->children[j];
+                }
+                char metric[32] = {0}, value_column[128] = {0};
+                if (!group_key || !summary || !group_key->value || !summary->value ||
+                    sscanf(summary->value, "%31[^:]:%127s", metric, value_column) != 2) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La agrupación requiere #por y una métrica");
+                    status = MILENA_ERR_PARSE;
+                } else {
+                    MilenaAggregateOp operation;
+                    if (strcmp(metric, "suma") == 0) operation = MILENA_AGG_SUM;
+                    else if (strcmp(metric, "media") == 0) operation = MILENA_AGG_MEAN;
+                    else if (strcmp(metric, "minimo") == 0) operation = MILENA_AGG_MIN;
+                    else if (strcmp(metric, "maximo") == 0) operation = MILENA_AGG_MAX;
+                    else {
+                        runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                      "Métrica de agrupación no soportada");
+                        status = MILENA_ERR_UNSUPPORTED;
+                        operation = MILENA_AGG_SUM;
+                    }
+                    if (status == MILENA_OK) {
+                        MilenaTable grouped;
+                        milena_table_init(&grouped);
+                        status = milena_table_group_by_aggregate(
+                            &grouped, &canonical_table, group_key->value,
+                            value_column, operation, error);
+                        if (status == MILENA_OK) {
+                            milena_table_swap(&canonical_table, &grouped);
+                            char aggregate_name[160];
+                            (void)snprintf(aggregate_name, sizeof(aggregate_name),
+                                           "%s_%s", value_column, metric);
+                            status = schema_add(&schema, aggregate_name,
+                                                MILENA_VAR_NUMERIC,
+                                                MILENA_ROLE_FEATURE, error);
+                        }
+                        milena_table_destroy(&grouped);
+                    }
+                }
             } else if (block->type == AST_BLOQUE_FILTRAR) {
                 const ASTNode *condition = block->child_count > 0 ? block->children[0] : NULL;
                 char column[128] = {0}, operator_text[3] = {0};
