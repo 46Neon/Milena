@@ -1,3 +1,5 @@
+.DEFAULT_GOAL := all
+
 CC ?= cc
 CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude
 LDFLAGS ?= -lm
@@ -102,4 +104,8 @@ test: $(TARGET) test-sst test-array test-forest test-arena test-table test-finan
 	./tests/run_tests.sh
 
 clean:
-	rm -f $(OBJECTS) $(TARGET) tests/test_sst_modules tests/test_array tests/test_table tests/test_functions reporte.json resultado.json
+	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules \
+		tests/test_array tests/test_forest tests/test_arena tests/test_table \
+		tests/test_finance tests/test_language_array tests/test_parser_array \
+		tests/test_parser_variables tests/test_functions tests/test_script_functions \
+		tests/test_user_functions reporte.json resultado.json
