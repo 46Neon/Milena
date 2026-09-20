@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="milena-cover.jpg" alt="Milena — lenguaje para análisis de datos" width="100%">
+</p>
+
 # 🌿 Milena
 
 ![Portada de Milena](assets/milena-banner.png)
@@ -86,7 +90,7 @@ cd Milena
 Ejecutar un script:
 
 ```bash
-./milena run ejemplos/estadistica.milena
+./milena run examples/estadistica.milena
 ```
 
 Analizar un archivo tabular:
