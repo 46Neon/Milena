@@ -2625,3 +2625,50 @@ MilenaStatus milena_table_add_month(MilenaTable *table,
     free(validity);
     return status;
 }
+
+
+MilenaStatus milena_table_filter_numeric(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         const char *column_name,
+                                         const char *operator_text,
+                                         double threshold,
+                                         MilenaError *error) {
+    if (!out || !source || !column_name || !operator_text) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Condición de filtro inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(source, error);
+    if (status != MILENA_OK) return status;
+    int column = milena_table_column_index(source, column_name);
+    if (column < 0) {
+        table_error(error, MILENA_ERR_DATA, "Columna inexistente en condición");
+        return MILENA_ERR_DATA;
+    }
+    if (strcmp(operator_text, ">") != 0 && strcmp(operator_text, ">=") != 0 &&
+        strcmp(operator_text, "<") != 0 && strcmp(operator_text, "<=") != 0 &&
+        strcmp(operator_text, "==") != 0 && strcmp(operator_text, "!=") != 0) {
+        table_error(error, MILENA_ERR_UNSUPPORTED, "Operador de filtro no soportado");
+        return MILENA_ERR_UNSUPPORTED;
+    }
+    size_t shape[1] = {source->row_count};
+    MilenaArray mask;
+    milena_array_init(&mask);
+    status = milena_array_zeros(&mask, MILENA_DTYPE_BOOL, 1, shape, error);
+    if (status != MILENA_OK) return status;
+    bool *keep = (bool *)milena_array_data(&mask);
+    for (size_t row = 0; status == MILENA_OK && row < source->row_count; row++) {
+        if (milena_table_is_null(source, (size_t)column, row)) continue;
+        double value = 0.0;
+        status = table_numeric_cell(source, (size_t)column, row, &value, error);
+        if (status != MILENA_OK) break;
+        if (strcmp(operator_text, ">") == 0) keep[row] = value > threshold;
+        else if (strcmp(operator_text, ">=") == 0) keep[row] = value >= threshold;
+        else if (strcmp(operator_text, "<") == 0) keep[row] = value < threshold;
+        else if (strcmp(operator_text, "<=") == 0) keep[row] = value <= threshold;
+        else if (strcmp(operator_text, "==") == 0) keep[row] = value == threshold;
+        else keep[row] = value != threshold;
+    }
+    if (status == MILENA_OK) status = milena_table_filter(out, source, &mask, error);
+    milena_array_release(&mask);
+    return status;
+}

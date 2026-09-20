@@ -184,6 +184,12 @@ MilenaStatus milena_table_add_month(MilenaTable *table,
                                    const char *date_column,
                                    const char *output_column,
                                    MilenaError *error);
+MilenaStatus milena_table_filter_numeric(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         const char *column_name,
+                                         const char *operator_text,
+                                         double threshold,
+                                         MilenaError *error);
 MilenaStatus milena_table_drop_null_columns(MilenaTable *out,
                                             const MilenaTable *source,
                                             const char *const *column_names,

@@ -77,7 +77,7 @@ int main(void) {
     const char *json_path = "test-language-runtime.json";
     FILE *csv = fopen(csv_path, "wb");
     CHECK(csv != NULL, "No se pudo crear el CSV de runtime");
-    fputs("precio,cantidad,ciudad,compro,fecha\n10,2,Caracas,1,2026-01-10\n5,3,Maracaibo,0,2026-02-11\n9,4,,1,2026-03-12\n5,3,Maracaibo,0,2026-02-11\n", csv);
+    fputs("precio,cantidad,ciudad,compro,fecha\n10,2,Caracas,1,2026-01-10\n5,3,Maracaibo,0,2026-02-11\n9,4,,1,2026-03-12\n5,3,Maracaibo,0,2026-02-11\n-1,2,Maracaibo,0,2026-04-01\n", csv);
     CHECK(fclose(csv) == 0, "No se pudo cerrar el CSV de runtime");
     const char *dataset_source =
         ".analisis ventas {\n"
@@ -89,6 +89,7 @@ int main(void) {
         "  salida binaria \"compro\"\n"
         "  .limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") }\n"
         "  .transformar dataset { #total(\"precio * cantidad\") #periodo(\"mes de fecha\") }\n"
+        "  .ventas_validas { dataset, (filtrar) #condicion(\"total > 0\") }\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);

@@ -685,15 +685,43 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     }
                 }
             } else {
-                // Otros bloques
+                /* Los bloques nombrados de análisis conservan la condición
+                 * en el AST; no se ejecutan mediante clasificación textual. */
                 if (parser_is_identifier(parser)) {
                     parser_advance(parser);
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
-                        while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
-                            parser_advance(parser);
+                        ASTNode *filtrar = ast_create(AST_BLOQUE_FILTRAR);
+                        while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                               !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                            if (parser_match(parser, TOKEN_KW_DATASET) ||
+                                parser_match(parser, TOKEN_COMA)) {
+                                parser_advance(parser);
+                            } else if (parser_match(parser, TOKEN_PAR_IZQ)) {
+                                parser_advance(parser);
+                                if (parser_match(parser, TOKEN_KW_FILTRAR)) parser_advance(parser);
+                                parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de filtrar");
+                            } else if (parser_match(parser, TOKEN_NUMERAL)) {
+                                parser_advance(parser);
+                                if (parser_match(parser, TOKEN_KW_CONDICION)) {
+                                    parser_advance(parser);
+                                    if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                        if (parser_expect(parser, TOKEN_CADENA, "Se esperaba condición")) {
+                                            ASTNode *condition = ast_create_leaf(
+                                                AST_COMANDO_CONDICION,
+                                                parser->previous.lexeme);
+                                            if (condition && filtrar) ast_add_child(filtrar, condition);
+                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de condición");
+                                        }
+                                    }
+                                }
+                            } else {
+                                parser_advance(parser);
+                            }
                         }
                         parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                        if (filtrar && filtrar->child_count > 0) ast_add_child(node, filtrar);
+                        else ast_destroy(filtrar);
                     }
                 }
             }

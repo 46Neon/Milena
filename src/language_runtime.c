@@ -663,6 +663,25 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     }
                     if (status != MILENA_OK) break;
                 }
+            } else if (block->type == AST_BLOQUE_FILTRAR) {
+                const ASTNode *condition = block->child_count > 0 ? block->children[0] : NULL;
+                char column[128] = {0}, operator_text[3] = {0};
+                double threshold = 0.0;
+                if (!condition || !condition->value ||
+                    sscanf(condition->value, " %127s %2s %lf", column,
+                           operator_text, &threshold) != 3) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La condición debe tener la forma columna operador número");
+                    status = MILENA_ERR_PARSE;
+                } else {
+                    MilenaTable filtered;
+                    milena_table_init(&filtered);
+                    status = milena_table_filter_numeric(&filtered, &canonical_table,
+                                                         column, operator_text,
+                                                         threshold, error);
+                    if (status == MILENA_OK) milena_table_swap(&canonical_table, &filtered);
+                    milena_table_destroy(&filtered);
+                }
             }
             if (status != MILENA_OK) break;
         }
