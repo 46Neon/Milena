@@ -7,29 +7,23 @@ Este archivo concentra el estado y las condiciones de uso de la identidad visual
 - Banner: [`assets/milena-banner.png`](assets/milena-banner.png).
 - Logotipo: [`assets/milena-logo.jpg`](assets/milena-logo.jpg).
 
-Ambos archivos son recursos provisionales. No se presentan como recursos definitivos ni se les atribuye una autoría porque el repositorio todavía no documenta su procedencia ni cadena de permisos.
+Ambos archivos son recursos provisionales. No se presentan como una identidad definitiva ni se les atribuye una autoría que no esté documentada.
 
 ## Estado de derechos y licencia
 
 La licencia MIT de [`LICENSE`](LICENSE) se aplica al código fuente del proyecto. No debe interpretarse como una licencia automática sobre el nombre, el banner o el logotipo.
 
-En este momento no consta en el repositorio:
+El responsable del repositorio confirmó el 19 de septiembre de 2026 que el banner y el logotipo incluidos pueden redistribuirse junto con el proyecto Milena. Esta autorización permite conservar y distribuir los archivos tal como aparecen en el repositorio.
 
-- quién creó cada recurso;
-- de qué fuente se obtuvo;
-- quién posee sus derechos;
-- qué licencia o autorización permite usarlo, modificarlo y redistribuirlo.
+La confirmación de redistribución no atribuye autoría, no transfiere titularidad y no concede por sí sola permiso para modificar los recursos o sublicenciarlos bajo MIT. El repositorio debe conservar esta separación entre la licencia del código y las condiciones de los recursos visuales.
 
-La inclusión de los archivos no acredita autoría ni permiso de terceros. Hasta resolver y registrar esos datos, los recursos visuales no deben redistribuirse. Esta nota no sustituye la licencia o autorización que falte.
+## Uso responsable
 
-## Requisitos antes de redistribuir
+Al redistribuir el proyecto:
 
-Para cada recurso se debe documentar, como mínimo:
+1. se debe conservar esta nota y la referencia al proyecto Milena;
+2. no se debe atribuir una autoría que no esté documentada;
+3. no se debe presentar una versión modificada como distribución oficial del proyecto;
+4. cualquier modificación o sublicenciamiento del banner o el logotipo requiere autorización adicional del titular correspondiente.
 
-1. autoría y fuente verificables;
-2. titularidad de derechos, cuando corresponda;
-3. licencia aplicable o autorización escrita;
-4. alcance del permiso para uso, modificación y redistribución;
-5. atribución y demás condiciones exigidas.
-
-Si no puede demostrarse un permiso compatible con la distribución del repositorio, el recurso debe sustituirse o retirarse antes de fusionar esta propuesta.
+Si en el futuro se adopta una identidad definitiva, deberá documentarse su autoría, fuente, titularidad, licencia aplicable y requisitos de atribución.
