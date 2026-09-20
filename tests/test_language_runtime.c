@@ -107,6 +107,7 @@ int main(void) {
         "  #wilcoxon(\"total_suma,total_suma\")\n"
         "  #chi_cuadrado(\"ciudad,region\")\n"
         "  #riesgo(\"ciudad,region\")\n"
+        "  #modelo_sst(\"ciudad,total_suma,region\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -220,6 +221,15 @@ int main(void) {
     CHECK(strstr(risk_text, "riesgo_relativo") != NULL &&
           strstr(risk_text, "odds_ratio") != NULL,
           "Riesgo SST no usó la tabla canónica");
+    FILE *model_json = fopen("test-language-runtime.json.modelo_sst.json", "rb");
+    CHECK(model_json != NULL, "Modelo SST canónico no creó su reporte");
+    char model_text[2048];
+    size_t model_size = fread(model_text, 1, sizeof(model_text) - 1, model_json);
+    model_text[model_size] = '\0';
+    fclose(model_json);
+    CHECK(strstr(model_text, "modelo_sst") != NULL &&
+          strstr(model_text, "MilenaTable") != NULL,
+          "Modelo SST no usó la tabla canónica");
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -259,6 +269,7 @@ int main(void) {
     remove("test-language-runtime.json.wilcoxon.json");
     remove("test-language-runtime.json.chi_cuadrado.json");
     remove("test-language-runtime.json.riesgo.json");
+    remove("test-language-runtime.json.modelo_sst.json");
 
     puts("language runtime: parser + AST + arrays + datasets OK");
     return 0;

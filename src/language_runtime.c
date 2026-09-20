@@ -12,6 +12,7 @@
 #include "sst_inference.h"
 #include "sst_correlation.h"
 #include "sst_contingency.h"
+#include "sst_model.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -1094,6 +1095,81 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_model(const MilenaTable *table,
+                                                 const char *specification,
+                                                 const char *output_path,
+                                                 MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *area_name = strtok(spec, ",");
+    char *severity_name = strtok(NULL, ",");
+    char *cargo_name = strtok(NULL, ",");
+    if (!area_name || !severity_name || !cargo_name) {
+        runtime_error(error, MILENA_ERR_PARSE, "modelo_sst requiere area,severidad,cargo");
+        return MILENA_ERR_PARSE;
+    }
+    int area_column = milena_table_column_index(table, area_name);
+    int severity_column = milena_table_column_index(table, severity_name);
+    int cargo_column = milena_table_column_index(table, cargo_name);
+    const MilenaTableColumn *severity_data = severity_column < 0 ? NULL : milena_table_column(table, (size_t)severity_column);
+    if (area_column < 0 || cargo_column < 0 || !severity_data ||
+        severity_data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "modelo_sst requiere area, severidad numérica y cargo");
+        return MILENA_ERR_TYPE;
+    }
+    SstEventList events;
+    sst_event_list_init(&events);
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)area_column, row) ||
+            milena_table_is_null(table, (size_t)severity_column, row) ||
+            milena_table_is_null(table, (size_t)cargo_column, row)) continue;
+        const char *area = NULL, *cargo = NULL;
+        const MilenaTableColumn *area_data = milena_table_column(table, (size_t)area_column);
+        const MilenaTableColumn *cargo_data = milena_table_column(table, (size_t)cargo_column);
+        if (area_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)area_column, row, &code, &area, error) != MILENA_OK) break;
+        } else if (area_data->type == MILENA_COLUMN_STRING) {
+            if (milena_table_get_string(table, (size_t)area_column, row, &area, error) != MILENA_OK) break;
+        } else break;
+        if (cargo_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)cargo_column, row, &code, &cargo, error) != MILENA_OK) break;
+        } else if (cargo_data->type == MILENA_COLUMN_STRING) {
+            if (milena_table_get_string(table, (size_t)cargo_column, row, &cargo, error) != MILENA_OK) break;
+        } else break;
+        const void *value = NULL;
+        if (milena_table_get_array_value(table, (size_t)severity_column, row, &value, error) != MILENA_OK) break;
+        SstEvent event;
+        sst_event_init(&event);
+        event.area = milena_strdup(area);
+        event.cargo = milena_strdup(cargo);
+        event.severidad = severity_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)value :
+                          severity_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)value :
+                          severity_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)value :
+                          (double)*(const uint64_t *)value;
+        event.has_severidad = true;
+        MilenaStatus append_status = sst_event_list_append(&events, &event, error);
+        sst_event_destroy(&event);
+        if (append_status != MILENA_OK) { sst_event_list_destroy(&events); return append_status; }
+    }
+    char path[2048];
+    int written = snprintf(path, sizeof(path), "%s.modelo_sst.json", output_path);
+    MilenaStatus status = MILENA_OK;
+    if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+    else {
+        FILE *out = fopen(path, "wb");
+        if (!out) status = MILENA_ERR_IO;
+        else {
+            fprintf(out, "{\"operacion\":\"modelo_sst\",\"eventos\":%zu,\"fuente\":\"MilenaTable\"}\n", events.count);
+            if (fclose(out) != 0) status = MILENA_ERR_IO;
+        }
+    }
+    sst_event_list_destroy(&events);
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1601,6 +1677,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (strcmp(node->type_name, "riesgo") == 0) {
                 status = runtime_write_sst_risk(&canonical_table, node->value,
                                                 output_path, error);
+            } else if (strcmp(node->type_name, "modelo_sst") == 0) {
+                status = runtime_write_sst_model(&canonical_table, node->value,
+                                                 output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;
