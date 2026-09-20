@@ -2238,3 +2238,114 @@ MilenaStatus milena_table_from_dataset(MilenaTable *out,
     memset(&temporary, 0, sizeof(temporary));
     return MILENA_OK;
 }
+
+
+static MilenaStatus table_dataset_cell_text(const MilenaTable *table,
+                                            size_t column, size_t row,
+                                            char *buffer, size_t buffer_size,
+                                            const char **text,
+                                            MilenaError *error) {
+    if (milena_table_is_null(table, column, row)) {
+        *text = "";
+        return MILENA_OK;
+    }
+    const MilenaTableColumn *column_data = milena_table_column(table, column);
+    if (!column_data) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Columna de tabla inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (column_data->type == MILENA_COLUMN_STRING) {
+        return milena_table_get_string(table, column, row, text, error);
+    }
+    if (column_data->type == MILENA_COLUMN_CATEGORICAL) {
+        const char *label = NULL;
+        uint32_t code = 0;
+        MilenaStatus status = milena_table_get_category(table, column, row, &code,
+                                                        &label, error);
+        if (status == MILENA_OK) *text = label ? label : "";
+        return status;
+    }
+    const void *value = NULL;
+    MilenaStatus status = milena_table_get_array_value(table, column, row,
+                                                       &value, error);
+    if (status != MILENA_OK) return status;
+    int written = 0;
+    switch (column_data->values.dtype) {
+        case MILENA_DTYPE_BOOL:
+            written = snprintf(buffer, buffer_size, "%s",
+                               *(const bool *)value ? "verdadero" : "falso");
+            break;
+        case MILENA_DTYPE_INT8: written = snprintf(buffer, buffer_size, "%d", (int)*(const int8_t *)value); break;
+        case MILENA_DTYPE_INT16: written = snprintf(buffer, buffer_size, "%d", (int)*(const int16_t *)value); break;
+        case MILENA_DTYPE_INT32: written = snprintf(buffer, buffer_size, "%d", *(const int32_t *)value); break;
+        case MILENA_DTYPE_INT64: written = snprintf(buffer, buffer_size, "%lld", (long long)*(const int64_t *)value); break;
+        case MILENA_DTYPE_UINT8: written = snprintf(buffer, buffer_size, "%u", (unsigned)*(const uint8_t *)value); break;
+        case MILENA_DTYPE_UINT16: written = snprintf(buffer, buffer_size, "%u", (unsigned)*(const uint16_t *)value); break;
+        case MILENA_DTYPE_UINT32: written = snprintf(buffer, buffer_size, "%u", *(const uint32_t *)value); break;
+        case MILENA_DTYPE_UINT64: written = snprintf(buffer, buffer_size, "%llu", (unsigned long long)*(const uint64_t *)value); break;
+        case MILENA_DTYPE_FLOAT32: written = snprintf(buffer, buffer_size, "%.9g", (double)*(const float *)value); break;
+        case MILENA_DTYPE_FLOAT64: written = snprintf(buffer, buffer_size, "%.17g", *(const double *)value); break;
+        default:
+            table_error(error, MILENA_ERR_UNSUPPORTED, "Tipo numérico no convertible a dataset");
+            return MILENA_ERR_UNSUPPORTED;
+    }
+    if (written < 0 || (size_t)written >= buffer_size) {
+        table_error(error, MILENA_ERR_OVERFLOW, "Valor de tabla demasiado largo");
+        return MILENA_ERR_OVERFLOW;
+    }
+    *text = buffer;
+    return MILENA_OK;
+}
+
+MilenaStatus milena_dataset_from_table(Dataset *out,
+                                        const MilenaTable *table,
+                                        MilenaError *error) {
+    if (!out || !table) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Tabla de conversión inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(table, error);
+    if (status != MILENA_OK) return status;
+    dataset_init(out);
+    out->column_count = table->column_count;
+    out->row_count = table->row_count;
+    out->row_capacity = table->row_count;
+    if (out->column_count > 0) {
+        out->headers = (char **)calloc(out->column_count, sizeof(*out->headers));
+        if (!out->headers) status = MILENA_ERR_MEMORY;
+    }
+    if (status == MILENA_OK && out->row_count > 0) {
+        out->rows = (char ***)calloc(out->row_count, sizeof(*out->rows));
+        if (!out->rows) status = MILENA_ERR_MEMORY;
+    }
+    for (size_t column = 0; status == MILENA_OK && column < out->column_count; column++) {
+        const MilenaTableColumn *column_data = milena_table_column(table, column);
+        out->headers[column] = milena_strdup(column_data->name);
+        if (!out->headers[column]) status = MILENA_ERR_MEMORY;
+    }
+    for (size_t row = 0; status == MILENA_OK && row < out->row_count; row++) {
+        out->rows[row] = (char **)calloc(out->column_count, sizeof(**out->rows));
+        if (!out->rows[row]) {
+            status = MILENA_ERR_MEMORY;
+            break;
+        }
+        for (size_t column = 0; column < out->column_count; column++) {
+            char buffer[128];
+            const char *text = NULL;
+            status = table_dataset_cell_text(table, column, row, buffer,
+                                             sizeof(buffer), &text, error);
+            if (status != MILENA_OK) break;
+            out->rows[row][column] = milena_strdup(text ? text : "");
+            if (!out->rows[row][column]) {
+                status = MILENA_ERR_MEMORY;
+                break;
+            }
+        }
+    }
+    if (status != MILENA_OK) {
+        dataset_destroy(out);
+        table_error(error, status, "No se pudo reconstruir el dataset desde la tabla");
+        return status;
+    }
+    return MILENA_OK;
+}

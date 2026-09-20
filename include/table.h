@@ -98,6 +98,10 @@ MilenaStatus milena_table_from_dataset(MilenaTable *out,
                                         const Dataset *dataset,
                                         const MilenaSchema *schema,
                                         MilenaError *error);
+/* Reconstruye el Dataset de compatibilidad desde la tabla canónica. */
+MilenaStatus milena_dataset_from_table(Dataset *out,
+                                        const MilenaTable *table,
+                                        MilenaError *error);
 
 /* Legacy numeric/bool/complex column copy. Strided arrays are materialized. */
 MilenaStatus milena_table_add_column_copy(MilenaTable *table,

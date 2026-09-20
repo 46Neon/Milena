@@ -614,9 +614,19 @@ MilenaStatus milena_run_dataset_program(const char *source,
         status = milena_table_from_dataset(&canonical_table, &runtime.dataset,
                                            &schema, error);
     }
+    Dataset canonical_dataset;
+    dataset_init(&canonical_dataset);
     if (status == MILENA_OK) {
-        status = analysis_dataset_report(&runtime.dataset, &schema, output_path, error);
+        /* El reporte consume el valor reconstruido desde la tabla, no la
+         * representación CSV heredada que se usó para cargar. */
+        status = milena_dataset_from_table(&canonical_dataset,
+                                           &canonical_table, error);
     }
+    if (status == MILENA_OK) {
+        status = analysis_dataset_report(&canonical_dataset, &schema,
+                                         output_path, error);
+    }
+    dataset_destroy(&canonical_dataset);
     milena_table_destroy(&canonical_table);
     if (status == MILENA_OK) {
         FILE *stream = output ? output : stdout;
