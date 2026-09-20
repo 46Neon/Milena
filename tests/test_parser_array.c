@@ -3,7 +3,7 @@
 #include <string.h>
 
 int main(void) {
-    const char *source = ".analisis demo { array valores = [1, 2.5, 3]; }";
+    const char *source = "mediana(valores); percentil(valores, 90);";
     Lexer lexer;
     Parser parser;
     lexer_init(&lexer, source);
@@ -11,20 +11,14 @@ int main(void) {
     ASTNode *program = parser_parse(&parser);
     assert(program);
     assert(!parser.has_error);
-    assert(program->child_count == 1);
-    ASTNode *analysis = program->children[0];
-    assert(analysis->type == AST_BLOQUE_ANALISIS);
-    assert(analysis->child_count == 1);
-    ASTNode *declaration = analysis->children[0];
-    assert(declaration->type == AST_DECLARACION_ARRAY);
-    assert(strcmp(declaration->value, "valores") == 0);
-    assert(declaration->child_count == 1);
-    ASTNode *array = declaration->children[0];
-    assert(array->type == AST_EXPRESION_ARRAY);
-    assert(array->child_count == 3);
-    assert(array->children[0]->number_value == 1.0);
-    assert(array->children[1]->number_value == 2.5);
-    assert(array->children[2]->number_value == 3.0);
+    assert(program->child_count == 2);
+    assert(program->children[0]->type == AST_OPERACION_ESTADISTICA);
+    assert(program->children[0]->statistical_operation == AST_ESTADISTICA_MEDIANA);
+    assert(program->children[1]->type == AST_OPERACION_ESTADISTICA);
+    assert(program->children[1]->statistical_operation == AST_ESTADISTICA_PERCENTIL);
+    assert(program->children[0]->children[0]->type == AST_EXPRESION_IDENTIFICADOR);
+    assert(strcmp(program->children[0]->children[0]->value, "valores") == 0);
+    assert(program->children[1]->percentile == 90.0);
     ast_destroy(program);
     return 0;
 }

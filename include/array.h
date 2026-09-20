@@ -130,6 +130,7 @@ MilenaStatus milena_array_subtract(MilenaArray *out, const MilenaArray *left,
                                    const MilenaArray *right, MilenaError *error);
 MilenaStatus milena_array_multiply(MilenaArray *out, const MilenaArray *left,
                                    const MilenaArray *right, MilenaError *error);
+/* True division: two integer/bool operands produce a float64 result. */
 MilenaStatus milena_array_divide(MilenaArray *out, const MilenaArray *left,
                                  const MilenaArray *right, MilenaError *error);
 MilenaStatus milena_array_equal(MilenaArray *out, const MilenaArray *left,

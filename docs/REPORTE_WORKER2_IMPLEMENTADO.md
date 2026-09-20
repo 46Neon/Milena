@@ -2,7 +2,9 @@
 
 Fecha de verificación: 2026-09-17 (America/Caracas)
 
-Base indicada para este árbol limpio: GitHub `main` SHA `9614988738bc034e2360aaffc115aad07587277e`.
+Base original de la implementación: GitHub `main` SHA `9614988738bc034e2360aaffc115aad07587277e`.
+
+La rama del PR se reconstruyó posteriormente sobre `main` SHA `84742984eb5b77b45bfd447dd6016961e42c37e6` para conservar una historia firmada y actualizada.
 
 > El entorno no tenía `git`, por lo que el SHA no pudo consultarse localmente; se trabajó exclusivamente en `milena_repo`, tal como fue solicitado, y no en `Milena_repo`.
 
@@ -19,7 +21,9 @@ Archivos creados:
 - `docs/REPORTE_WORKER2_IMPLEMENTADO.md`
 - `tests/test_array_worker2.c`
 
-No se modificaron `common.*`, `main.c`, `Makefile`, `build.sh`, workflows, packaging, `script.c` ni kernels de otros dominios. No se dividió `array.c`.
+No se modificaron `common.*`, `main.c`, `build.sh`, workflows, packaging, `script.c` ni kernels de otros dominios. No se dividió `array.c`.
+
+El `Makefile` se actualizó durante la integración para añadir `test-array-worker2` al gate general `make test` y a `make clean`.
 
 ## 2. APIs públicas añadidas
 

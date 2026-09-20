@@ -63,7 +63,7 @@ La implementación evita conversiones C fuera de rango. La salida se construye e
 
 `add`, `subtract`, `multiply` y `divide` comparten:
 
-- la misma promoción;
+- la matriz central de promoción como punto de partida;
 - el mismo dispatcher central `DTypeKernel`;
 - el mismo recorrido broadcast lógico;
 - los mismos helpers checked signed/unsigned;
@@ -71,7 +71,11 @@ La implementación evita conversiones C fuera de rango. La salida se construye e
 
 Los enteros usan aritmética comprobada. No hay wraparound como semántica pública. Underflow unsigned, overflow signed/unsigned o un resultado que no cabe en el dtype promovido producen `MILENA_ERR_OVERFLOW`.
 
-La división entera trunca hacia cero. División por `+0`, `-0.0` o cero entero devuelve `MILENA_ERR_ARGUMENT`, también para float. Operaciones float conservan la propagación IEEE de NaN/Inf; si operandos finitos producen un resultado no finito o fuera del dtype de salida, se devuelve `MILENA_ERR_OVERFLOW`.
+`milena_array_divide` implementa **división real**: cuando ambos operandos son enteros o `bool`, el dtype de salida es `float64` y no hay truncamiento (`-7 / 2 == -3.5`). Esto alinea array/array con la ruta array/escalar del lenguaje. No se expone división entera truncada y el operador `/` tiene una sola semántica. División por `+0`, `-0.0` o cero entero devuelve `MILENA_ERR_ARGUMENT`. Operaciones float conservan la propagación IEEE de NaN/Inf; si operandos finitos producen un resultado no finito o fuera del dtype de salida, se devuelve `MILENA_ERR_OVERFLOW`.
+
+Los kernels de resultado `float32` y `float64` convierten primero ambos operandos a ese dtype y ejecutan allí la operación. No usan la precisión incidental de `long double`, por lo que los límites `2^53`, `INT64_MAX`, `2^63` y `UINT64_MAX` tienen la misma semántica en Linux y Windows. Las comparaciones entre dos dominios enteros son exactas (incluida la mezcla signed/unsigned) antes de producir `bool`; una promoción nominal a `float64` no colapsa enteros distintos.
+
+El overflow de aritmética entera conserva el código `MILENA_ERR_OVERFLOW` y usa el diagnóstico estable `La operación entera está fuera de rango`. La frase `fuera de rango` forma parte del contrato de compatibilidad del diagnóstico E2E.
 
 ## 5. Broadcasting y strides
 
@@ -102,8 +106,8 @@ Las salidas numéricas siempre son buffers nuevos C-contiguos y escribibles. Nun
 ### Acumulación
 
 - `sum` y `prod` enteros usan acumuladores `int64`/`uint64` comprobados; overflow devuelve `MILENA_ERR_OVERFLOW`.
-- `sum` y `mean` flotantes usan suma compensada de Neumaier en `long double`, seguida de conversión comprobada a `float64`.
-- `variance` usa Welford, política poblacional **ddof=0**. `std = sqrt(variance)`.
+- `sum` flotante conserva acumulación compensada; `mean` usa una suma compensada escalada en `float64`, evitando overflow intermedio incluso cuando `long double == double`.
+- `variance` usa Welford sobre valores escalados, política poblacional **ddof=0**. `std = sqrt(variance)`. Si inputs finitos producen un resultado no representable se devuelve `MILENA_ERR_OVERFLOW`; NaN/Inf de entrada se propagan separadamente y no se confunden con overflow de cálculo.
 - `min` y `max` propagan NaN.
 - NaN e Inf siguen propagación IEEE en sum/mean/variance/std. Una mezcla indeterminada como `+Inf + -Inf` produce NaN.
 - `argmin`/`argmax` devuelven la primera posición C-order en empates y rechazan cualquier NaN con `MILENA_ERR_ARGUMENT`.
@@ -129,7 +133,7 @@ El percentil debe ser finito y estar en `[0, 100]`. Se materializa cada segmento
 
 `position = q/100 × (n-1)`
 
-El resultado interpola entre `floor(position)` y el siguiente índice. `q=0` y `q=100` seleccionan los extremos. La presencia de cualquier NaN en el segmento propaga NaN. Inf participa con semántica IEEE durante la interpolación. Un segmento vacío es error.
+El resultado interpola entre `floor(position)` y el siguiente índice. `q=0` y `q=100` seleccionan los extremos. Para extremos finitos de signo opuesto se usa una combinación convexa que no evalúa `upper-lower`, evitando overflow en `[-DBL_MAX, DBL_MAX]`; para extremos del mismo signo se usa la diferencia segura. La presencia de cualquier NaN propaga NaN. Entre un finito y un infinito interior se devuelve ese infinito; entre `-Inf` y `+Inf` se devuelve NaN. Un segmento vacío es error.
 
 ## 8. APIs nuevas
 

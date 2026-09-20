@@ -1,0 +1,8 @@
+arreglo valores = [1, 2, 3, 4];
+
+forma(valores);
+tamaño(valores);
+suma(valores);
+media(valores);
+mediana(valores);
+percentil(valores, 90);

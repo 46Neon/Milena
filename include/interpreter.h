@@ -12,10 +12,13 @@ typedef struct Interpreter {
     Dataset *dataset;
     bool has_error;
     MilenaErrorInfo error;
+    void *runtime;
 } Interpreter;
 
 bool interpreter_init(Interpreter *interpreter, ASTNode *ast);
 bool interpreter_run(Interpreter *interpreter);
+/* Read a numeric global after execution; useful for embedding and smoke tests. */
+bool interpreter_get_number(const Interpreter *interpreter, const char *name, double *value);
 void interpreter_destroy(Interpreter *interpreter);
 
 #endif

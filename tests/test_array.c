@@ -243,6 +243,52 @@ static void test_sum_by_axis(void) {
     milena_array_release(&array);
 }
 
+static void test_integer_true_division(void) {
+    const size_t shape[] = {2};
+    const int64_t dividends[] = {7, -7};
+    const int64_t divisors[] = {2, 2};
+    const double expected[] = {3.5, -3.5};
+    MilenaArray left = {0}, right = {0}, result = {0};
+    MilenaError error;
+    milena_error_clear(&error);
+
+    expect_ok(milena_array_from_i64(&left, 1, shape, dividends, &error),
+              &error);
+    expect_ok(milena_array_from_i64(&right, 1, shape, divisors, &error),
+              &error);
+    expect_ok(milena_array_divide(&result, &left, &right, &error), &error);
+    assert(result.dtype == MILENA_DTYPE_FLOAT64);
+    assert(memcmp(milena_array_const_data(&result), expected,
+                  sizeof(expected)) == 0);
+
+    milena_array_release(&result);
+    milena_array_release(&right);
+    milena_array_release(&left);
+}
+
+static void test_memory_ownership(void) {
+    const size_t shape[] = {4};
+    const int64_t values[] = {1, 2, 3, 4};
+    MilenaArray source = {0}, view = {0}, shared = {0};
+    MilenaArray result = {0}, empty = {0};
+    MilenaError error; milena_error_clear(&error);
+    expect_ok(milena_array_from_i64(&source, 1, shape, values, &error), &error);
+    expect_ok(milena_array_slice_view(&view, &source, 0, 1, 3, 1, &error), &error);
+    expect_ok(milena_array_share(&shared, &source, &error), &error);
+    milena_array_release(&source);
+    assert(source.storage == NULL);
+    assert(view.size == 2 && shared.size == 4);
+    assert(((const int64_t *)milena_array_const_data(&view))[0] == 2);
+    assert(((const int64_t *)milena_array_const_data(&shared))[3] == 4);
+    milena_array_release(&shared);
+    milena_array_release(&view);
+    milena_array_release(&view);
+    assert(view.storage == NULL);
+    assert(milena_array_median(&result, &empty, &error) != MILENA_OK);
+    milena_array_release(&result);
+    milena_array_release(&empty);
+}
+
 static void test_order_statistics_by_axis(void) {
     const size_t shape[] = {3, 3};
     const int64_t values[] = {1, 4, 7, 2, 5, 8, 3, 6, 9};
@@ -279,6 +325,8 @@ int main(void) {
     test_transpose_and_reshape_copy();
     test_boolean_masks_and_where();
     test_sum_by_axis();
+    test_memory_ownership();
+    test_integer_true_division();
     test_order_statistics_by_axis();
     puts("OK: MilenaArray creation, views, broadcasting and reductions");
     return 0;

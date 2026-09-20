@@ -23,7 +23,14 @@ typedef enum {
     AST_EXPRESION_IDENTIFICADOR,
     AST_EXPRESION_FUNCION,
     AST_EXPRESION_ARRAY,
+    AST_EXPRESION_LLAMADA,
+    AST_BLOQUE_FUNCION,
+    AST_COMANDO_RETORNAR,
+    AST_CONDICION_SI,
+    AST_DECLARACION_FUNCION,
     AST_DECLARACION_ARRAY,
+    AST_DECLARACION_VARIABLE,
+    AST_ASIGNACION_VARIABLE,
     AST_COMANDO_NULOS,
     AST_COMANDO_DUPLICADOS,
     AST_COMANDO_CONDICION,
@@ -31,13 +38,32 @@ typedef enum {
     AST_COMANDO_TOTAL,
     AST_COMANDO_PERIODO,
     AST_AGRUPACION_POR,
-    AST_RESUMEN_METRICA
+    AST_RESUMEN_METRICA,
+    AST_OPERACION_ESTADISTICA,
+    AST_NODE_TYPE_COUNT
 } ASTNodeType;
+
+typedef enum {
+    AST_ESTADISTICA_NINGUNA,
+    AST_ESTADISTICA_SUMA,
+    AST_ESTADISTICA_MEDIA,
+    AST_ESTADISTICA_MINIMO,
+    AST_ESTADISTICA_MAXIMO,
+    AST_ESTADISTICA_VARIANZA,
+    AST_ESTADISTICA_DESVIACION,
+    AST_ESTADISTICA_MEDIANA,
+    AST_ESTADISTICA_PERCENTIL,
+    AST_STAT_OPERATION_COUNT
+} ASTStatOperation;
 
 typedef struct ASTNode {
     ASTNodeType type;
+    ASTStatOperation statistical_operation;
     char *value;
     double number_value;
+    double percentile;
+    int axis;
+    bool keepdims;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;
@@ -49,9 +75,12 @@ typedef struct ASTNode {
 ASTNode* ast_create(ASTNodeType type);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
-void ast_add_child(ASTNode *parent, ASTNode *child);
+ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,
+                              int axis, bool keepdims, double percentile);
+bool ast_add_child(ASTNode *parent, ASTNode *child);
 void ast_print(ASTNode *node, int depth);
 void ast_destroy(ASTNode *node);
 const char* ast_type_name(ASTNodeType type);
+const char *ast_stat_operation_name(ASTStatOperation operation);
 
 #endif

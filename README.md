@@ -1,4 +1,12 @@
+<p align="center">
+  <img src="milena-cover.jpg" alt="Milena — lenguaje para análisis de datos" width="100%">
+</p>
+
 # 🌿 Milena
+
+![Banner provisional de Milena](assets/milena-banner.png)
+
+Lenguaje de programación en español para análisis de datos, estadística y computación científica.
 
 ## Análisis de datos intuitivo y nativo en español
 
@@ -38,7 +46,7 @@ mediana(matriz, eje 1, conservar dimensiones);
 ```
 
 > [!TIP]
-> Los ejemplos nuevos deben usar las palabras españolas. Durante la transición pueden existir nombres históricos compatibles, pero la sintaxis española es la dirección oficial del lenguaje.
+> Los ejemplos nuevos deben usar las palabras españolas. Durante la transición pueden existir nombres históricos compatibles, pero la sintaxis española es la dirección prevista del lenguaje.
 
 ## ¿Qué puede hacer Milena?
 
@@ -67,7 +75,7 @@ cd Milena
 Ejecutar un script:
 
 ```bash
-./milena run ejemplos/estadistica.milena
+./milena run examples/estadistica.milena
 ```
 
 Analizar un archivo tabular:
@@ -192,6 +200,6 @@ Al reportar un problema, incluye cuando sea posible:
 
 Las contribuciones deben mantener la portabilidad, los errores explícitos, las pruebas automatizadas y la claridad de la sintaxis.
 
-## 📄 Licencia
+## 📄 Licencia e identidad visual
 
-Milena se distribuye bajo la licencia MIT.
+El código fuente de Milena se distribuye bajo la licencia MIT. Los recursos visuales son provisionales: su procedencia y licencia deben documentarse antes de redistribuirlos. Consulta [BRAND.md](BRAND.md) para conocer su estado y los requisitos de uso.
