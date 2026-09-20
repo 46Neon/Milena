@@ -7,8 +7,8 @@ int main(void) {
         ". analisis ventas {\n"
         "  variable base = 10;\n"
         "  variable incremento = base + 5;\n"
-        "  variable resultado = incremento - base;\n"
-        "  resultado = resultado + 2;\n"
+        "  variable total = incremento - base;\n"
+        "  total = total + 2;\n"
         "}\n";
     Lexer lexer;
     Parser parser;
@@ -35,17 +35,17 @@ int main(void) {
     assert(incremento->children[0]->children[0]->type == AST_EXPRESION_IDENTIFICADOR);
     assert(strcmp(incremento->children[0]->children[0]->value, "base") == 0);
 
-    ASTNode *resultado = analysis->children[2];
-    assert(resultado->children[0]->type == AST_EXPRESION_OPERACION);
-    assert(strcmp(resultado->children[0]->value, "-") == 0);
-    assert(strcmp(resultado->children[0]->children[0]->value, "incremento") == 0);
+    ASTNode *total = analysis->children[2];
+    assert(total->children[0]->type == AST_EXPRESION_OPERACION);
+    assert(strcmp(total->children[0]->value, "-") == 0);
+    assert(strcmp(total->children[0]->children[0]->value, "incremento") == 0);
 
     ASTNode *assignment = analysis->children[3];
     assert(assignment->type == AST_ASIGNACION_VARIABLE);
-    assert(strcmp(assignment->value, "resultado") == 0);
+    assert(strcmp(assignment->value, "total") == 0);
     assert(assignment->children[0]->type == AST_EXPRESION_OPERACION);
     assert(strcmp(assignment->children[0]->value, "+") == 0);
-    assert(strcmp(assignment->children[0]->children[0]->value, "resultado") == 0);
+    assert(strcmp(assignment->children[0]->children[0]->value, "total") == 0);
     assert(assignment->children[0]->children[1]->number_value == 2.0);
 
     ast_destroy(program);
