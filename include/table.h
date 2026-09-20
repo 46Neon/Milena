@@ -2,6 +2,8 @@
 #define MILENA_TABLE_H
 
 #include "array.h"
+#include "dataset.h"
+#include "schema.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -90,6 +92,12 @@ MilenaStatus milena_table_validate(const MilenaTable *table,
                                    MilenaError *error);
 MilenaStatus milena_table_clone(MilenaTable *out, const MilenaTable *source,
                                 MilenaError *error);
+
+/* Materializa el Dataset heredado en la tabla tipada canónica. */
+MilenaStatus milena_table_from_dataset(MilenaTable *out,
+                                        const Dataset *dataset,
+                                        const MilenaSchema *schema,
+                                        MilenaError *error);
 
 /* Legacy numeric/bool/complex column copy. Strided arrays are materialized. */
 MilenaStatus milena_table_add_column_copy(MilenaTable *table,

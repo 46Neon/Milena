@@ -4,6 +4,7 @@
 #include "dataset.h"
 #include "analysis.h"
 #include "schema.h"
+#include "table.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -605,9 +606,18 @@ MilenaStatus milena_run_dataset_program(const char *source,
             }
         }
     }
+    MilenaTable canonical_table;
+    milena_table_init(&canonical_table);
+    if (status == MILENA_OK) {
+        /* El Dataset deja de ser el valor final: se valida y materializa en
+         * la tabla tipada común antes de producir el reporte. */
+        status = milena_table_from_dataset(&canonical_table, &runtime.dataset,
+                                           &schema, error);
+    }
     if (status == MILENA_OK) {
         status = analysis_dataset_report(&runtime.dataset, &schema, output_path, error);
     }
+    milena_table_destroy(&canonical_table);
     if (status == MILENA_OK) {
         FILE *stream = output ? output : stdout;
         fprintf(stream, "Programa canónico ejecutado: %s\n", script_filename ? script_filename : "<memoria>");
