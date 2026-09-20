@@ -106,7 +106,7 @@ int main(void) {
         "  #correlacion(\"total_suma,total_suma\")\n"
         "  #wilcoxon(\"total_suma,total_suma\")\n"
         "  #chi_cuadrado(\"ciudad,region\")\n"
-        "  #riesgo(\"ciudad,region\")\n"
+        "  #riesgo(\"ciudad,region,Caracas,Centro\")\n"
         "  #modelo_sst(\"ciudad,total_suma,region\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";

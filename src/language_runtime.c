@@ -1038,8 +1038,11 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
     spec[sizeof(spec) - 1] = '\0';
     char *exposure_name = strtok(spec, ",");
     char *event_name = strtok(NULL, ",");
-    if (!exposure_name || !event_name) {
-        runtime_error(error, MILENA_ERR_PARSE, "Riesgo requiere dos columnas categóricas");
+    char *exposure_positive = strtok(NULL, ",");
+    char *event_positive = strtok(NULL, ",");
+    if (!exposure_name || !event_name || !exposure_positive || !event_positive) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "Riesgo requiere columnas y categorías positivas explícitas");
         return MILENA_ERR_PARSE;
     }
     int exposure_column = milena_table_column_index(table, exposure_name);
@@ -1084,8 +1087,26 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
         runtime_error(error, MILENA_ERR_DATA, "Riesgo requiere dos categorías por columna");
         return MILENA_ERR_DATA;
     }
+    size_t exposure_positive_index = SIZE_MAX;
+    size_t event_positive_index = SIZE_MAX;
+    for (size_t i = 0; i < 2; i++) {
+        if (strcmp(exposure_labels[i], exposure_positive) == 0) exposure_positive_index = i;
+        if (strcmp(event_labels[i], event_positive) == 0) event_positive_index = i;
+    }
+    if (exposure_positive_index == SIZE_MAX || event_positive_index == SIZE_MAX) {
+        runtime_error(error, MILENA_ERR_DATA, "Las categorías positivas no existen en la tabla");
+        return MILENA_ERR_DATA;
+    }
+    size_t control_index = 1 - exposure_positive_index;
+    size_t non_event_index = 1 - event_positive_index;
+    size_t exposed_events = counts[exposure_positive_index * 2 + event_positive_index];
+    size_t exposed_non_events = counts[exposure_positive_index * 2 + non_event_index];
+    size_t control_events = counts[control_index * 2 + event_positive_index];
+    size_t control_non_events = counts[control_index * 2 + non_event_index];
     SstRiskMeasure result;
-    MilenaStatus status = sst_risk_ratio_odds_ratio(counts[0], counts[1], counts[2], counts[3], &result, error);
+    MilenaStatus status = sst_risk_ratio_odds_ratio(exposed_events, exposed_non_events,
+                                                     control_events, control_non_events,
+                                                     &result, error);
     if (status == MILENA_OK) {
         char path[2048];
         int written = snprintf(path, sizeof(path), "%s.riesgo.json", output_path);
@@ -1095,7 +1116,8 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
             if (!out) status = MILENA_ERR_IO;
             else {
                 fprintf(out, "{\"operacion\":\"riesgo\",\"eventos_expuestos\":%zu,\"no_eventos_expuestos\":%zu,\"eventos_control\":%zu,\"no_eventos_control\":%zu,\"riesgo_relativo\":%.10g,\"odds_ratio\":%.10g}\n",
-                        counts[0], counts[1], counts[2], counts[3], result.relative_risk, result.odds_ratio);
+                        exposed_events, exposed_non_events, control_events, control_non_events,
+                        result.relative_risk, result.odds_ratio);
                 if (fclose(out) != 0) status = MILENA_ERR_IO;
             }
         }

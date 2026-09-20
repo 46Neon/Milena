@@ -24,7 +24,7 @@
         #histograma("edad", bins = 5)
         #normalidad("edad")
         #balance("compro")
-        #correlacion("edad", "visitas")
+        #correlacion("edad,visitas")
     }
 
     .exportar {
