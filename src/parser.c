@@ -578,7 +578,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         strcmp(parser->current.lexeme, "tasa") == 0 ||
                         strcmp(parser->current.lexeme, "poisson") == 0 ||
                         strcmp(parser->current.lexeme, "correlacion") == 0 ||
-                        strcmp(parser->current.lexeme, "wilcoxon") == 0)) {
+                        strcmp(parser->current.lexeme, "wilcoxon") == 0 ||
+                        strcmp(parser->current.lexeme, "chi_cuadrado") == 0)) {
                 char command_name[MAX_TOKEN_LEN];
                 strncpy(command_name, parser->current.lexeme, sizeof(command_name) - 1);
                 command_name[sizeof(command_name) - 1] = '\0';

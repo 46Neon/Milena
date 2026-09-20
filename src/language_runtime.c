@@ -11,6 +11,7 @@
 #include "sst_rates.h"
 #include "sst_inference.h"
 #include "sst_correlation.h"
+#include "sst_contingency.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -946,6 +947,79 @@ static MilenaStatus runtime_write_sst_wilcoxon(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_chi_square(const MilenaTable *table,
+                                                      const char *specification,
+                                                      const char *output_path,
+                                                      MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *row_name = strtok(spec, ",");
+    char *column_name = strtok(NULL, ",");
+    if (!row_name || !column_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "Chi cuadrado requiere dos columnas categóricas");
+        return MILENA_ERR_PARSE;
+    }
+    int row_column = milena_table_column_index(table, row_name);
+    int value_column = milena_table_column_index(table, column_name);
+    if (row_column < 0 || value_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna inexistente para chi cuadrado SST");
+        return MILENA_ERR_DATA;
+    }
+    const char **rows = table->row_count ? (const char **)calloc(table->row_count, sizeof(*rows)) : NULL;
+    const char **columns = table->row_count ? (const char **)calloc(table->row_count, sizeof(*columns)) : NULL;
+    if (table->row_count && (!rows || !columns)) {
+        free(rows); free(columns);
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para contingencia SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)row_column, row) ||
+            milena_table_is_null(table, (size_t)value_column, row)) continue;
+        const char *row_label = NULL, *column_label = NULL;
+        const MilenaTableColumn *row_data = milena_table_column(table, (size_t)row_column);
+        const MilenaTableColumn *column_data = milena_table_column(table, (size_t)value_column);
+        if (row_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)row_column, row, &code, &row_label, error) != MILENA_OK) break;
+        } else if (row_data->type == MILENA_COLUMN_STRING) {
+            if (milena_table_get_string(table, (size_t)row_column, row, &row_label, error) != MILENA_OK) break;
+        } else break;
+        if (column_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)value_column, row, &code, &column_label, error) != MILENA_OK) break;
+        } else if (column_data->type == MILENA_COLUMN_STRING) {
+            if (milena_table_get_string(table, (size_t)value_column, row, &column_label, error) != MILENA_OK) break;
+        } else break;
+        rows[count] = row_label; columns[count] = column_label; count++;
+    }
+    SstContingency2D contingency;
+    sst_contingency_init(&contingency);
+    MilenaStatus status = sst_contingency_build(rows, columns, count, &contingency, error);
+    SstChiSquareResult result;
+    if (status == MILENA_OK) status = sst_contingency_chi_square(&contingency, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.chi_cuadrado.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"chi_cuadrado\",\"filas\":%zu,\"columnas\":%zu,\"estadistico\":%.10g,\"gl\":%zu,\"celdas_bajas\":%zu}\n",
+                        result.valid ? contingency.row_count : 0, result.valid ? contingency.column_count : 0,
+                        result.statistic, result.degrees_of_freedom, result.low_expected_cells);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    sst_contingency_destroy(&contingency);
+    free(rows); free(columns);
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1447,6 +1521,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (strcmp(node->type_name, "wilcoxon") == 0) {
                 status = runtime_write_sst_wilcoxon(&canonical_table, node->value,
                                                     output_path, error);
+            } else if (strcmp(node->type_name, "chi_cuadrado") == 0) {
+                status = runtime_write_sst_chi_square(&canonical_table, node->value,
+                                                      output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;
