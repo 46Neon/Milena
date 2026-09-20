@@ -11,7 +11,7 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
 OBJECTS = $(SOURCES:.c=.o)
 TARGET = milena
 
-.PHONY: all clean test test-sst test-array test-table test-finance test-language-array test-parser-array debug
+.PHONY: all clean test test-sst test-array test-forest test-table test-finance test-language-array test-parser-array test-parser-statistics debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -55,6 +55,12 @@ test-parser-array: tests/test_parser_array
 tests/test_parser_array: tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c
 	$(CC) $(CFLAGS) tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c $(LDFLAGS) -o $@
 
+test-parser-statistics: tests/test_parser_statistics
+	./tests/test_parser_statistics
+
+tests/test_parser_statistics: tests/test_parser_statistics.c src/parser.c src/lexer.c src/ast.c src/common.c
+	$(CC) $(CFLAGS) tests/test_parser_statistics.c src/parser.c src/lexer.c src/ast.c src/common.c $(LDFLAGS) -o $@
+
 SST_TEST_SOURCES = src/common.c src/sst_dates.c src/sst_model.c \
                    src/sst_stats.c src/sst_histogram.c src/sst_rates.c \
                    src/sst_report.c src/sst_report_advanced.c \
@@ -79,9 +85,11 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: $(TARGET) test-sst test-array test-forest test-table test-finance
+test: $(TARGET) test-sst test-array test-forest test-table test-finance \
+      test-language-array test-parser-array test-parser-statistics
 	./tests/run_tests.sh
 
 clean:
 	rm -f $(OBJECTS) $(TARGET) tests/test_sst_modules tests/test_array tests/test_forest tests/test_table \
-		tests/test_finance tests/test_language_array tests/test_parser_array reporte.json resultado.json
+		tests/test_finance tests/test_language_array tests/test_parser_array \
+		tests/test_parser_statistics reporte.json resultado.json

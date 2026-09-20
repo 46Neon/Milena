@@ -12,7 +12,7 @@ typedef struct Lexer {
     int column;
     Token current_token;
     Token previous_token;
-    MilenaErrorInfo error;
+    MilenaError error;
 } Lexer;
 
 void lexer_init(Lexer *lexer, const char *source);
