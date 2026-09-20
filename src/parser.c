@@ -664,13 +664,13 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 }
                             } else if (parser_match(parser, TOKEN_KW_PERIODO)) {
                                 parser_advance(parser);
-                                if (parser_match(parser, TOKEN_KW_EXTRAER)) {
-                                    parser_advance(parser);
-                                    if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                                        if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
-                                            ast_add_child(transformar, ast_create_leaf(AST_COMANDO_PERIODO, parser->previous.lexeme));
-                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
-                                        }
+                                /* Accept both canonical forms: #periodo("...")
+                                 * and the older #periodo extraer("..."). */
+                                if (parser_match(parser, TOKEN_KW_EXTRAER)) parser_advance(parser);
+                                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") ) {
+                                    if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
+                                        ast_add_child(transformar, ast_create_leaf(AST_COMANDO_PERIODO, parser->previous.lexeme));
+                                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'" );
                                     }
                                 }
                             }
