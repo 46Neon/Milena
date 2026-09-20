@@ -708,7 +708,9 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                    parser_match(parser, TOKEN_FUNCION_MEDIA) ||
                                    parser_match(parser, TOKEN_FUNCION_MINIMO) ||
                                    parser_match(parser, TOKEN_FUNCION_MAXIMO)) {
-                            const char *metric = parser->current.lexeme;
+                            char metric[MAX_TOKEN_LEN];
+                            strncpy(metric, parser->current.lexeme, sizeof(metric) - 1);
+                            metric[sizeof(metric) - 1] = '\0';
                             parser_advance(parser);
                             if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                 if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de resumen")) {
@@ -751,6 +753,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             continue;
                         }
                         parser_advance(parser);
+                        char metric_buffer[MAX_TOKEN_LEN] = {0};
                         const char *metric = NULL;
                         if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
                             parser_match(parser, TOKEN_FUNCION_MEDIA) ||
@@ -760,7 +763,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
                             parser_match(parser, TOKEN_FUNCION_MEDIANA) ||
                             parser_match(parser, TOKEN_FUNCION_PERCENTIL)) {
-                            metric = parser->current.lexeme;
+                            strncpy(metric_buffer, parser->current.lexeme, sizeof(metric_buffer) - 1);
+                            metric = metric_buffer;
                         } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
                                    strcmp(parser->current.lexeme, "conteo") == 0) {
                             metric = "conteo";
