@@ -234,6 +234,147 @@ static ASTNode *parse_assignment(Parser *parser) {
     return node;
 }
 
+static bool parser_is_statistical_token(TokenType type) {
+    return type == TOKEN_FUNCION_SUMA ||
+           type == TOKEN_FUNCION_MEDIA ||
+           type == TOKEN_FUNCION_MINIMO ||
+           type == TOKEN_FUNCION_MAXIMO ||
+           type == TOKEN_FUNCION_VARIANZA ||
+           type == TOKEN_FUNCION_DESVIACION ||
+           type == TOKEN_FUNCION_MEDIANA ||
+           type == TOKEN_FUNCION_PERCENTIL;
+}
+
+static ASTStatOperation parser_statistical_operation(TokenType type) {
+    switch (type) {
+        case TOKEN_FUNCION_SUMA: return AST_ESTADISTICA_SUMA;
+        case TOKEN_FUNCION_MEDIA: return AST_ESTADISTICA_MEDIA;
+        case TOKEN_FUNCION_MINIMO: return AST_ESTADISTICA_MINIMO;
+        case TOKEN_FUNCION_MAXIMO: return AST_ESTADISTICA_MAXIMO;
+        case TOKEN_FUNCION_VARIANZA: return AST_ESTADISTICA_VARIANZA;
+        case TOKEN_FUNCION_DESVIACION: return AST_ESTADISTICA_DESVIACION;
+        case TOKEN_FUNCION_MEDIANA: return AST_ESTADISTICA_MEDIANA;
+        case TOKEN_FUNCION_PERCENTIL: return AST_ESTADISTICA_PERCENTIL;
+        default: return AST_ESTADISTICA_NINGUNA;
+    }
+}
+
+static ASTNode *parse_statistical_call(Parser *parser,
+                                       bool require_declared_symbol) {
+    if (!parser || !parser_is_statistical_token(parser->current.type)) {
+        if (parser) parser_error(parser, "Se esperaba una operación estadística");
+        return NULL;
+    }
+
+    ASTStatOperation operation = parser_statistical_operation(parser->current.type);
+    parser_advance(parser);
+    if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                       "Se esperaba '(' después de la operación")) {
+        return NULL;
+    }
+    if (!parser_is_identifier(parser)) {
+        parser_error(parser, "Se esperaba un arreglo como argumento");
+        return NULL;
+    }
+
+    char symbol[MAX_TOKEN_LEN];
+    strncpy(symbol, parser->current.lexeme, sizeof(symbol) - 1);
+    symbol[sizeof(symbol) - 1] = '\0';
+    parser_advance(parser);
+    if (require_declared_symbol &&
+        !milena_symbols_exists(&parser->symbols, symbol)) {
+        parser_error(parser, "El arreglo usado no ha sido declarado");
+        return NULL;
+    }
+
+    ASTNode *argument = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR, symbol);
+    if (!argument) {
+        parser_error(parser, "No se pudo crear el argumento estadístico");
+        return NULL;
+    }
+
+    double percentile = 0.0;
+    int axis = -1;
+    bool keepdims = false;
+    bool axis_seen = false;
+    bool keepdims_seen = false;
+
+    if (operation == AST_ESTADISTICA_PERCENTIL) {
+        if (!parser_expect(parser, TOKEN_COMA,
+                           "percentil requiere un valor entre 0 y 100") ||
+            !parser_expect(parser, TOKEN_NUMERO,
+                           "Se esperaba un percentil numérico")) {
+            ast_destroy(argument);
+            return NULL;
+        }
+        percentile = parser->previous.number_value;
+        if (!isfinite(percentile) || percentile < 0.0 || percentile > 100.0) {
+            ast_destroy(argument);
+            parser_error(parser, "El percentil debe estar entre 0 y 100");
+            return NULL;
+        }
+    }
+
+    while (!parser_match(parser, TOKEN_PAR_DER) && !parser->has_error) {
+        if (!parser_expect(parser, TOKEN_COMA,
+                           "Se esperaba ',' entre argumentos")) break;
+        if (parser_match(parser, TOKEN_CONCEPTO_EJE)) {
+            if (axis_seen) {
+                parser_error(parser, "El eje solo puede indicarse una vez");
+                break;
+            }
+            axis_seen = true;
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_NUMERO,
+                               "Se esperaba un eje entero no negativo")) break;
+            double value = parser->previous.number_value;
+            if (!isfinite(value) || value < 0.0 || value > (double)INT_MAX ||
+                floor(value) != value) {
+                parser_error(parser, "El eje debe ser un entero no negativo");
+                break;
+            }
+            axis = (int)value;
+        } else if (parser_match(parser, TOKEN_CONCEPTO_CONSERVAR) ||
+                   parser_match(parser, TOKEN_CONCEPTO_SIN)) {
+            if (keepdims_seen) {
+                parser_error(parser,
+                             "La opción de dimensiones solo puede indicarse una vez");
+                break;
+            }
+            keepdims_seen = true;
+            bool negate = parser_match(parser, TOKEN_CONCEPTO_SIN);
+            parser_advance(parser);
+            if (negate && !parser_expect(parser, TOKEN_CONCEPTO_CONSERVAR,
+                                         "Se esperaba 'conservar' después de 'sin'")) {
+                break;
+            }
+            if (!axis_seen) {
+                parser_error(parser,
+                             "Se debe indicar un eje antes de conservar dimensiones");
+                break;
+            }
+            if (!(parser_match(parser, TOKEN_FUNCION_DIMENSIONES) ||
+                  parser_match(parser, TOKEN_CONCEPTO_DIMENSIONES))) {
+                parser_error(parser,
+                             "Se esperaba 'dimensiones' en la opción");
+                break;
+            }
+            parser_advance(parser);
+            keepdims = !negate;
+        } else {
+            parser_error(parser, "Argumento estadístico inesperado");
+            break;
+        }
+    }
+
+    if (parser->has_error ||
+        !parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'")) {
+        ast_destroy(argument);
+        return NULL;
+    }
+    return ast_create_statistic(operation, argument, axis, keepdims, percentile);
+}
+
 static ASTNode* parse_bloque_analisis(Parser *parser) {
     if (!parser_expect(parser, TOKEN_PUNTO, "Se esperaba '.'")) return NULL;
     if (!parser_expect(parser, TOKEN_KW_ANALISIS, "Se esperaba 'analisis'")) return NULL;
@@ -249,7 +390,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
     
     milena_symbols_enter_scope(&parser->symbols);
     // Parsear contenido del bloque
-    while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
+    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
         if (parser_match(parser, TOKEN_KW_VARIABLE)) {
             ASTNode *declaration = parse_variable_declaration(parser);
             if (declaration) ast_add_child(node, declaration);
@@ -263,6 +405,16 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
              strcmp(parser->current.lexeme, "arreglo") == 0)) {
             ASTNode *declaration = parse_array_declaration(parser);
             if (declaration) ast_add_child(node, declaration);
+        } else if (parser_is_statistical_token(parser->current.type)) {
+            ASTNode *statistic = parse_statistical_call(parser, true);
+            if (statistic) {
+                if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                                   "Se esperaba ';' después de la operación estadística")) {
+                    ast_destroy(statistic);
+                } else {
+                    ast_add_child(node, statistic);
+                }
+            }
         } else if (parser_match(parser, TOKEN_NUMERAL)) {
             parser_advance(parser);
             if (parser_match(parser, TOKEN_KW_DATOS)) {
@@ -443,48 +595,40 @@ static ASTNode *parse_user_function(Parser*p){
 }
 static ASTNode *parse_user_program(Parser*p){ASTNode*pr=ast_create(AST_PROGRAMA);while(!parser_match(p,TOKEN_EOF)){if(p->current.type==TOKEN_KW_FUNCION){ASTNode*n=parse_user_function(p);if(!n){ast_destroy(pr);return NULL;}ast_add_child(pr,n);}else if(p->current.type==TOKEN_KW_VARIABLE){ASTNode *body=parse_fn_body(p);if(!body){ast_destroy(pr);return NULL;}for(size_t i=0;i<body->child_count;i++)ast_add_child(pr,body->children[i]);free(body->children);free(body);}else {parser_error(p,"Se esperaba función o variable");ast_destroy(pr);return NULL;}}return pr;}
 ASTNode* parser_parse(Parser *parser) {
-    if (!parser) return NULL;
-    if (parser->current.type==TOKEN_KW_FUNCION) return parse_user_program(parser);
-    ASTNode *program = ast_create(AST_PROGRAMA); if (!program) { parser_error(parser,"Error de memoria"); return NULL; }
-    if (parser->current.type == TOKEN_FUNCION_MEDIANA || parser->current.type == TOKEN_FUNCION_PERCENTIL) { while(parser->current.type==TOKEN_FUNCION_MEDIANA||parser->current.type==TOKEN_FUNCION_PERCENTIL){ASTNode*s=parser_parse_statistical_call(parser);if(!s)break;ast_add_child(program,s);if(parser_match(parser,TOKEN_PUNTO_Y_COMA))parser_advance(parser);} } else { ASTNode*a=parse_bloque_analisis(parser);if(a)ast_add_child(program,a); }
-    if (!parser_match(parser,TOKEN_EOF)) parser_error(parser,"Se esperaba fin de archivo"); return program;
+    if (!parser || parser->has_error) return NULL;
+    if (parser->current.type == TOKEN_KW_FUNCION) {
+        return parse_user_program(parser);
+    }
+
+    ASTNode *program = ast_create(AST_PROGRAMA);
+    if (!program) {
+        parser_error(parser, "Error de memoria");
+        return NULL;
+    }
+
+    if (parser_is_statistical_token(parser->current.type)) {
+        while (parser_is_statistical_token(parser->current.type) &&
+               !parser->has_error) {
+            ASTNode *statistic = parse_statistical_call(parser, false);
+            if (!statistic) break;
+            ast_add_child(program, statistic);
+            if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+        }
+    } else {
+        ASTNode *analysis = parse_bloque_analisis(parser);
+        if (analysis) ast_add_child(program, analysis);
+    }
+
+    if (!parser->has_error && !parser_match(parser, TOKEN_EOF)) {
+        parser_error(parser, "Se esperaba fin de archivo");
+    }
+    if (parser->has_error) {
+        ast_destroy(program);
+        return NULL;
+    }
+    return program;
 }
 
 ASTNode* parser_parse_statistical_call(Parser *parser) {
-    if (!parser) return NULL;
-    bool median = parser->current.type == TOKEN_FUNCION_MEDIANA;
-    bool percentile = parser->current.type == TOKEN_FUNCION_PERCENTIL;
-    if (!median && !percentile) { parser_error(parser, "Se esperaba una operación estadística"); return NULL; }
-    parser_advance(parser);
-    if (!parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '(' después de la operación")) return NULL;
-    if (!parser_is_identifier(parser)) {
-        parser_error(parser, "Se esperaba un arreglo como argumento");
-        return NULL;
-    }
-    ASTNode *argument = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR,
-                                        parser->current.lexeme);
-    parser_advance(parser);
-    if (!argument) { parser_error(parser, "No se pudo crear el argumento estadístico"); return NULL; }
-    double percentile_value = 50.0; int axis = -1; bool keepdims = false;
-    if (percentile) {
-        if (!parser_expect(parser, TOKEN_COMA, "Se esperaba el porcentaje" ) ||
-            !parser_expect(parser, TOKEN_NUMERO, "Se esperaba un porcentaje numérico")) { ast_destroy(argument); return NULL; }
-        percentile_value = parser->previous.number_value;
-        if (percentile_value < 0.0 || percentile_value > 100.0) { ast_destroy(argument); parser_error(parser, "El porcentaje debe estar entre 0 y 100"); return NULL; }
-    }
-    while (!parser_match(parser, TOKEN_PAR_DER)) {
-        if (!parser_expect(parser, TOKEN_COMA, "Se esperaba ',' entre argumentos")) { ast_destroy(argument); return NULL; }
-        if (parser_match(parser, TOKEN_CONCEPTO_EJE)) {
-            parser_advance(parser);
-            if (!parser_expect(parser, TOKEN_NUMERO, "Se esperaba un número después de 'eje'")) { ast_destroy(argument); return NULL; }
-            axis = (int)parser->previous.number_value;
-        } else if (parser_match(parser, TOKEN_CONCEPTO_CONSERVAR)) {
-            parser_advance(parser);
-            if (!parser_expect(parser, TOKEN_FUNCION_DIMENSIONES, "Se esperaba 'dimensiones' después de 'conservar'")) { ast_destroy(argument); return NULL; }
-            keepdims = true;
-        } else { ast_destroy(argument); parser_error(parser, "Argumento estadístico inesperado"); return NULL; }
-    }
-    parser_advance(parser);
-    ASTStatOperation op = median ? AST_ESTADISTICA_MEDIANA : AST_ESTADISTICA_PERCENTIL;
-    return ast_create_statistic(op, argument, axis, keepdims, percentile_value);
+    return parse_statistical_call(parser, false);
 }

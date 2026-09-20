@@ -44,6 +44,7 @@ typedef enum {
     TOKEN_CONCEPTO_EJE,
     TOKEN_CONCEPTO_CONSERVAR,
     TOKEN_CONCEPTO_DIMENSIONES,
+    TOKEN_CONCEPTO_SIN,
     TOKEN_KW_VARIABLE,
     TOKEN_KW_FUNCION,
     TOKEN_KW_RETORNAR,
@@ -84,7 +85,8 @@ typedef enum {
     TOKEN_BOOLEANO,
 
     // Especiales
-    TOKEN_COMMENT
+    TOKEN_COMMENT,
+    TOKEN_TYPE_COUNT
 } TokenType;
 
 typedef struct Token {

@@ -39,7 +39,8 @@ typedef enum {
     AST_COMANDO_PERIODO,
     AST_AGRUPACION_POR,
     AST_RESUMEN_METRICA,
-    AST_OPERACION_ESTADISTICA
+    AST_OPERACION_ESTADISTICA,
+    AST_NODE_TYPE_COUNT
 } ASTNodeType;
 
 typedef enum {
@@ -51,7 +52,8 @@ typedef enum {
     AST_ESTADISTICA_VARIANZA,
     AST_ESTADISTICA_DESVIACION,
     AST_ESTADISTICA_MEDIANA,
-    AST_ESTADISTICA_PERCENTIL
+    AST_ESTADISTICA_PERCENTIL,
+    AST_STAT_OPERATION_COUNT
 } ASTStatOperation;
 
 typedef struct ASTNode {
@@ -75,9 +77,10 @@ ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
 ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,
                               int axis, bool keepdims, double percentile);
-void ast_add_child(ASTNode *parent, ASTNode *child);
+bool ast_add_child(ASTNode *parent, ASTNode *child);
 void ast_print(ASTNode *node, int depth);
 void ast_destroy(ASTNode *node);
 const char* ast_type_name(ASTNodeType type);
+const char *ast_stat_operation_name(ASTStatOperation operation);
 
 #endif
