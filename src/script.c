@@ -9,6 +9,7 @@
 #include "sst_normality.h"
 #include "sst_rates.h"
 #include "array.h"
+#include "language_runtime.h"
 #include "user_functions.h"
 #include <ctype.h>
 
@@ -1065,6 +1066,16 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     if (!filename) return MILENA_ERR_ARGUMENT;
     char *script = read_file(filename, error);
     if (!script) return error && error->code ? error->code : MILENA_ERR_IO;
+    /* Primera migración incremental al pipeline canónico. El reconocimiento
+     * textual solo decide compatibilidad; la sintaxis y la ejecución quedan
+     * completamente a cargo de lexer/parser/AST/language_runtime. */
+    if (strstr(script, "analisis") != NULL &&
+        strstr(script, "arreglo") != NULL &&
+        strstr(script, "dataset cargar") == NULL) {
+        MilenaStatus canonical_status = milena_run_array_program(script, stdout, error);
+        free(script);
+        return canonical_status;
+    }
     if (strstr(script, "funcion") != NULL) { MilenaStatus fn_status = run_numeric_functions(script, error); free(script); return fn_status; }
     if ((strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL) &&
         strstr(script, "dataset cargar") == NULL) {

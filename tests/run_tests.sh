@@ -206,4 +206,13 @@ grep -q '"normalidad"' "$tmp_dir/reporte_clientes.json.sst.json"
 
 ./milena perfil "$tmp_dir/clientes.csv" "$tmp_dir/perfil.json" >/dev/null
 test -s "$tmp_dir/perfil.json"
+
+./milena run "$project_dir/examples/integracion_arrays.milena" \
+  > "$tmp_dir/integracion_arrays.out"
+grep -q 'SUMA(valores) = 10' "$tmp_dir/integracion_arrays.out"
+grep -q 'MEDIA(valores) = 2.5' "$tmp_dir/integracion_arrays.out"
+grep -q 'MEDIANA(valores) = 2.5' "$tmp_dir/integracion_arrays.out"
+grep -q 'PERCENTIL(valores) = 3.25' "$tmp_dir/integracion_arrays.out"
+grep -q 'shape=(1)' "$tmp_dir/integracion_arrays.out"
+
 printf 'OK: pruebas con datos sintéticos temporales completadas\n'
