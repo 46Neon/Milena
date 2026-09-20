@@ -793,11 +793,12 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     strncpy(named_block, parser->current.lexeme, sizeof(named_block) - 1);
                     named_block[sizeof(named_block) - 1] = '\0';
                     bool selecting = strcmp(named_block, "seleccionar") == 0;
+                    bool joining = strcmp(named_block, "unir") == 0;
                     parser_advance(parser);
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
-                        ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR
-                                                                  : AST_BLOQUE_FILTRAR);
+                        ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
+                                                       (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
                         while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                                !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                             if (parser_match(parser, TOKEN_KW_DATASET) ||
@@ -819,6 +820,20 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                                 parser->previous.lexeme);
                                             if (columns && filtrar) ast_add_child(filtrar, columns);
                                             parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de columnas");
+                                        }
+                                    }
+                                } else if (joining && parser_is_identifier(parser) &&
+                                           (strcmp(parser->current.lexeme, "derecha") == 0 ||
+                                            strcmp(parser->current.lexeme, "clave") == 0)) {
+                                    ASTNodeType command_type = strcmp(parser->current.lexeme, "derecha") == 0
+                                        ? AST_COMANDO_DERECHA : AST_COMANDO_CLAVE;
+                                    parser_advance(parser);
+                                    if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                        if (parser_expect(parser, TOKEN_CADENA, "Se esperaba valor de unión")) {
+                                            ASTNode *command = ast_create_leaf(command_type,
+                                                                                parser->previous.lexeme);
+                                            if (command && filtrar) ast_add_child(filtrar, command);
+                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de unión");
                                         }
                                     }
                                 } else if (parser_match(parser, TOKEN_KW_CONDICION)) {

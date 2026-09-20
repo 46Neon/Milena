@@ -75,10 +75,15 @@ int main(void) {
 
     const char *csv_path = "test-language-runtime.csv";
     const char *json_path = "test-language-runtime.json";
+    const char *right_csv_path = "test-language-runtime-right.csv";
     FILE *csv = fopen(csv_path, "wb");
     CHECK(csv != NULL, "No se pudo crear el CSV de runtime");
     fputs("precio,cantidad,ciudad,compro,fecha\n10,2,Caracas,1,2026-01-10\n5,3,Maracaibo,0,2026-02-11\n9,4,,1,2026-03-12\n5,3,Maracaibo,0,2026-02-11\n-1,2,Maracaibo,0,2026-04-01\n", csv);
     CHECK(fclose(csv) == 0, "No se pudo cerrar el CSV de runtime");
+    FILE *right_csv = fopen(right_csv_path, "wb");
+    CHECK(right_csv != NULL, "No se pudo crear el CSV derecho");
+    fputs("ciudad,region\nCaracas,Centro\nMaracaibo,Occidente\n", right_csv);
+    CHECK(fclose(right_csv) == 0, "No se pudo cerrar el CSV derecho");
     const char *dataset_source =
         ".analisis ventas {\n"
         "  dataset cargar datos(\"test-language-runtime.csv\")\n"
@@ -91,7 +96,8 @@ int main(void) {
         "  .transformar dataset { #total(\"precio * cantidad\") #periodo(\"mes de fecha\") }\n"
         "  .ventas_validas { dataset, (filtrar) #condicion(\"total > 0\") }\n"
         "  .agrupar dataset { #por(\"ciudad\") #suma(\"total\") #media(\"total\") #conteo(\"total\") }\n"
-        "  .seleccionar { #columnas(\"ciudad,total_suma\") }\n"
+        "  .unir { #derecha(\"test-language-runtime-right.csv\") #clave(\"ciudad\") }\n"
+        "  .seleccionar { #columnas(\"ciudad,total_suma,region\") }\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -111,7 +117,8 @@ int main(void) {
           "La extracción de periodo no llegó al reporte unificado");
     CHECK(strstr(json_text, "\"filas\": 2") != NULL,
           "La limpieza de nulos no se ejecutó sobre la tabla canónica");
-    CHECK(strstr(json_text, "\"columnas\": 2") != NULL &&
+    CHECK(strstr(json_text, "\"columnas\": 3") != NULL &&
+          strstr(json_text, "region") != NULL &&
           strstr(json_text, "total_suma") != NULL &&
           strstr(json_text, "total_mean") != NULL &&
           strstr(json_text, "total_count") != NULL,
@@ -152,6 +159,7 @@ int main(void) {
           "El bloque resumir no usó la tabla canónica");
     remove(summary_json_path);
     remove(csv_path);
+    remove(right_csv_path);
     remove(json_path);
 
     puts("language runtime: parser + AST + arrays + datasets OK");

@@ -124,7 +124,8 @@ const char *ast_type_name(ASTNodeType type) {
         "COMANDO_TOTAL", "COMANDO_PERIODO", "AGRUPACION_POR",
         "RESUMEN_METRICA", "OPERACION_ESTADISTICA",
         "DECLARACION_ENTRADA", "DECLARACION_SALIDA",
-        "BLOQUE_SELECCIONAR", "COMANDO_COLUMNAS"
+        "BLOQUE_SELECCIONAR", "COMANDO_COLUMNAS",
+        "BLOQUE_UNIR", "COMANDO_DERECHA", "COMANDO_CLAVE"
     };
     if ((unsigned)type >= (unsigned)AST_NODE_TYPE_COUNT) return "DESCONOCIDO";
     return names[type];

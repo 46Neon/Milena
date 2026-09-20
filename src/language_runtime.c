@@ -842,6 +842,54 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     milena_table_destroy(&summarized);
                 }
                 milena_table_destroy(&source_snapshot);
+            } else if (block->type == AST_BLOQUE_UNIR) {
+                const ASTNode *right_node = NULL;
+                const ASTNode *key_node = NULL;
+                for (size_t j = 0; j < block->child_count; j++) {
+                    if (block->children[j]->type == AST_COMANDO_DERECHA) right_node = block->children[j];
+                    else if (block->children[j]->type == AST_COMANDO_CLAVE) key_node = block->children[j];
+                }
+                if (!right_node || !key_node || !right_node->value || !key_node->value) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La unión requiere #derecha y #clave");
+                    status = MILENA_ERR_PARSE;
+                } else {
+                    char right_path[2048];
+                    status = dataset_runtime_path(right_node->value, script_filename,
+                                                  false, right_path, sizeof(right_path), error);
+                    Dataset right_dataset;
+                    dataset_init(&right_dataset);
+                    MilenaTable right_table;
+                    milena_table_init(&right_table);
+                    if (status == MILENA_OK)
+                        status = dataset_load_csv(&right_dataset, right_path, ',', error);
+                    if (status == MILENA_OK)
+                        status = milena_table_from_dataset(&right_table, &right_dataset,
+                                                           &schema, error);
+                    if (status == MILENA_OK) {
+                        const char *left_keys[1] = {key_node->value};
+                        const char *right_keys[1] = {key_node->value};
+                        MilenaTable joined;
+                        milena_table_init(&joined);
+                        status = milena_table_join(&joined, &canonical_table,
+                                                   &right_table, left_keys, right_keys,
+                                                   1, MILENA_JOIN_INNER, error);
+                        if (status == MILENA_OK) {
+                            milena_table_swap(&canonical_table, &joined);
+                            for (size_t j = 0; j < canonical_table.column_count; j++) {
+                                const char *name = canonical_table.columns[j].name;
+                                if (schema_index(&schema, name) < 0) {
+                                    status = schema_add(&schema, name, MILENA_VAR_TEXT,
+                                                        MILENA_ROLE_FEATURE, error);
+                                    if (status != MILENA_OK) break;
+                                }
+                            }
+                        }
+                        milena_table_destroy(&joined);
+                    }
+                    milena_table_destroy(&right_table);
+                    dataset_destroy(&right_dataset);
+                }
             } else if (block->type == AST_BLOQUE_SELECCIONAR) {
                 const ASTNode *columns_node = block->child_count > 0 ? block->children[0] : NULL;
                 if (!columns_node || !columns_node->value) {
