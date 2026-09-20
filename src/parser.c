@@ -639,6 +639,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                     }
                                 }
                             }
+                        } else {
+                            parser_advance(parser);
                         }
                     }
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
@@ -672,6 +674,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                     }
                                 }
                             }
+                        } else {
+                            parser_advance(parser);
                         }
                     }
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
