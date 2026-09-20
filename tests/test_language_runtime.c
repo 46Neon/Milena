@@ -99,6 +99,7 @@ int main(void) {
         "  .unir { #derecha(\"test-language-runtime-right.csv\") #clave(\"ciudad\") }\n"
         "  .seleccionar { #columnas(\"ciudad,total_suma,region\") }\n"
         "  #perfil_avanzado(\"total_suma\")\n"
+        "  #histograma(\"total_suma\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -141,6 +142,15 @@ int main(void) {
     CHECK(strstr(sst_text, "perfil_avanzado") != NULL &&
           strstr(sst_text, "total_suma") != NULL,
           "El perfil SST no usó la tabla canónica");
+    FILE *histogram_json = fopen("test-language-runtime.json.histograma.json", "rb");
+    CHECK(histogram_json != NULL, "El histograma SST canónico no creó su reporte");
+    char histogram_text[2048];
+    size_t histogram_size = fread(histogram_text, 1, sizeof(histogram_text) - 1, histogram_json);
+    histogram_text[histogram_size] = '\0';
+    fclose(histogram_json);
+    CHECK(strstr(histogram_text, "histograma") != NULL &&
+          strstr(histogram_text, "total_suma") != NULL,
+          "El histograma SST no usó la tabla canónica");
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -172,6 +182,7 @@ int main(void) {
     remove(right_csv_path);
     remove(json_path);
     remove("test-language-runtime.json.sst.json");
+    remove("test-language-runtime.json.histograma.json");
 
     puts("language runtime: parser + AST + arrays + datasets OK");
     return 0;

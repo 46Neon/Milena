@@ -6,6 +6,7 @@
 #include "schema.h"
 #include "table.h"
 #include "sst_advanced.h"
+#include "sst_histogram.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -534,6 +535,76 @@ static MilenaStatus runtime_write_sst_profile(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_histogram(const MilenaTable *table,
+                                                    const char *column_name,
+                                                    const char *output_path,
+                                                    MilenaError *error) {
+    int column = milena_table_column_index(table, column_name);
+    const MilenaTableColumn *data = column < 0 ? NULL :
+        milena_table_column(table, (size_t)column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "El histograma SST requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = table->row_count == 0 ? NULL :
+        (double *)malloc(table->row_count * sizeof(*values));
+    if (table->row_count && !values) {
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para histograma SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    double minimum = DBL_MAX, maximum = -DBL_MAX;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)column, row)) continue;
+        const void *raw = NULL;
+        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
+        double value;
+        switch (data->values.dtype) {
+            case MILENA_DTYPE_INT64: value = (double)*(const int64_t *)raw; break;
+            case MILENA_DTYPE_UINT64: value = (double)*(const uint64_t *)raw; break;
+            case MILENA_DTYPE_FLOAT32: value = (double)*(const float *)raw; break;
+            case MILENA_DTYPE_FLOAT64: value = *(const double *)raw; break;
+            default: value = 0.0; break;
+        }
+        values[count++] = value;
+        if (value < minimum) minimum = value;
+        if (value > maximum) maximum = value;
+    }
+    MilenaStatus status = count == 0 ? MILENA_ERR_DATA : MILENA_OK;
+    SstHistogram histogram;
+    if (status == MILENA_OK) status = sst_histogram_init(&histogram, 5, minimum, maximum, error);
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < count; i++) {
+            status = sst_histogram_add(&histogram, values[i], error);
+            if (status != MILENA_OK) break;
+        }
+    }
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.histograma.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"histograma\",\"variable\":\"");
+                fputs(column_name, out);
+                fputs("\",\"bins\":[", out);
+                for (size_t i = 0; i < histogram.bin_count; i++) {
+                    if (i) fputs(",", out);
+                    fprintf(out, "%zu", histogram.counts[i]);
+                }
+                fprintf(out, "],\"bajo_minimo\":%zu,\"sobre_maximo\":%zu}\n",
+                        histogram.underflow, histogram.overflow);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    if (status == MILENA_OK) sst_histogram_destroy(&histogram);
+    free(values);
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1009,13 +1080,21 @@ MilenaStatus milena_run_dataset_program(const char *source,
         for (size_t i = 0; i < analysis->child_count; i++) {
             const ASTNode *node = analysis->children[i];
             if (!node || node->type != AST_COMANDO_SST || !node->value) continue;
-            if (!node->type_name || strcmp(node->type_name, "perfil_avanzado") != 0) {
+            if (!node->type_name) {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;
                 break;
             }
-            status = runtime_write_sst_profile(&canonical_table, node->value,
-                                               output_path, error);
+            if (strcmp(node->type_name, "perfil_avanzado") == 0) {
+                status = runtime_write_sst_profile(&canonical_table, node->value,
+                                                   output_path, error);
+            } else if (strcmp(node->type_name, "histograma") == 0) {
+                status = runtime_write_sst_histogram(&canonical_table, node->value,
+                                                     output_path, error);
+            } else {
+                runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
+                status = MILENA_ERR_UNSUPPORTED;
+            }
             if (status != MILENA_OK) break;
         }
     }
