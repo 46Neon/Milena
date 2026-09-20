@@ -1030,6 +1030,35 @@ array_cleanup_error:
 /* Execute the numeric function section of a script before the data-script path.
  * Function declarations are deliberately isolated from the legacy command parser,
  * so adding functions cannot change statistical/array semantics. */
+typedef enum {
+    SCRIPT_PIPELINE_CANONICAL_ARRAY,
+    SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT,
+    SCRIPT_PIPELINE_ARRAY_COMPAT,
+    SCRIPT_PIPELINE_DATASET_COMPAT
+} ScriptPipeline;
+
+/*
+ * Todas las decisiones de compatibilidad pasan por este punto. El objetivo
+ * de la migración es reemplazar esta detección temporal por el resultado del
+ * parser, sin volver a repartir condicionales por el ejecutor.
+ */
+static ScriptPipeline script_pipeline_for_source(const char *script) {
+    if (!script) return SCRIPT_PIPELINE_DATASET_COMPAT;
+    if (strstr(script, "analisis") != NULL &&
+        strstr(script, "arreglo") != NULL &&
+        strstr(script, "dataset cargar") == NULL) {
+        return SCRIPT_PIPELINE_CANONICAL_ARRAY;
+    }
+    if (strstr(script, "funcion") != NULL) {
+        return SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT;
+    }
+    if ((strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL) &&
+        strstr(script, "dataset cargar") == NULL) {
+        return SCRIPT_PIPELINE_ARRAY_COMPAT;
+    }
+    return SCRIPT_PIPELINE_DATASET_COMPAT;
+}
+
 static MilenaStatus run_numeric_functions(const char *script, MilenaError *error) {
     const char *p = script; size_t total = strlen(script), used = 0;
     char *decls = (char *)malloc(total + 1), message[256] = {0};
@@ -1069,16 +1098,18 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     /* Primera migración incremental al pipeline canónico. El reconocimiento
      * textual solo decide compatibilidad; la sintaxis y la ejecución quedan
      * completamente a cargo de lexer/parser/AST/language_runtime. */
-    if (strstr(script, "analisis") != NULL &&
-        strstr(script, "arreglo") != NULL &&
-        strstr(script, "dataset cargar") == NULL) {
+    ScriptPipeline pipeline = script_pipeline_for_source(script);
+    if (pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) {
         MilenaStatus canonical_status = milena_run_array_program(script, stdout, error);
         free(script);
         return canonical_status;
     }
-    if (strstr(script, "funcion") != NULL) { MilenaStatus fn_status = run_numeric_functions(script, error); free(script); return fn_status; }
-    if ((strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL) &&
-        strstr(script, "dataset cargar") == NULL) {
+    if (pipeline == SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT) {
+        MilenaStatus fn_status = run_numeric_functions(script, error);
+        free(script);
+        return fn_status;
+    }
+    if (pipeline == SCRIPT_PIPELINE_ARRAY_COMPAT) {
         MilenaStatus array_status = run_array_declarations(script, error);
         free(script);
         return array_status;
