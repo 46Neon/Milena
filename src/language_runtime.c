@@ -1674,6 +1674,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
         }
     }
     if (status == MILENA_OK) {
+        status = milena_validate_sst_table(analysis, &canonical_table, error);
+    }
+    if (status == MILENA_OK) {
         /* La exportación final consume directamente la tabla tipada. */
         status = analysis_table_report(&canonical_table, &schema,
                                        output_path, error);
