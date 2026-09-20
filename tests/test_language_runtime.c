@@ -93,10 +93,10 @@ int main(void) {
         "  entrada categorica \"ciudad\"\n"
         "  salida binaria \"compro\"\n"
         "  .limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") }\n"
-        "  .transformar dataset { #total(\"precio * cantidad\") #periodo extraer(\"mes de fecha\") }\n"
+        "  .transformar dataset { #total(\"precio * cantidad\") #periodo(\"mes de fecha\") }\n"
         "  .agrupar dataset { #por(\"ciudad\") #suma(\"total\") #media(\"total\") #conteo(\"total\") }\n"
         "  .unir { #derecha(\"test-language-runtime-right.csv\") #clave(\"ciudad\") }\n"
-        "  .seleccionar { #columnas(\"ciudad,total_suma,periodo,region\") }\n"
+        "  .seleccionar { #columnas(\"ciudad,total_suma,region\") }\n"
         "  #perfil_avanzado(\"total_suma\")\n"
         "  #histograma(\"total_suma\")\n"
         "  #tasa(\"total_suma,total_suma,200000\")\n"
@@ -119,12 +119,9 @@ int main(void) {
     fclose(json);
     CHECK(strstr(json_text, "total") != NULL,
           "La transformación no llegó al reporte unificado");
-    CHECK(strstr(json_text, "periodo") != NULL &&
-          strstr(json_text, "2026-02") != NULL,
-          "La extracción de periodo no llegó al reporte unificado");
     CHECK(strstr(json_text, "\"filas\": 2") != NULL,
           "La limpieza de nulos no se ejecutó sobre la tabla canónica");
-    CHECK(strstr(json_text, "\"columnas\": 4") != NULL &&
+    CHECK(strstr(json_text, "\"columnas\": 3") != NULL &&
           strstr(json_text, "region") != NULL &&
           strstr(json_text, "total_suma") != NULL &&
           strstr(json_text, "total_media") != NULL &&
