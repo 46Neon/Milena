@@ -3,11 +3,15 @@
 
 #include "common.h"
 
+#ifndef MAX_TOKEN_LEN
+#define MAX_TOKEN_LEN 256
+#endif
+
 typedef enum {
     TOKEN_EOF = 0,
     TOKEN_ERROR,
 
-    // Palabras clave en español
+    /* Palabras clave en español. */
     TOKEN_KW_ANALISIS,
     TOKEN_KW_DATOS,
     TOKEN_KW_ESTADISTICA,
@@ -27,7 +31,21 @@ typedef enum {
     TOKEN_KW_TOTAL,
     TOKEN_KW_PERIODO,
 
-    // Separadores
+    /* Operaciones y opciones estadísticas en español. */
+    TOKEN_FUNCION_SUMA,
+    TOKEN_FUNCION_MEDIA,
+    TOKEN_FUNCION_MINIMO,
+    TOKEN_FUNCION_MAXIMO,
+    TOKEN_FUNCION_VARIANZA,
+    TOKEN_FUNCION_DESVIACION,
+    TOKEN_FUNCION_MEDIANA,
+    TOKEN_FUNCION_PERCENTIL,
+    TOKEN_CONCEPTO_EJE,
+    TOKEN_CONCEPTO_CONSERVAR,
+    TOKEN_CONCEPTO_DIMENSIONES,
+    TOKEN_CONCEPTO_SIN,
+
+    /* Separadores. */
     TOKEN_PUNTO,
     TOKEN_NUMERAL,
     TOKEN_LLAVE_IZQ,
@@ -40,7 +58,7 @@ typedef enum {
     TOKEN_COMA,
     TOKEN_PUNTO_Y_COMA,
 
-    // Operadores
+    /* Operadores. */
     TOKEN_IGUAL,
     TOKEN_IGUAL_IGUAL,
     TOKEN_DISTINTO,
@@ -54,14 +72,14 @@ typedef enum {
     TOKEN_DIV,
     TOKEN_ASIGNACION,
 
-    // Literales
+    /* Literales. */
     TOKEN_IDENTIFICADOR,
     TOKEN_CADENA,
     TOKEN_NUMERO,
     TOKEN_BOOLEANO,
 
-    // Especiales
-    TOKEN_COMMENT
+    TOKEN_COMMENT,
+    TOKEN_TYPE_COUNT
 } TokenType;
 
 typedef struct Token {
