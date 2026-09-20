@@ -1804,10 +1804,16 @@ static int compare_integral_exact(NumericValue left, NumericValue right) {
         int64_t b = right.as.signed_value;
         return a < b ? -1 : (a > b ? 1 : 0);
     }
-    uint64_t a_unsigned = left.kind == NUMERIC_UNSIGNED ?
-        left.as.unsigned_value : (left.as.boolean ? 1u : 0u);
-    uint64_t b_unsigned = right.kind == NUMERIC_UNSIGNED ?
-        right.as.unsigned_value : (right.as.boolean ? 1u : 0u);
+    uint64_t a_unsigned = 0u;
+    uint64_t b_unsigned = 0u;
+    if (left.kind == NUMERIC_UNSIGNED)
+        a_unsigned = left.as.unsigned_value;
+    else if (left.kind == NUMERIC_BOOL)
+        a_unsigned = left.as.boolean ? 1u : 0u;
+    if (right.kind == NUMERIC_UNSIGNED)
+        b_unsigned = right.as.unsigned_value;
+    else if (right.kind == NUMERIC_BOOL)
+        b_unsigned = right.as.boolean ? 1u : 0u;
     if (!left_signed && !right_signed)
         return a_unsigned < b_unsigned ? -1 :
                (a_unsigned > b_unsigned ? 1 : 0);
