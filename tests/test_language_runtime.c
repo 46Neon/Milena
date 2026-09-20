@@ -47,6 +47,24 @@ int main(void) {
           "Percentil incorrecto");
     CHECK(strstr(text, "shape=(1)") != NULL, "keepdims no se conservó");
 
+    const char *zeros =
+        ".analisis matriz {\n"
+        "  arreglo matriz = ceros(2, 3);\n"
+        "  media(matriz, eje 0);\n"
+        "}\n";
+    output = tmpfile();
+    CHECK(output != NULL, "No se pudo crear la salida temporal de ceros");
+    milena_error_clear(&error);
+    CHECK(milena_run_array_program(zeros, output, &error) == MILENA_OK,
+          error.message);
+    CHECK(read_stream(output, text, sizeof(text)),
+          "No se pudo leer la salida de ceros");
+    CHECK(strstr(text, "MEDIA(matriz) = [0, 0, 0]") != NULL,
+          "ceros o reducción por eje incorrectos");
+    CHECK(strstr(text, "shape=(3)") != NULL,
+          "La forma de la reducción de ceros es incorrecta");
+    fclose(output);
+
     const char *invalid =
         ".analisis error { media(variable_no_declarada); }";
     milena_error_clear(&error);

@@ -73,46 +73,73 @@ static MilenaStatus runtime_declare_array(MilenaArrayRuntime *runtime,
         return MILENA_ERR_DATA;
     }
 
-    size_t shape[] = {literal->child_count};
-    double *reals = calloc(literal->child_count, sizeof(*reals));
-    int64_t *integers = calloc(literal->child_count, sizeof(*integers));
-    if (!reals || !integers) {
-        free(reals);
-        free(integers);
-        runtime_error(error, MILENA_ERR_MEMORY,
-                      "Sin memoria para materializar el arreglo");
-        return MILENA_ERR_MEMORY;
-    }
-
-    bool all_integers = true;
-    for (size_t i = 0; i < literal->child_count; i++) {
-        const ASTNode *element = literal->children[i];
-        if (!element || element->type != AST_EXPRESION_LITERAL ||
-            !isfinite(element->number_value)) {
+    MilenaArray value = {0};
+    MilenaStatus status;
+    if (literal->zeros_constructor) {
+        size_t *shape = calloc(literal->child_count, sizeof(*shape));
+        if (!shape) {
+            runtime_error(error, MILENA_ERR_MEMORY,
+                          "Sin memoria para las dimensiones de ceros");
+            return MILENA_ERR_MEMORY;
+        }
+        for (size_t i = 0; i < literal->child_count; i++) {
+            const ASTNode *dimension = literal->children[i];
+            if (!dimension || dimension->type != AST_EXPRESION_LITERAL ||
+                !isfinite(dimension->number_value) ||
+                dimension->number_value <= 0.0 ||
+                dimension->number_value > (double)SIZE_MAX ||
+                floor(dimension->number_value) != dimension->number_value) {
+                free(shape);
+                runtime_error(error, MILENA_ERR_TYPE,
+                              "Las dimensiones de ceros deben ser enteros positivos");
+                return MILENA_ERR_TYPE;
+            }
+            shape[i] = (size_t)dimension->number_value;
+        }
+        status = milena_array_zeros(&value, MILENA_DTYPE_FLOAT64,
+                                    literal->child_count, shape, error);
+        free(shape);
+    } else {
+        size_t shape[] = {literal->child_count};
+        double *reals = calloc(literal->child_count, sizeof(*reals));
+        int64_t *integers = calloc(literal->child_count, sizeof(*integers));
+        if (!reals || !integers) {
             free(reals);
             free(integers);
-            runtime_error(error, MILENA_ERR_TYPE,
-                          "El literal de arreglo solo admite números finitos");
-            return MILENA_ERR_TYPE;
+            runtime_error(error, MILENA_ERR_MEMORY,
+                          "Sin memoria para materializar el arreglo");
+            return MILENA_ERR_MEMORY;
         }
-        double value = element->number_value;
-        reals[i] = value;
-        /* INT64_MAX rounds to 2^63 in double; use an exclusive upper
-         * boundary to avoid an out-of-range floating-to-integer cast. */
-        if (value < (double)INT64_MIN || value >= -(double)INT64_MIN ||
-            trunc(value) != value) {
-            all_integers = false;
-        } else {
-            integers[i] = (int64_t)value;
-        }
-    }
 
-    MilenaArray value = {0};
-    MilenaStatus status = all_integers
-        ? milena_array_from_i64(&value, 1, shape, integers, error)
-        : milena_array_from_f64(&value, 1, shape, reals, error);
-    free(reals);
-    free(integers);
+        bool all_integers = true;
+        for (size_t i = 0; i < literal->child_count; i++) {
+            const ASTNode *element = literal->children[i];
+            if (!element || element->type != AST_EXPRESION_LITERAL ||
+                !isfinite(element->number_value)) {
+                free(reals);
+                free(integers);
+                runtime_error(error, MILENA_ERR_TYPE,
+                              "El literal de arreglo solo admite números finitos");
+                return MILENA_ERR_TYPE;
+            }
+            double number = element->number_value;
+            reals[i] = number;
+            /* INT64_MAX rounds to 2^63 in double; use an exclusive upper
+             * boundary to avoid an out-of-range floating-to-integer cast. */
+            if (number < (double)INT64_MIN || number >= -(double)INT64_MIN ||
+                trunc(number) != number) {
+                all_integers = false;
+            } else {
+                integers[i] = (int64_t)number;
+            }
+        }
+
+        status = all_integers
+            ? milena_array_from_i64(&value, 1, shape, integers, error)
+            : milena_array_from_f64(&value, 1, shape, reals, error);
+        free(reals);
+        free(integers);
+    }
     if (status != MILENA_OK) return status;
 
     runtime->arrays[runtime->count].name = node->value;

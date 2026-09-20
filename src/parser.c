@@ -58,12 +58,8 @@ static ASTNode *parse_array_declaration(Parser *parser) {
     strncpy(name, parser->current.lexeme, sizeof(name) - 1);
     parser_advance(parser);
     name[sizeof(name) - 1] = '\0';
-    if (!parser_expect(parser, TOKEN_IGUAL, "Se esperaba '=' en la declaración del array") ||
-        !parser_expect(parser, TOKEN_CORCHETE_IZQ, "Se esperaba '[' en el literal del array")) {
-        return NULL;
-    }
-    if (parser_match(parser, TOKEN_CORCHETE_DER)) {
-        parser_error(parser, "Un literal de array no puede estar vacío");
+    if (!parser_expect(parser, TOKEN_IGUAL,
+                       "Se esperaba '=' en la declaración del array")) {
         return NULL;
     }
 
@@ -72,32 +68,99 @@ static ASTNode *parse_array_declaration(Parser *parser) {
         parser_error(parser, "No se pudo crear el literal del array");
         return NULL;
     }
-    while (true) {
-        if (!parser_expect(parser, TOKEN_NUMERO,
-                           "El literal de array solo admite números")) {
+
+    bool zeros_constructor = parser_is_identifier(parser) &&
+        (strcmp(parser->current.lexeme, "ceros") == 0 ||
+         strcmp(parser->current.lexeme, "zeros") == 0);
+    if (zeros_constructor) {
+        array->zeros_constructor = true;
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                           "Se esperaba '(' después de ceros")) {
             ast_destroy(array);
             return NULL;
         }
-        ASTNode *number = ast_create_number(parser->previous.number_value);
-        if (!number) {
+        if (parser_match(parser, TOKEN_PAR_DER)) {
             ast_destroy(array);
-            parser_error(parser, "No se pudo crear un elemento del array");
+            parser_error(parser, "ceros requiere al menos una dimensión");
             return NULL;
         }
-        ast_add_child(array, number);
-        if (parser_match(parser, TOKEN_CORCHETE_DER)) break;
-        if (!parser_expect(parser, TOKEN_COMA,
-                           "Se esperaba ',' entre elementos del array")) {
+        while (true) {
+            if (!parser_expect(parser, TOKEN_NUMERO,
+                               "La dimensión de ceros debe ser numérica")) {
+                ast_destroy(array);
+                return NULL;
+            }
+            double dimension = parser->previous.number_value;
+            if (!isfinite(dimension) || dimension <= 0.0 ||
+                dimension > (double)SIZE_MAX || floor(dimension) != dimension) {
+                ast_destroy(array);
+                parser_error(parser, "Las dimensiones de ceros deben ser enteros positivos");
+                return NULL;
+            }
+            ASTNode *number = ast_create_number(dimension);
+            if (!number || !ast_add_child(array, number)) {
+                ast_destroy(number);
+                ast_destroy(array);
+                parser_error(parser, "No se pudo crear una dimensión de ceros");
+                return NULL;
+            }
+            if (parser_match(parser, TOKEN_PAR_DER)) {
+                parser_advance(parser);
+                break;
+            }
+            if (!parser_expect(parser, TOKEN_COMA,
+                               "Se esperaba ',' entre dimensiones")) {
+                ast_destroy(array);
+                return NULL;
+            }
+            if (parser_match(parser, TOKEN_PAR_DER)) {
+                ast_destroy(array);
+                parser_error(parser, "No se admite una coma final en ceros");
+                return NULL;
+            }
+        }
+    } else {
+        if (!parser_expect(parser, TOKEN_CORCHETE_IZQ,
+                           "Se esperaba '[' en el literal del array")) {
             ast_destroy(array);
             return NULL;
         }
         if (parser_match(parser, TOKEN_CORCHETE_DER)) {
             ast_destroy(array);
-            parser_error(parser, "No se admite coma final en el array");
+            parser_error(parser, "Un literal de array no puede estar vacío");
             return NULL;
         }
+        while (true) {
+            if (!parser_expect(parser, TOKEN_NUMERO,
+                               "El literal de array solo admite números")) {
+                ast_destroy(array);
+                return NULL;
+            }
+            ASTNode *number = ast_create_number(parser->previous.number_value);
+            if (!number || !ast_add_child(array, number)) {
+                ast_destroy(number);
+                ast_destroy(array);
+                parser_error(parser, "No se pudo crear un elemento del array");
+                return NULL;
+            }
+            if (parser_match(parser, TOKEN_CORCHETE_DER)) {
+                parser_advance(parser);
+                break;
+            }
+            if (!parser_expect(parser, TOKEN_COMA,
+                               "Se esperaba ',' entre elementos del array")) {
+                ast_destroy(array);
+                return NULL;
+            }
+            if (parser_match(parser, TOKEN_CORCHETE_DER)) {
+                ast_destroy(array);
+                parser_error(parser, "No se admite coma final en el array");
+                return NULL;
+            }
+        }
     }
-    parser_advance(parser);
+
     if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
                        "Se esperaba ';' después del array")) {
         ast_destroy(array);
@@ -116,7 +179,12 @@ static ASTNode *parse_array_declaration(Parser *parser) {
         parser->has_error = true;
         return NULL;
     }
-    ast_add_child(declaration, array);
+    if (!ast_add_child(declaration, array)) {
+        ast_destroy(declaration);
+        ast_destroy(array);
+        parser_error(parser, "No se pudo conectar el literal al AST");
+        return NULL;
+    }
     return declaration;
 }
 

@@ -64,6 +64,7 @@ typedef struct ASTNode {
     double percentile;
     int axis;
     bool keepdims;
+    bool zeros_constructor;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;
