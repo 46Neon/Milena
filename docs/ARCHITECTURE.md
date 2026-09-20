@@ -65,3 +65,22 @@ make check-source-manifest
 
 Si se añade una fuente C sin decidir su responsabilidad, la validación falla.
 Esto evita que el proyecto acumule módulos sin dueño arquitectónico.
+
+## Puerta de unificación
+
+Mientras la ruta canónica no tenga paridad con las capacidades que se desean
+conservar, el proyecto permanece en fase de unificación. Durante esta fase:
+
+- no se añaden capacidades nuevas al parser textual, a APIs paralelas ni a
+  módulos aislados;
+- una implementación nueva solo puede entrar mediante el lexer, parser, AST,
+  semántica y runtime canónicos;
+- las bibliotecas existentes se adaptan al runtime común o se declaran
+  experimentales y quedan fuera de la superficie oficial;
+- los ejemplos y pruebas nuevas deben ejecutar `milena run` sobre el mismo
+  pipeline que usará el producto final.
+
+La fase de nuevas capacidades comienza únicamente cuando todos los componentes
+conservados tengan una ruta unificada, una API de valores común y pruebas de
+integración. A partir de ese momento, cada capacidad nueva debe ampliar el AST,
+el runtime y la suite común; nunca debe crear otro parser o ejecutor paralelo.
