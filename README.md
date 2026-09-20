@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="milena-cover.jpg" alt="Milena — lenguaje para análisis de datos" width="100%">
-</p>
-
 # 🌿 Milena
 
 ![Banner provisional de Milena](assets/milena-banner.png)
