@@ -395,17 +395,21 @@ ASTNode* parser_parse(Parser *parser) {
         return NULL;
     }
     
-    if (parser->current.type == TOKEN_FUNCION_MEDIANA ||
-        parser->current.type == TOKEN_FUNCION_PERCENTIL) {
-        ASTNode *statistic = parser_parse_statistical_call(parser);
-        if (statistic) ast_add_child(program, statistic);
-        if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
-    } else {
-        ASTNode *analisis = parse_bloque_analisis(parser);
-        if (analisis) ast_add_child(program, analisis);
+    while (!parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+        if (parser->current.type == TOKEN_FUNCION_MEDIANA ||
+            parser->current.type == TOKEN_FUNCION_PERCENTIL) {
+            ASTNode *statistic = parser_parse_statistical_call(parser);
+            if (!statistic) break;
+            ast_add_child(program, statistic);
+            if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+        } else {
+            ASTNode *analisis = parse_bloque_analisis(parser);
+            if (!analisis) break;
+            ast_add_child(program, analisis);
+        }
     }
-    
-    if (!parser_match(parser, TOKEN_EOF)) {
+
+    if (!parser->has_error && !parser_match(parser, TOKEN_EOF)) {
         parser_error(parser, "Se esperaba fin de archivo");
     }
     
