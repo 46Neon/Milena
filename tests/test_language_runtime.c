@@ -129,7 +129,7 @@ int main(void) {
         "  variable precio numerica\n"
         "  variable cantidad numerica\n"
         "  .transformar dataset { #total(\"precio * cantidad\") }\n"
-        "  .resumir dataset { #suma(\"total\") #media(\"total\") #conteo(\"total\") }\n"
+        "  .resumir dataset { #suma(\"total\") #media(\"total\") #conteo(\"total\") #varianza(\"total\") #desviacion_estandar(\"total\") #mediana(\"total\") }\n"
         "  .exportar { (\"test-language-runtime-summary.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -143,7 +143,9 @@ int main(void) {
     summary_text[summary_size] = '\0';
     fclose(summary_json);
     CHECK(strstr(summary_text, "\"filas\": 1") != NULL &&
-          strstr(summary_text, "total_mean") != NULL,
+          strstr(summary_text, "total_mean") != NULL &&
+          strstr(summary_text, "total_varianza") != NULL &&
+          strstr(summary_text, "total_mediana") != NULL,
           "El bloque resumir no usó la tabla canónica");
     remove(summary_json_path);
     remove(csv_path);

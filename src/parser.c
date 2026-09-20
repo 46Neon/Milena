@@ -726,7 +726,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
                             parser_match(parser, TOKEN_FUNCION_MEDIA) ||
                             parser_match(parser, TOKEN_FUNCION_MINIMO) ||
-                            parser_match(parser, TOKEN_FUNCION_MAXIMO)) {
+                            parser_match(parser, TOKEN_FUNCION_MAXIMO) ||
+                            parser_match(parser, TOKEN_FUNCION_VARIANZA) ||
+                            parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
+                            parser_match(parser, TOKEN_FUNCION_MEDIANA)) {
                             metric = parser->current.lexeme;
                         } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
                                    strcmp(parser->current.lexeme, "conteo") == 0) {

@@ -2683,3 +2683,78 @@ MilenaStatus milena_table_filter_numeric(MilenaTable *out,
     milena_array_release(&mask);
     return status;
 }
+
+
+static int compare_table_doubles(const void *left, const void *right) {
+    const double a = *(const double *)left;
+    const double b = *(const double *)right;
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+MilenaStatus milena_table_add_statistic(MilenaTable *out,
+                                        const MilenaTable *source,
+                                        const char *value_column,
+                                        const char *output_column,
+                                        MilenaTableStatistic statistic,
+                                        MilenaError *error) {
+    if (!out || !source || !value_column || !output_column || out == source ||
+        statistic < MILENA_STAT_VARIANCE || statistic > MILENA_STAT_MEDIAN) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Estadística de tabla inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(source, error);
+    if (status != MILENA_OK) return status;
+    status = milena_table_validate(out, error);
+    if (status != MILENA_OK) return status;
+    if (out->row_count != 1) {
+        table_error(error, MILENA_ERR_ARGUMENT,
+                    "La estadística global requiere una tabla de una fila");
+        return MILENA_ERR_ARGUMENT;
+    }
+    int column = milena_table_column_index(source, value_column);
+    if (column < 0 || milena_table_column(source, (size_t)column)->type != MILENA_COLUMN_ARRAY) {
+        table_error(error, MILENA_ERR_TYPE, "La estadística requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = source->row_count == 0 ? NULL :
+        (double *)malloc(source->row_count * sizeof(*values));
+    if (source->row_count != 0 && !values) {
+        table_error(error, MILENA_ERR_MEMORY, "Sin memoria para estadística");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    double mean = 0.0, m2 = 0.0;
+    for (size_t row = 0; row < source->row_count; row++) {
+        if (milena_table_is_null(source, (size_t)column, row)) continue;
+        double value = 0.0;
+        status = table_numeric_cell(source, (size_t)column, row, &value, error);
+        if (status != MILENA_OK) break;
+        values[count++] = value;
+        double delta = value - mean;
+        mean += delta / (double)count;
+        m2 += delta * (value - mean);
+    }
+    double result = 0.0;
+    if (status == MILENA_OK && count > 0) {
+        if (statistic == MILENA_STAT_VARIANCE) result = m2 / (double)count;
+        else if (statistic == MILENA_STAT_STDDEV) result = sqrt(m2 / (double)count);
+        else {
+            qsort(values, count, sizeof(*values), compare_table_doubles);
+            size_t middle = count / 2;
+            result = count % 2 ? values[middle] :
+                (values[middle - 1] + values[middle]) / 2.0;
+        }
+    }
+    bool valid = status == MILENA_OK && count > 0;
+    MilenaArray array;
+    milena_array_init(&array);
+    size_t shape[1] = {1};
+    if (status == MILENA_OK) {
+        status = milena_array_from_f64(&array, 1, shape, &result, error);
+        if (status == MILENA_OK) status = milena_table_add_column_copy(
+            out, output_column, &array, &valid, error);
+    }
+    milena_array_release(&array);
+    free(values);
+    return status;
+}

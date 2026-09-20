@@ -734,9 +734,12 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (block->type == AST_BLOQUE_RESUMIR) {
                 MilenaAggregateSpec specifications[16];
                 MilenaAggregateOp operations[16];
+                MilenaTableStatistic statistic_operations[16];
+                bool advanced[16] = {false};
                 char value_columns[16][128];
                 char metrics[16][32];
                 size_t summary_count = block->child_count > 16 ? 16 : block->child_count;
+                size_t aggregate_count = 0;
                 bool valid_specifications = summary_count > 0;
                 for (size_t j = 0; valid_specifications && j < summary_count; j++) {
                     const ASTNode *summary = block->children[j];
@@ -747,33 +750,59 @@ MilenaStatus milena_run_dataset_program(const char *source,
                         valid_specifications = false;
                         break;
                     }
-                    if (strcmp(metrics[j], "suma") == 0) operations[j] = MILENA_AGG_SUM;
-                    else if (strcmp(metrics[j], "media") == 0) operations[j] = MILENA_AGG_MEAN;
-                    else if (strcmp(metrics[j], "minimo") == 0) operations[j] = MILENA_AGG_MIN;
-                    else if (strcmp(metrics[j], "maximo") == 0) operations[j] = MILENA_AGG_MAX;
-                    else if (strcmp(metrics[j], "conteo") == 0) operations[j] = MILENA_AGG_COUNT;
-                    else {
+                    if (strcmp(metrics[j], "suma") == 0) operations[aggregate_count] = MILENA_AGG_SUM;
+                    else if (strcmp(metrics[j], "media") == 0) operations[aggregate_count] = MILENA_AGG_MEAN;
+                    else if (strcmp(metrics[j], "minimo") == 0) operations[aggregate_count] = MILENA_AGG_MIN;
+                    else if (strcmp(metrics[j], "maximo") == 0) operations[aggregate_count] = MILENA_AGG_MAX;
+                    else if (strcmp(metrics[j], "conteo") == 0) operations[aggregate_count] = MILENA_AGG_COUNT;
+                    else if (strcmp(metrics[j], "varianza") == 0) {
+                        advanced[j] = true; statistic_operations[j] = MILENA_STAT_VARIANCE;
+                        continue;
+                    } else if (strcmp(metrics[j], "desviacion_estandar") == 0) {
+                        advanced[j] = true; statistic_operations[j] = MILENA_STAT_STDDEV;
+                        continue;
+                    } else if (strcmp(metrics[j], "mediana") == 0) {
+                        advanced[j] = true; statistic_operations[j] = MILENA_STAT_MEDIAN;
+                        continue;
+                    } else {
                         runtime_error(error, MILENA_ERR_UNSUPPORTED,
                                       "Métrica de resumen no soportada");
                         status = MILENA_ERR_UNSUPPORTED;
                         valid_specifications = false;
                         break;
                     }
-                    specifications[j].value_column = value_columns[j];
-                    specifications[j].operation = operations[j];
-                    specifications[j].output_name = NULL;
+                    specifications[aggregate_count].value_column = value_columns[j];
+                    specifications[aggregate_count].operation = operations[aggregate_count];
+                    specifications[aggregate_count].output_name = NULL;
+                    aggregate_count++;
                 }
                 if (!valid_specifications && status == MILENA_OK) {
                     runtime_error(error, MILENA_ERR_PARSE,
                                   "El resumen requiere una o más métricas");
                     status = MILENA_ERR_PARSE;
                 }
+                MilenaTable source_snapshot;
+                milena_table_init(&source_snapshot);
+                bool has_advanced = false;
+                for (size_t j = 0; j < summary_count; j++) has_advanced |= advanced[j];
+                if (status == MILENA_OK && has_advanced) {
+                    status = milena_table_clone(&source_snapshot, &canonical_table, error);
+                }
                 if (status == MILENA_OK) {
                     MilenaTable summarized;
                     milena_table_init(&summarized);
                     status = milena_table_summarize(&summarized, &canonical_table,
-                                                   specifications, summary_count,
+                                                   specifications, aggregate_count,
                                                    error);
+                    for (size_t j = 0; status == MILENA_OK && j < summary_count; j++) {
+                        if (!advanced[j]) continue;
+                        char statistic_name[160];
+                        (void)snprintf(statistic_name, sizeof(statistic_name),
+                                       "%s_%s", value_columns[j], metrics[j]);
+                        status = milena_table_add_statistic(
+                            &summarized, &source_snapshot, value_columns[j],
+                            statistic_name, statistic_operations[j], error);
+                    }
                     if (status == MILENA_OK) {
                         milena_table_swap(&canonical_table, &summarized);
                         for (size_t j = 0; j < summary_count; j++) {
@@ -788,6 +817,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     }
                     milena_table_destroy(&summarized);
                 }
+                milena_table_destroy(&source_snapshot);
             } else if (block->type == AST_BLOQUE_FILTRAR) {
                 const ASTNode *condition = block->child_count > 0 ? block->children[0] : NULL;
                 char column[128] = {0}, operator_text[3] = {0};

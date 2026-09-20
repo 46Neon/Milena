@@ -54,6 +54,12 @@ typedef enum {
 } MilenaAggregateOp;
 
 typedef enum {
+    MILENA_STAT_VARIANCE = 0,
+    MILENA_STAT_STDDEV,
+    MILENA_STAT_MEDIAN
+} MilenaTableStatistic;
+
+typedef enum {
     MILENA_JOIN_INNER = 0,
     MILENA_JOIN_LEFT,
     MILENA_JOIN_RIGHT,
@@ -216,6 +222,12 @@ MilenaStatus milena_table_summarize(MilenaTable *out,
                                       const MilenaAggregateSpec *aggregates,
                                       size_t aggregate_count,
                                       MilenaError *error);
+MilenaStatus milena_table_add_statistic(MilenaTable *out,
+                                        const MilenaTable *source,
+                                        const char *value_column,
+                                        const char *output_column,
+                                        MilenaTableStatistic statistic,
+                                        MilenaError *error);
 MilenaStatus milena_table_group_by(MilenaTable *out,
                                    const MilenaTable *source,
                                    const char *const *key_columns,
