@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -euxo pipefail
 cd "$(dirname "$0")/.."
 project_dir=$(pwd)
 tmp_dir=$(mktemp -d)
