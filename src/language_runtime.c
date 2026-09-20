@@ -842,6 +842,39 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     milena_table_destroy(&summarized);
                 }
                 milena_table_destroy(&source_snapshot);
+            } else if (block->type == AST_BLOQUE_SELECCIONAR) {
+                const ASTNode *columns_node = block->child_count > 0 ? block->children[0] : NULL;
+                if (!columns_node || !columns_node->value) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "Seleccionar requiere #columnas(\"...\")");
+                    status = MILENA_ERR_PARSE;
+                } else {
+                    char *list = milena_strdup(columns_node->value);
+                    const char *names[32];
+                    size_t name_count = 0;
+                    if (!list) status = MILENA_ERR_MEMORY;
+                    else {
+                        char *item = strtok(list, ",");
+                        while (item && name_count < 32) {
+                            while (*item == ' ') item++;
+                            names[name_count++] = item;
+                            item = strtok(NULL, ",");
+                        }
+                        if (name_count == 0 || item != NULL) {
+                            runtime_error(error, MILENA_ERR_PARSE,
+                                          "Lista de columnas inválida");
+                            status = MILENA_ERR_PARSE;
+                        } else {
+                            MilenaTable selected;
+                            milena_table_init(&selected);
+                            status = milena_table_select_columns(
+                                &selected, &canonical_table, names, name_count, error);
+                            if (status == MILENA_OK) milena_table_swap(&canonical_table, &selected);
+                            milena_table_destroy(&selected);
+                        }
+                        free(list);
+                    }
+                }
             } else if (block->type == AST_BLOQUE_FILTRAR) {
                 const ASTNode *condition = block->child_count > 0 ? block->children[0] : NULL;
                 char column[128] = {0}, operator_text[3] = {0};

@@ -91,6 +91,7 @@ int main(void) {
         "  .transformar dataset { #total(\"precio * cantidad\") #periodo(\"mes de fecha\") }\n"
         "  .ventas_validas { dataset, (filtrar) #condicion(\"total > 0\") }\n"
         "  .agrupar dataset { #por(\"ciudad\") #suma(\"total\") #media(\"total\") #conteo(\"total\") }\n"
+        "  .seleccionar { #columnas(\"ciudad,total_suma\") }\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -110,7 +111,8 @@ int main(void) {
           "La extracción de periodo no llegó al reporte unificado");
     CHECK(strstr(json_text, "\"filas\": 2") != NULL,
           "La limpieza de nulos no se ejecutó sobre la tabla canónica");
-    CHECK(strstr(json_text, "total_suma") != NULL &&
+    CHECK(strstr(json_text, "\"columnas\": 2") != NULL &&
+          strstr(json_text, "total_suma") != NULL &&
           strstr(json_text, "total_mean") != NULL &&
           strstr(json_text, "total_count") != NULL,
           "Las agregaciones no llegaron al reporte unificado");

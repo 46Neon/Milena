@@ -789,10 +789,15 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 /* Los bloques nombrados de análisis conservan la condición
                  * en el AST; no se ejecutan mediante clasificación textual. */
                 if (parser_is_identifier(parser)) {
+                    char named_block[MAX_TOKEN_LEN];
+                    strncpy(named_block, parser->current.lexeme, sizeof(named_block) - 1);
+                    named_block[sizeof(named_block) - 1] = '\0';
+                    bool selecting = strcmp(named_block, "seleccionar") == 0;
                     parser_advance(parser);
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
-                        ASTNode *filtrar = ast_create(AST_BLOQUE_FILTRAR);
+                        ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR
+                                                                  : AST_BLOQUE_FILTRAR);
                         while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                                !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                             if (parser_match(parser, TOKEN_KW_DATASET) ||
@@ -804,7 +809,19 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de filtrar");
                             } else if (parser_match(parser, TOKEN_NUMERAL)) {
                                 parser_advance(parser);
-                                if (parser_match(parser, TOKEN_KW_CONDICION)) {
+                                if (selecting && parser_is_identifier(parser) &&
+                                    strcmp(parser->current.lexeme, "columnas") == 0) {
+                                    parser_advance(parser);
+                                    if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                        if (parser_expect(parser, TOKEN_CADENA, "Se esperaba lista de columnas")) {
+                                            ASTNode *columns = ast_create_leaf(
+                                                AST_COMANDO_COLUMNAS,
+                                                parser->previous.lexeme);
+                                            if (columns && filtrar) ast_add_child(filtrar, columns);
+                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de columnas");
+                                        }
+                                    }
+                                } else if (parser_match(parser, TOKEN_KW_CONDICION)) {
                                     parser_advance(parser);
                                     if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                         if (parser_expect(parser, TOKEN_CADENA, "Se esperaba condición")) {
