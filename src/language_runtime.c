@@ -7,6 +7,7 @@
 #include "table.h"
 #include "sst_advanced.h"
 #include "sst_histogram.h"
+#include "sst_normality.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -605,6 +606,61 @@ static MilenaStatus runtime_write_sst_histogram(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_normality(const MilenaTable *table,
+                                                    const char *column_name,
+                                                    const char *output_path,
+                                                    MilenaError *error) {
+    int column = milena_table_column_index(table, column_name);
+    const MilenaTableColumn *data = column < 0 ? NULL :
+        milena_table_column(table, (size_t)column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "La normalidad SST requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = table->row_count == 0 ? NULL :
+        (double *)malloc(table->row_count * sizeof(*values));
+    if (table->row_count && !values) {
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para normalidad SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)column, row)) continue;
+        const void *raw = NULL;
+        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
+        switch (data->values.dtype) {
+            case MILENA_DTYPE_INT64: values[count++] = (double)*(const int64_t *)raw; break;
+            case MILENA_DTYPE_UINT64: values[count++] = (double)*(const uint64_t *)raw; break;
+            case MILENA_DTYPE_FLOAT32: values[count++] = (double)*(const float *)raw; break;
+            case MILENA_DTYPE_FLOAT64: values[count++] = *(const double *)raw; break;
+            default: values[count++] = 0.0; break;
+        }
+    }
+    SstNormalityResult result;
+    MilenaStatus status = sst_normality_test(values, count, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.normalidad.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"normalidad\",\"variable\":\"");
+                fputs(column_name, out);
+                fprintf(out, "\",\"metodo\":\""); fputs(result.method, out);
+                fprintf(out, "\",\"estadistico\":%.10g,\"p\":%.10g,\"normal\":%s,\"aproximado\":%s}\n",
+                        result.statistic, result.p_value,
+                        result.normal ? "true" : "false",
+                        result.approximate ? "true" : "false");
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    free(values);
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1090,6 +1146,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
                                                    output_path, error);
             } else if (strcmp(node->type_name, "histograma") == 0) {
                 status = runtime_write_sst_histogram(&canonical_table, node->value,
+                                                     output_path, error);
+            } else if (strcmp(node->type_name, "normalidad") == 0) {
+                status = runtime_write_sst_normality(&canonical_table, node->value,
                                                      output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");

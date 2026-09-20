@@ -573,7 +573,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 ast_add_child(node, ast_create(AST_DECLARACION_ESTADISTICA));
             } else if (parser_is_identifier(parser) &&
                        (strcmp(parser->current.lexeme, "perfil_avanzado") == 0 ||
-                        strcmp(parser->current.lexeme, "histograma") == 0)) {
+                        strcmp(parser->current.lexeme, "histograma") == 0 ||
+                        strcmp(parser->current.lexeme, "normalidad") == 0)) {
                 char command_name[MAX_TOKEN_LEN];
                 strncpy(command_name, parser->current.lexeme, sizeof(command_name) - 1);
                 command_name[sizeof(command_name) - 1] = '\0';
