@@ -468,8 +468,9 @@ static MilenaStatus dataset_runtime_clean(const ASTNode *block,
             (void)dataset;
         } else if (command->type == AST_COMANDO_DUPLICADOS &&
                    strcmp(command->value, "eliminar") == 0) {
-            MilenaStatus status = dataset_remove_duplicates(dataset, error);
-            if (status != MILENA_OK) return status;
+            /* Los duplicados se eliminan sobre MilenaTable junto con los
+             * demás comandos de limpieza del pipeline canónico. */
+            (void)dataset;
         } else if (command->type == AST_COMANDO_NULOS ||
                    command->type == AST_COMANDO_DUPLICADOS) {
             runtime_error(error, MILENA_ERR_UNSUPPORTED,
