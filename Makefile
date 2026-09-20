@@ -13,7 +13,7 @@ OBJECTS = $(SOURCES:.c=.o)
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions debug
+.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions check-source-manifest debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -113,6 +113,9 @@ SST_TEST_SOURCES = src/common.c src/sst_dates.c src/sst_model.c \
                    src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
                    src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c
 
+check-source-manifest:
+	python3 scripts/check_source_manifest.py
+
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS) $(FUNCTION_OBJECTS)
@@ -131,7 +134,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance \
+test: check-source-manifest $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance \
       test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics \
       test-parser-variables test-functions
 	./tests/run_tests.sh

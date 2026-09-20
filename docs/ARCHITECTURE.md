@@ -56,3 +56,12 @@ completa del lenguaje.
 - La VM, el bytecode y el GC quedan pospuestos hasta que el intérprete basado
   en AST tenga paridad funcional.
 - Cada cambio de integración debe añadir o actualizar una prueba end-to-end.
+
+La clasificación de fuentes se comprueba con:
+
+```bash
+make check-source-manifest
+```
+
+Si se añade una fuente C sin decidir su responsabilidad, la validación falla.
+Esto evita que el proyecto acumule módulos sin dueño arquitectónico.
