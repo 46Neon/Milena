@@ -2220,9 +2220,9 @@ MilenaStatus milena_table_from_dataset(MilenaTable *out,
             {
                 /* rows are row-major; build a temporary column view without
                  * touching rows[0] when an empty dataset is supplied. */
-                const char **column_values = (const char **)calloc(
-                    dataset->row_count, sizeof(*column_values));
-                if (!column_values) {
+                const char **column_values = dataset->row_count == 0 ? NULL :
+                    (const char **)calloc(dataset->row_count, sizeof(*column_values));
+                if (dataset->row_count != 0 && !column_values) {
                     free(validity);
                     table_error(error, MILENA_ERR_MEMORY, "Sin memoria para columna textual");
                     status = MILENA_ERR_MEMORY;
