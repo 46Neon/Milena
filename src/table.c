@@ -48,8 +48,7 @@ static void column_destroy(MilenaTableColumn *column) {
 
 void milena_table_init(MilenaTable *table) {
     if (table == NULL) return;
-    /* Initialization must be safe for an uninitialized automatic object.
-     * Callers must destroy a live table before reinitializing it. */
+    if (table_has_magic(table)) milena_table_destroy(table);
     memset(table, 0, sizeof(*table));
     table->_table_magic = MILENA_TABLE_MAGIC;
 }
