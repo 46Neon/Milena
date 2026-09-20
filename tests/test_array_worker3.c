@@ -455,6 +455,230 @@ static void test_percentiles_and_arg_extrema(void) {
     milena_array_release(&reverse); milena_array_release(&source);
 }
 
+
+static void test_mixed_i64_u64_boundaries(void) {
+    MilenaError error;
+    milena_error_clear(&error);
+    const size_t shape[] = {4};
+    const int64_t signed_values[] = {
+        INT64_C(9007199254740991), INT64_C(9007199254740992),
+        INT64_MAX, -1
+    };
+    const uint64_t unsigned_values[] = {
+        UINT64_C(9007199254740992), UINT64_C(9007199254740993),
+        UINT64_C(1) << 63, UINT64_MAX
+    };
+    MilenaArray signed_array = {0}, unsigned_array = {0};
+    MilenaArray add = {0}, subtract = {0}, divide = {0};
+    MilenaArray equal = {0}, less = {0}, greater = {0}, reverse_greater = {0};
+    from_raw(&signed_array, MILENA_DTYPE_INT64, 1, shape,
+             signed_values, &error);
+    from_raw(&unsigned_array, MILENA_DTYPE_UINT64, 1, shape,
+             unsigned_values, &error);
+    OK(milena_array_add(&add, &signed_array, &unsigned_array, &error));
+    OK(milena_array_subtract(&subtract, &signed_array, &unsigned_array,
+                             &error));
+    OK(milena_array_divide(&divide, &signed_array, &unsigned_array, &error));
+    OK(milena_array_equal(&equal, &signed_array, &unsigned_array, &error));
+    OK(milena_array_less(&less, &signed_array, &unsigned_array, &error));
+    OK(milena_array_greater(&greater, &signed_array, &unsigned_array, &error));
+    OK(milena_array_greater(&reverse_greater, &unsigned_array, &signed_array,
+                            &error));
+    const double *add_values = (const double *)milena_array_const_data(&add);
+    const double *sub_values =
+        (const double *)milena_array_const_data(&subtract);
+    const double *div_values =
+        (const double *)milena_array_const_data(&divide);
+    const bool *equal_values = (const bool *)milena_array_const_data(&equal);
+    const bool *less_values = (const bool *)milena_array_const_data(&less);
+    const bool *greater_values =
+        (const bool *)milena_array_const_data(&greater);
+    const bool *reverse_values =
+        (const bool *)milena_array_const_data(&reverse_greater);
+    for (size_t index = 0; index < 4; ++index) {
+        double a = (double)signed_values[index];
+        double b = (double)unsigned_values[index];
+        assert(add_values[index] == a + b);
+        assert(sub_values[index] == a - b);
+        assert(div_values[index] == a / b);
+        assert(!equal_values[index]);
+        assert(less_values[index]);
+        assert(!greater_values[index]);
+        assert(reverse_values[index]);
+    }
+    /* Exact integral comparison must not collapse 2^53 and 2^53+1. */
+    assert(!equal_values[1] && less_values[1]);
+    /* INT64_MAX is strictly below 2^63 despite both rounding to that f64. */
+    assert(!equal_values[2] && less_values[2]);
+
+    milena_array_release(&reverse_greater); milena_array_release(&greater);
+    milena_array_release(&less); milena_array_release(&equal);
+    milena_array_release(&divide); milena_array_release(&subtract);
+    milena_array_release(&add); milena_array_release(&unsigned_array);
+    milena_array_release(&signed_array);
+}
+
+static void test_extra_kernel_edges(void) {
+    MilenaError error;
+    milena_error_clear(&error);
+    const size_t one[] = {1};
+    const int64_t maximum[] = {INT64_MAX}, two[] = {2};
+    const int64_t minimum[] = {INT64_MIN}, positive_one[] = {1};
+    MilenaArray max_array = {0}, two_array = {0}, min_array = {0};
+    MilenaArray one_array = {0}, result = {0};
+    from_raw(&max_array, MILENA_DTYPE_INT64, 1, one, maximum, &error);
+    from_raw(&two_array, MILENA_DTYPE_INT64, 1, one, two, &error);
+    from_raw(&min_array, MILENA_DTYPE_INT64, 1, one, minimum, &error);
+    from_raw(&one_array, MILENA_DTYPE_INT64, 1, one, positive_one, &error);
+    EXPECT(milena_array_multiply(&result, &max_array, &two_array, &error),
+           MILENA_ERR_OVERFLOW);
+    EXPECT(milena_array_subtract(&result, &min_array, &one_array, &error),
+           MILENA_ERR_OVERFLOW);
+
+    const double numerator[] = {1.0};
+    const double positive_zero[] = {0.0};
+    const double negative_zero[] = {-0.0};
+    MilenaArray n = {0}, pz = {0}, nz = {0};
+    from_raw(&n, MILENA_DTYPE_FLOAT64, 1, one, numerator, &error);
+    from_raw(&pz, MILENA_DTYPE_FLOAT64, 1, one, positive_zero, &error);
+    from_raw(&nz, MILENA_DTYPE_FLOAT64, 1, one, negative_zero, &error);
+    EXPECT(milena_array_divide(&result, &n, &pz, &error),
+           MILENA_ERR_ARGUMENT);
+    EXPECT(milena_array_divide(&result, &n, &nz, &error),
+           MILENA_ERR_ARGUMENT);
+
+    const size_t left_shape[] = {2, 3};
+    const size_t right_shape[] = {2, 2};
+    MilenaArray left = {0}, right = {0};
+    OK(milena_array_zeros(&left, MILENA_DTYPE_FLOAT64, 2, left_shape, &error));
+    OK(milena_array_zeros(&right, MILENA_DTYPE_FLOAT64, 2, right_shape, &error));
+    EXPECT(milena_array_add(&result, &left, &right, &error),
+           MILENA_ERR_ARGUMENT);
+
+    milena_array_release(&right); milena_array_release(&left);
+    milena_array_release(&nz); milena_array_release(&pz);
+    milena_array_release(&n); milena_array_release(&result);
+    milena_array_release(&one_array); milena_array_release(&min_array);
+    milena_array_release(&two_array); milena_array_release(&max_array);
+}
+
+static void test_portable_large_statistics(void) {
+    MilenaError error;
+    milena_error_clear(&error);
+    const size_t pair[] = {2};
+    const double equal_maxima[] = {DBL_MAX, DBL_MAX};
+    MilenaArray equal = {0}, mean = {0}, variance = {0}, deviation = {0};
+    from_raw(&equal, MILENA_DTYPE_FLOAT64, 1, pair, equal_maxima, &error);
+    OK(milena_array_mean(&mean, &equal, &error));
+    OK(milena_array_variance(&variance, &equal, &error));
+    OK(milena_array_std(&deviation, &equal, &error));
+    assert(scalar_f64(&mean) == DBL_MAX);
+    assert(scalar_f64(&variance) == 0.0);
+    assert(scalar_f64(&deviation) == 0.0);
+
+    const double opposite[] = {DBL_MAX, -DBL_MAX};
+    MilenaArray spread = {0};
+    from_raw(&spread, MILENA_DTYPE_FLOAT64, 1, pair, opposite, &error);
+    OK(milena_array_mean(&mean, &spread, &error));
+    assert(scalar_f64(&mean) == 0.0);
+    EXPECT(milena_array_variance(&variance, &spread, &error),
+           MILENA_ERR_OVERFLOW);
+    OK(milena_array_std(&deviation, &spread, &error));
+    assert(scalar_f64(&deviation) == DBL_MAX);
+
+    const double same_infinities[] = {INFINITY, INFINITY};
+    MilenaArray infinity = {0};
+    from_raw(&infinity, MILENA_DTYPE_FLOAT64, 1, pair,
+             same_infinities, &error);
+    OK(milena_array_mean(&mean, &infinity, &error));
+    OK(milena_array_variance(&variance, &infinity, &error));
+    assert(isinf(scalar_f64(&mean)) && scalar_f64(&mean) > 0.0);
+    assert(isnan(scalar_f64(&variance)));
+
+    const double mixed_infinities[] = {INFINITY, -INFINITY};
+    MilenaArray mixed = {0};
+    from_raw(&mixed, MILENA_DTYPE_FLOAT64, 1, pair,
+             mixed_infinities, &error);
+    OK(milena_array_mean(&mean, &mixed, &error));
+    assert(isnan(scalar_f64(&mean)));
+
+    const size_t empty_shape[] = {0, 3};
+    MilenaArray empty = {0}, empty_output = {0}, global_keepdims = {0};
+    OK(milena_array_zeros(&empty, MILENA_DTYPE_FLOAT64, 2,
+                          empty_shape, &error));
+    OK(milena_array_mean_axis(&empty_output, &empty, 1, false, &error));
+    assert(empty_output.ndim == 1 && empty_output.shape[0] == 0 &&
+           empty_output.size == 0);
+    EXPECT(milena_array_mean_axis(&mean, &equal, 1, false, &error),
+           MILENA_ERR_ARGUMENT);
+    EXPECT(milena_array_mean_axis(&mean, &equal, -3, false, &error),
+           MILENA_ERR_ARGUMENT);
+    OK(milena_array_mean_axis(&global_keepdims, &equal, -1, true, &error));
+    assert(global_keepdims.ndim == 1 && global_keepdims.shape[0] == 1 &&
+           scalar_f64(&global_keepdims) == DBL_MAX);
+
+    milena_array_release(&global_keepdims); milena_array_release(&empty_output);
+    milena_array_release(&empty); milena_array_release(&mixed);
+    milena_array_release(&infinity); milena_array_release(&spread);
+    milena_array_release(&deviation); milena_array_release(&variance);
+    milena_array_release(&mean); milena_array_release(&equal);
+}
+
+static void test_percentile_extremes_and_ties(void) {
+    MilenaError error;
+    milena_error_clear(&error);
+    const size_t pair[] = {2};
+    const double extremes[] = {-DBL_MAX, DBL_MAX};
+    MilenaArray source = {0}, result = {0};
+    from_raw(&source, MILENA_DTYPE_FLOAT64, 1, pair, extremes, &error);
+    OK(milena_array_percentile(&result, &source, 0.0, &error));
+    assert(scalar_f64(&result) == -DBL_MAX);
+    OK(milena_array_percentile(&result, &source, 50.0, &error));
+    assert(scalar_f64(&result) == 0.0);
+    OK(milena_array_percentile(&result, &source, 100.0, &error));
+    assert(scalar_f64(&result) == DBL_MAX);
+
+    const double positive[] = {DBL_MAX / 2.0, DBL_MAX};
+    MilenaArray same_sign = {0};
+    from_raw(&same_sign, MILENA_DTYPE_FLOAT64, 1, pair, positive, &error);
+    OK(milena_array_percentile(&result, &same_sign, 50.0, &error));
+    assert(isfinite(scalar_f64(&result)) &&
+           scalar_f64(&result) == DBL_MAX * 0.75);
+
+    const double left_infinite[] = {-INFINITY, 1.0};
+    const double right_infinite[] = {1.0, INFINITY};
+    const double both_infinite[] = {-INFINITY, INFINITY};
+    MilenaArray left = {0}, right = {0}, both = {0};
+    from_raw(&left, MILENA_DTYPE_FLOAT64, 1, pair, left_infinite, &error);
+    from_raw(&right, MILENA_DTYPE_FLOAT64, 1, pair, right_infinite, &error);
+    from_raw(&both, MILENA_DTYPE_FLOAT64, 1, pair, both_infinite, &error);
+    OK(milena_array_percentile(&result, &left, 50.0, &error));
+    assert(isinf(scalar_f64(&result)) && scalar_f64(&result) < 0.0);
+    OK(milena_array_percentile(&result, &right, 50.0, &error));
+    assert(isinf(scalar_f64(&result)) && scalar_f64(&result) > 0.0);
+    OK(milena_array_percentile(&result, &both, 50.0, &error));
+    assert(isnan(scalar_f64(&result)));
+    OK(milena_array_percentile(&result, &both, 0.0, &error));
+    assert(isinf(scalar_f64(&result)) && scalar_f64(&result) < 0.0);
+    OK(milena_array_percentile(&result, &both, 100.0, &error));
+    assert(isinf(scalar_f64(&result)) && scalar_f64(&result) > 0.0);
+
+    const size_t four[] = {4};
+    const int64_t ties[] = {9, 1, 1, 9};
+    MilenaArray tie_array = {0}, argmin = {0}, argmax = {0};
+    from_raw(&tie_array, MILENA_DTYPE_INT64, 1, four, ties, &error);
+    OK(milena_array_argmin(&argmin, &tie_array, &error));
+    OK(milena_array_argmax(&argmax, &tie_array, &error));
+    assert(scalar_i64(&argmin) == 1);
+    assert(scalar_i64(&argmax) == 0);
+
+    milena_array_release(&argmax); milena_array_release(&argmin);
+    milena_array_release(&tie_array); milena_array_release(&both);
+    milena_array_release(&right); milena_array_release(&left);
+    milena_array_release(&same_sign); milena_array_release(&result);
+    milena_array_release(&source);
+}
+
 int main(void) {
     test_promotion_matrix();
     test_casts_and_atomic_failure();
@@ -463,6 +687,10 @@ int main(void) {
     test_comparisons_and_predicates();
     test_reductions_and_stability();
     test_percentiles_and_arg_extrema();
+    test_mixed_i64_u64_boundaries();
+    test_extra_kernel_edges();
+    test_portable_large_statistics();
+    test_percentile_extremes_and_ties();
     puts("OK: worker3 dtype, kernels, broadcasting and reductions");
     return 0;
 }

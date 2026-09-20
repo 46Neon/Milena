@@ -1,0 +1,63 @@
+name: Array C17 CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - worker2-array-memory-safety
+      - worker3-dtypes-kernels-reductions
+
+permissions:
+  contents: read
+
+jobs:
+  linux-c17:
+    name: Linux C17 (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the complete inherited, Worker 2 and Worker 3 suite
+        run: make clean && make CC=${{ matrix.compiler }} test
+
+  sanitizers:
+    name: Linux ASan + UBSan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run all tests under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          make clean
+          make CC=clang \
+            CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
+            LDFLAGS='-fsanitize=address,undefined -lm' test
+
+  windows-c17:
+    name: Windows C17 array tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM
+        shell: pwsh
+        run: choco install llvm --no-progress -y
+      - name: Build product and portability smoke test
+        shell: pwsh
+        run: ./packaging/windows/build.ps1
+      - name: Compile and run inherited, Worker 2 and Worker 3 array tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tests = @('test_array', 'test_array_worker2', 'test_array_worker3')
+          foreach ($test in $tests) {
+            & clang -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude "tests/$test.c" src/array.c src/common.c -o "tests/$test.exe"
+            if ($LASTEXITCODE -ne 0) { throw "Compilation failed: $test" }
+            & "./tests/$test.exe"
+            if ($LASTEXITCODE -ne 0) { throw "Test failed: $test" }
+          }

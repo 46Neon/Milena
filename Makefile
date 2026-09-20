@@ -9,7 +9,9 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
 OBJECTS = $(SOURCES:.c=.o)
 TARGET = milena
 
-.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 test-table test-finance test-language-array test-parser-array debug
+.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 \
+        test-forest test-table test-finance test-language-array \
+        test-parser-array debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -89,8 +91,12 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-table test-finance
+test: $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-table test-finance test-language-array test-parser-array
 	./tests/run_tests.sh
 
 clean:
-	rm -f $(OBJECTS) $(TARGET) tests/test_sst_modules tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_table reporte.json resultado.json
+	rm -f $(OBJECTS) $(TARGET) \
+		tests/test_sst_modules tests/test_array tests/test_array_worker2 \
+		tests/test_array_worker3 tests/test_forest tests/test_table \
+		tests/test_finance tests/test_language_array tests/test_parser_array \
+		reporte.json resultado.json

@@ -1306,6 +1306,23 @@ static long double numeric_as_long_double(NumericValue value) {
     return value.as.boolean ? 1.0L : 0.0L;
 }
 
+/* Arithmetic in a floating result dtype must be evaluated in that dtype.
+ * Converting through long double made int64/uint64 mixes depend on whether
+ * long double is binary64 (Windows) or extended precision (x86 Linux). */
+static float numeric_as_f32(NumericValue value) {
+    if (value.kind == NUMERIC_FLOAT) return (float)value.as.float_value;
+    if (value.kind == NUMERIC_SIGNED) return (float)value.as.signed_value;
+    if (value.kind == NUMERIC_UNSIGNED) return (float)value.as.unsigned_value;
+    return value.as.boolean ? 1.0f : 0.0f;
+}
+
+static double numeric_as_f64(NumericValue value) {
+    if (value.kind == NUMERIC_FLOAT) return (double)value.as.float_value;
+    if (value.kind == NUMERIC_SIGNED) return (double)value.as.signed_value;
+    if (value.kind == NUMERIC_UNSIGNED) return (double)value.as.unsigned_value;
+    return value.as.boolean ? 1.0 : 0.0;
+}
+
 static bool numeric_as_i64(NumericValue value, int64_t *out) {
     if (value.kind == NUMERIC_SIGNED) {
         *out = value.as.signed_value;
@@ -1682,22 +1699,43 @@ static MilenaStatus calculate_binary(NumericValue left, NumericValue right,
                                      MilenaError *error) {
     const DTypeKernel *kernel = dtype_kernel(dtype);
     if (kernel->kind == NUMERIC_FLOAT) {
-        long double a = numeric_as_long_double(left);
-        long double b = numeric_as_long_double(right);
-        if (operation == BINARY_DIVIDE && b == 0.0L) {
-            array_error(error, MILENA_ERR_ARGUMENT, "División por cero");
-            return MILENA_ERR_ARGUMENT;
-        }
         result->kind = NUMERIC_FLOAT;
-        if (operation == BINARY_ADD) result->as.float_value = a + b;
-        else if (operation == BINARY_SUBTRACT) result->as.float_value = a - b;
-        else if (operation == BINARY_MULTIPLY) result->as.float_value = a * b;
-        else result->as.float_value = a / b;
-        if (isfinite(a) && isfinite(b) &&
-            !isfinite(result->as.float_value)) {
-            array_error(error, MILENA_ERR_OVERFLOW,
-                        "La operación flotante desbordó su rango");
-            return MILENA_ERR_OVERFLOW;
+        if (dtype == MILENA_DTYPE_FLOAT32) {
+            float a = numeric_as_f32(left);
+            float b = numeric_as_f32(right);
+            float converted = 0.0f;
+            if (operation == BINARY_DIVIDE && b == 0.0f) {
+                array_error(error, MILENA_ERR_ARGUMENT, "División por cero");
+                return MILENA_ERR_ARGUMENT;
+            }
+            if (operation == BINARY_ADD) converted = (float)(a + b);
+            else if (operation == BINARY_SUBTRACT) converted = (float)(a - b);
+            else if (operation == BINARY_MULTIPLY) converted = (float)(a * b);
+            else converted = (float)(a / b);
+            if (isfinite(a) && isfinite(b) && !isfinite(converted)) {
+                array_error(error, MILENA_ERR_OVERFLOW,
+                            "La operación flotante desbordó su rango");
+                return MILENA_ERR_OVERFLOW;
+            }
+            result->as.float_value = (long double)converted;
+        } else {
+            double a = numeric_as_f64(left);
+            double b = numeric_as_f64(right);
+            double converted = 0.0;
+            if (operation == BINARY_DIVIDE && b == 0.0) {
+                array_error(error, MILENA_ERR_ARGUMENT, "División por cero");
+                return MILENA_ERR_ARGUMENT;
+            }
+            if (operation == BINARY_ADD) converted = a + b;
+            else if (operation == BINARY_SUBTRACT) converted = a - b;
+            else if (operation == BINARY_MULTIPLY) converted = a * b;
+            else converted = a / b;
+            if (isfinite(a) && isfinite(b) && !isfinite(converted)) {
+                array_error(error, MILENA_ERR_OVERFLOW,
+                            "La operación flotante desbordó su rango");
+                return MILENA_ERR_OVERFLOW;
+            }
+            result->as.float_value = (long double)converted;
         }
         return MILENA_OK;
     }
@@ -1758,31 +1796,53 @@ overflow:
     return MILENA_ERR_OVERFLOW;
 }
 
+static int compare_integral_exact(NumericValue left, NumericValue right) {
+    bool left_signed = left.kind == NUMERIC_SIGNED;
+    bool right_signed = right.kind == NUMERIC_SIGNED;
+    if (left_signed && right_signed) {
+        int64_t a = left.as.signed_value;
+        int64_t b = right.as.signed_value;
+        return a < b ? -1 : (a > b ? 1 : 0);
+    }
+    uint64_t a_unsigned = left.kind == NUMERIC_UNSIGNED ?
+        left.as.unsigned_value : (left.as.boolean ? 1u : 0u);
+    uint64_t b_unsigned = right.kind == NUMERIC_UNSIGNED ?
+        right.as.unsigned_value : (right.as.boolean ? 1u : 0u);
+    if (!left_signed && !right_signed)
+        return a_unsigned < b_unsigned ? -1 :
+               (a_unsigned > b_unsigned ? 1 : 0);
+    if (left_signed) {
+        if (left.as.signed_value < 0) return -1;
+        a_unsigned = (uint64_t)left.as.signed_value;
+    } else {
+        if (right.as.signed_value < 0) return 1;
+        b_unsigned = (uint64_t)right.as.signed_value;
+    }
+    return a_unsigned < b_unsigned ? -1 :
+           (a_unsigned > b_unsigned ? 1 : 0);
+}
+
 static int compare_numeric(NumericValue left, NumericValue right,
                            MilenaDType promoted, bool *unordered) {
     *unordered = false;
-    const DTypeKernel *kernel = dtype_kernel(promoted);
-    if (kernel->kind == NUMERIC_FLOAT) {
-        long double a = numeric_as_long_double(left);
-        long double b = numeric_as_long_double(right);
+    if (left.kind != NUMERIC_FLOAT && right.kind != NUMERIC_FLOAT)
+        return compare_integral_exact(left, right);
+    if (promoted == MILENA_DTYPE_FLOAT32) {
+        float a = numeric_as_f32(left);
+        float b = numeric_as_f32(right);
         if (isnan(a) || isnan(b)) {
             *unordered = true;
             return 0;
         }
         return a < b ? -1 : (a > b ? 1 : 0);
     }
-    if (kernel->kind == NUMERIC_SIGNED) {
-        int64_t a = 0;
-        int64_t b = 0;
-        (void)numeric_as_i64(left, &a);
-        (void)numeric_as_i64(right, &b);
-        return a < b ? -1 : (a > b ? 1 : 0);
-    }
     {
-        uint64_t a = 0;
-        uint64_t b = 0;
-        (void)numeric_as_u64(left, &a);
-        (void)numeric_as_u64(right, &b);
+        double a = numeric_as_f64(left);
+        double b = numeric_as_f64(right);
+        if (isnan(a) || isnan(b)) {
+            *unordered = true;
+            return 0;
+        }
         return a < b ? -1 : (a > b ? 1 : 0);
     }
 }
@@ -2221,6 +2281,132 @@ typedef enum {
     STAT_STD
 } Statistic;
 
+static void compensated_add_f64(double value, double *sum,
+                                double *correction) {
+    double next = *sum + value;
+    if (fabs(*sum) >= fabs(value))
+        *correction += (*sum - next) + value;
+    else
+        *correction += (value - next) + *sum;
+    *sum = next;
+}
+
+static void segment_nonfinite_and_scale(const MilenaArray *source, int axis,
+                                        size_t count, size_t *coordinates,
+                                        bool *has_nan, bool *has_positive_inf,
+                                        bool *has_negative_inf,
+                                        double *scale) {
+    *has_nan = false;
+    *has_positive_inf = false;
+    *has_negative_inf = false;
+    *scale = 0.0;
+    for (size_t index = 0; index < count; ++index) {
+        double value = numeric_as_f64(load_numeric(source,
+            reduction_offset(source, axis, index, coordinates)));
+        if (isnan(value)) *has_nan = true;
+        else if (isinf(value)) {
+            if (signbit(value)) *has_negative_inf = true;
+            else *has_positive_inf = true;
+        } else if (fabs(value) > *scale) {
+            *scale = fabs(value);
+        }
+    }
+}
+
+static MilenaStatus stable_mean_segment(const MilenaArray *source, int axis,
+                                        size_t count, size_t *coordinates,
+                                        double *result, MilenaError *error) {
+    bool has_nan = false;
+    bool has_positive_inf = false;
+    bool has_negative_inf = false;
+    double scale = 0.0;
+    segment_nonfinite_and_scale(source, axis, count, coordinates, &has_nan,
+                                &has_positive_inf, &has_negative_inf, &scale);
+    if (has_nan || (has_positive_inf && has_negative_inf)) {
+        *result = NAN;
+        return MILENA_OK;
+    }
+    if (has_positive_inf || has_negative_inf) {
+        *result = has_negative_inf ? -INFINITY : INFINITY;
+        return MILENA_OK;
+    }
+    if (scale == 0.0) {
+        *result = 0.0;
+        return MILENA_OK;
+    }
+    double sum = 0.0;
+    double correction = 0.0;
+    for (size_t index = 0; index < count; ++index) {
+        double value = numeric_as_f64(load_numeric(source,
+            reduction_offset(source, axis, index, coordinates)));
+        compensated_add_f64(value / scale, &sum, &correction);
+    }
+    *result = ((sum + correction) / (double)count) * scale;
+    if (!isfinite(*result)) {
+        array_error(error, MILENA_ERR_OVERFLOW,
+                    "mean de entradas finitas fuera de rango");
+        return MILENA_ERR_OVERFLOW;
+    }
+    return MILENA_OK;
+}
+
+static MilenaStatus stable_variance_segment(const MilenaArray *source,
+                                            int axis, size_t count,
+                                            size_t *coordinates,
+                                            bool standard_deviation,
+                                            double *result,
+                                            MilenaError *error) {
+    bool has_nan = false;
+    bool has_positive_inf = false;
+    bool has_negative_inf = false;
+    double scale = 0.0;
+    segment_nonfinite_and_scale(source, axis, count, coordinates, &has_nan,
+                                &has_positive_inf, &has_negative_inf, &scale);
+    if (has_nan || has_positive_inf || has_negative_inf) {
+        *result = NAN;
+        return MILENA_OK;
+    }
+    if (scale == 0.0) {
+        *result = 0.0;
+        return MILENA_OK;
+    }
+    double mean = 0.0;
+    double m2 = 0.0;
+    double correction = 0.0;
+    for (size_t index = 0; index < count; ++index) {
+        double value = numeric_as_f64(load_numeric(source,
+            reduction_offset(source, axis, index, coordinates))) / scale;
+        double n = (double)(index + 1u);
+        double delta = value - mean;
+        mean += delta / n;
+        compensated_add_f64(delta * (value - mean), &m2, &correction);
+    }
+    double scaled_variance = (m2 + correction) / (double)count;
+    if (scaled_variance < 0.0 && scaled_variance > -DBL_EPSILON)
+        scaled_variance = 0.0;
+    double scaled_std = sqrt(scaled_variance);
+    double deviation = scaled_std * scale;
+    if (!isfinite(deviation)) {
+        array_error(error, MILENA_ERR_OVERFLOW,
+                    standard_deviation ?
+                    "std de entradas finitas fuera de rango" :
+                    "variance de entradas finitas fuera de rango");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (standard_deviation) {
+        *result = deviation;
+    } else {
+        const double maximum_deviation = sqrt(DBL_MAX);
+        if (deviation > maximum_deviation) {
+            array_error(error, MILENA_ERR_OVERFLOW,
+                        "variance de entradas finitas fuera de rango");
+            return MILENA_ERR_OVERFLOW;
+        }
+        *result = deviation * deviation;
+    }
+    return MILENA_OK;
+}
+
 static MilenaStatus stat_reduce(MilenaArray *out,
                                 const MilenaArray *source,
                                 int axis, bool keepdims,
@@ -2291,30 +2477,24 @@ static MilenaStatus stat_reduce(MilenaArray *out,
                     (statistic == STAT_MAX && value > result)) result = value;
             }
         } else if (statistic == STAT_MEAN) {
-            long double sum = 0.0L;
-            long double correction = 0.0L;
-            for (size_t index = 0; index < count; ++index) {
-                long double value = numeric_as_long_double(load_numeric(source,
-                    reduction_offset(source, axis, index,
-                                     source_coordinates)));
-                compensated_add(value, &sum, &correction);
-            }
-            result = (sum + correction) / (long double)count;
+            double stable_result = 0.0;
+            status = stable_mean_segment(source, axis, count,
+                                         source_coordinates, &stable_result,
+                                         error);
+            if (status == MILENA_OK) result = (long double)stable_result;
         } else {
-            long double mean = 0.0L;
-            long double m2 = 0.0L;
-            for (size_t index = 0; index < count; ++index) {
-                long double value = numeric_as_long_double(load_numeric(source,
-                    reduction_offset(source, axis, index,
-                                     source_coordinates)));
-                long double n = (long double)(index + 1u);
-                long double delta = value - mean;
-                mean += delta / n;
-                m2 += delta * (value - mean);
-            }
-            result = m2 / (long double)count;
-            if (result < 0.0L && result > -LDBL_EPSILON) result = 0.0L;
-            if (statistic == STAT_STD) result = sqrtl(result);
+            double stable_result = 0.0;
+            status = stable_variance_segment(
+                source, axis, count, source_coordinates,
+                statistic == STAT_STD, &stable_result, error);
+            if (status == MILENA_OK) result = (long double)stable_result;
+        }
+        if (status != MILENA_OK) {
+            free(shape);
+            free(source_coordinates);
+            free(output_coordinates);
+            milena_array_release(&temporary);
+            return status;
         }
         NumericValue converted;
         converted.kind = NUMERIC_FLOAT;
@@ -2397,8 +2577,23 @@ static double interpolated_percentile(double *values, size_t count,
     size_t lower = (size_t)floor(position);
     size_t upper = lower < count - 1u ? lower + 1u : lower;
     double fraction = position - (double)lower;
-    if (upper == lower || fraction == 0.0) return values[lower];
-    return values[lower] + fraction * (values[upper] - values[lower]);
+    double a = values[lower];
+    double b = values[upper];
+    if (upper == lower || fraction == 0.0 || a == b) return a;
+
+    /* Spell out infinities so interior interpolation is deterministic:
+     * finite..inf tends to that infinity, while -inf..+inf is undefined. */
+    if (isinf(a) || isinf(b)) {
+        if (isinf(a) && isinf(b) && signbit(a) != signbit(b)) return NAN;
+        return isinf(a) ? a : b;
+    }
+
+    /* b-a can overflow for [-DBL_MAX, DBL_MAX].  Opposite signs use a
+     * convex combination whose products are each representable; same-sign
+     * endpoints have a representable difference and retain endpoint detail. */
+    if (signbit(a) != signbit(b))
+        return (1.0 - fraction) * a + fraction * b;
+    return a + fraction * (b - a);
 }
 
 static MilenaStatus percentile_reduce(MilenaArray *out,
