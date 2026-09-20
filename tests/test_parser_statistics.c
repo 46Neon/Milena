@@ -8,7 +8,7 @@ static ASTNode *parse(const char *source, Parser *parser, Lexer *lexer) {
     return parser_parse(parser);
 }
 
-static void expect_error(const char *body) {
+static void expect_error_contains(const char *body, const char *message) {
     char source[1024];
     int written = snprintf(source, sizeof(source),
                            ".analisis prueba { arreglo valores = [1, 2, 3]; %s }", body);
@@ -20,7 +20,12 @@ static void expect_error(const char *body) {
     assert(parser.has_error);
     assert(parser.error.code == MILENA_ERR_PARSE);
     assert(parser.error.message[0] != '\0');
+    if (message) assert(strstr(parser.error.message, message) != NULL);
     parser_release(&parser);
+}
+
+static void expect_error(const char *body) {
+    expect_error_contains(body, NULL);
 }
 
 int main(void) {
@@ -80,7 +85,7 @@ int main(void) {
         assert(strcmp(token_type_name((TokenType)type), "DESCONOCIDO") != 0);
     }
 
-    expect_error("media(no_declarado);");
+    expect_error_contains("media(no_declarado);", "no ha sido declarado");
     expect_error("percentil(valores, -1);");
     expect_error("percentil(valores, 101);");
     expect_error("media(valores, eje 1.5);");
