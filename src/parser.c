@@ -729,7 +729,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_match(parser, TOKEN_FUNCION_MAXIMO) ||
                             parser_match(parser, TOKEN_FUNCION_VARIANZA) ||
                             parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
-                            parser_match(parser, TOKEN_FUNCION_MEDIANA)) {
+                            parser_match(parser, TOKEN_FUNCION_MEDIANA) ||
+                            parser_match(parser, TOKEN_FUNCION_PERCENTIL)) {
                             metric = parser->current.lexeme;
                         } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
                                    strcmp(parser->current.lexeme, "conteo") == 0) {

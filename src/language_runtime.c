@@ -735,6 +735,8 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 MilenaAggregateSpec specifications[16];
                 MilenaAggregateOp operations[16];
                 MilenaTableStatistic statistic_operations[16];
+                double percentiles[16] = {0.0};
+                bool percentile_metric[16] = {false};
                 bool advanced[16] = {false};
                 char value_columns[16][128];
                 char metrics[16][32];
@@ -763,6 +765,22 @@ MilenaStatus milena_run_dataset_program(const char *source,
                         continue;
                     } else if (strcmp(metrics[j], "mediana") == 0) {
                         advanced[j] = true; statistic_operations[j] = MILENA_STAT_MEDIAN;
+                        continue;
+                    } else if (strcmp(metrics[j], "percentil") == 0) {
+                        char *comma = strchr(value_columns[j], ',');
+                        if (!comma) {
+                            valid_specifications = false;
+                            break;
+                        }
+                        *comma = '\0';
+                        char *end = NULL;
+                        percentiles[j] = strtod(comma + 1, &end);
+                        if (end == comma + 1 || *end != '\0' ||
+                            percentiles[j] < 0.0 || percentiles[j] > 100.0) {
+                            valid_specifications = false;
+                            break;
+                        }
+                        advanced[j] = true; percentile_metric[j] = true;
                         continue;
                     } else {
                         runtime_error(error, MILENA_ERR_UNSUPPORTED,
@@ -799,9 +817,15 @@ MilenaStatus milena_run_dataset_program(const char *source,
                         char statistic_name[160];
                         (void)snprintf(statistic_name, sizeof(statistic_name),
                                        "%s_%s", value_columns[j], metrics[j]);
-                        status = milena_table_add_statistic(
-                            &summarized, &source_snapshot, value_columns[j],
-                            statistic_name, statistic_operations[j], error);
+                        if (percentile_metric[j]) {
+                            status = milena_table_add_percentile(
+                                &summarized, &source_snapshot, value_columns[j],
+                                statistic_name, percentiles[j], error);
+                        } else {
+                            status = milena_table_add_statistic(
+                                &summarized, &source_snapshot, value_columns[j],
+                                statistic_name, statistic_operations[j], error);
+                        }
                     }
                     if (status == MILENA_OK) {
                         milena_table_swap(&canonical_table, &summarized);

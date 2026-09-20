@@ -228,6 +228,12 @@ MilenaStatus milena_table_add_statistic(MilenaTable *out,
                                         const char *output_column,
                                         MilenaTableStatistic statistic,
                                         MilenaError *error);
+MilenaStatus milena_table_add_percentile(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         const char *value_column,
+                                         const char *output_column,
+                                         double percentile,
+                                         MilenaError *error);
 MilenaStatus milena_table_group_by(MilenaTable *out,
                                    const MilenaTable *source,
                                    const char *const *key_columns,

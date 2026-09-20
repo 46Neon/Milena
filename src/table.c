@@ -2758,3 +2758,70 @@ MilenaStatus milena_table_add_statistic(MilenaTable *out,
     free(values);
     return status;
 }
+
+
+MilenaStatus milena_table_add_percentile(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         const char *value_column,
+                                         const char *output_column,
+                                         double percentile,
+                                         MilenaError *error) {
+    if (percentile < 0.0 || percentile > 100.0 || !isfinite(percentile)) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Percentil fuera del rango 0..100");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (!out || !source || out == source || !value_column || !output_column) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Percentil de tabla inválido");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(source, error);
+    if (status == MILENA_OK) status = milena_table_validate(out, error);
+    if (status != MILENA_OK) return status;
+    if (out->row_count != 1) {
+        table_error(error, MILENA_ERR_ARGUMENT,
+                    "El percentil global requiere una tabla de una fila");
+        return MILENA_ERR_ARGUMENT;
+    }
+    int column = milena_table_column_index(source, value_column);
+    const MilenaTableColumn *data = column < 0 ? NULL :
+        milena_table_column(source, (size_t)column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        table_error(error, MILENA_ERR_TYPE, "El percentil requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = source->row_count == 0 ? NULL :
+        (double *)malloc(source->row_count * sizeof(*values));
+    if (source->row_count != 0 && !values) {
+        table_error(error, MILENA_ERR_MEMORY, "Sin memoria para percentil");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < source->row_count; row++) {
+        if (milena_table_is_null(source, (size_t)column, row)) continue;
+        double value = 0.0;
+        status = table_numeric_cell(source, (size_t)column, row, &value, error);
+        if (status != MILENA_OK) break;
+        values[count++] = value;
+    }
+    double result = 0.0;
+    if (status == MILENA_OK && count > 0) {
+        qsort(values, count, sizeof(*values), compare_table_doubles);
+        double position = percentile * (double)(count - 1) / 100.0;
+        size_t lower = (size_t)position;
+        size_t upper = lower < count - 1 ? lower + 1 : lower;
+        double fraction = position - (double)lower;
+        result = values[lower] + fraction * (values[upper] - values[lower]);
+    }
+    bool valid = status == MILENA_OK && count > 0;
+    MilenaArray array;
+    milena_array_init(&array);
+    size_t shape[1] = {1};
+    if (status == MILENA_OK) {
+        status = milena_array_from_f64(&array, 1, shape, &result, error);
+        if (status == MILENA_OK) status = milena_table_add_column_copy(
+            out, output_column, &array, &valid, error);
+    }
+    milena_array_release(&array);
+    free(values);
+    return status;
+}
