@@ -347,7 +347,9 @@ static void json_text(FILE *out, const char *text) {
     fputc('"', out);
 }
 
-static MilenaStatus run_sst_commands(const char *script, const Dataset *dataset,
+/* COMPATIBILIDAD: no añadir comandos nuevos aquí. Las capacidades oficiales
+ * se implementan en language_runtime.c y reciben AST + MilenaTable. */
+static MilenaStatus run_legacy_sst_commands(const char *script, const Dataset *dataset,
                                    const char *output, MilenaError *error) {
     char path[1200];
     int written = snprintf(path, sizeof(path), "%s.sst.json", output);
@@ -618,7 +620,9 @@ static void print_array_operation(const char *left, char operation,
     printf(")\n");
 }
 
-static MilenaStatus run_array_declarations(const char *script, MilenaError *error) {
+/* COMPATIBILIDAD: parser textual histórico de arrays; solo se conserva para
+ * archivos antiguos que no producen un AST canónico. */
+static MilenaStatus run_legacy_array_declarations(const char *script, MilenaError *error) {
     const char *cursor = script;
     size_t declarations = 0;
     ScriptArrayBinding *bindings = NULL;
@@ -1038,9 +1042,9 @@ typedef enum {
     SCRIPT_PIPELINE_CANONICAL_ARRAY,
     SCRIPT_PIPELINE_CANONICAL_DATASET,
     SCRIPT_PIPELINE_CANONICAL_FUNCTION,
-    SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT,
-    SCRIPT_PIPELINE_ARRAY_COMPAT,
-    SCRIPT_PIPELINE_DATASET_COMPAT
+    SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS,
+    SCRIPT_PIPELINE_LEGACY_ARRAY,
+    SCRIPT_PIPELINE_LEGACY_DATASET
 } ScriptPipeline;
 
 /*
@@ -1076,22 +1080,22 @@ static ScriptPipeline script_pipeline_from_ast(const char *script) {
     if (has_dataset) return SCRIPT_PIPELINE_CANONICAL_DATASET;
     if (has_array) return SCRIPT_PIPELINE_CANONICAL_ARRAY;
     if (has_function) return SCRIPT_PIPELINE_CANONICAL_FUNCTION;
-    return SCRIPT_PIPELINE_DATASET_COMPAT;
+    return SCRIPT_PIPELINE_LEGACY_DATASET;
 }
 
 static ScriptPipeline script_pipeline_for_source(const char *script) {
-    if (!script) return SCRIPT_PIPELINE_DATASET_COMPAT;
+    if (!script) return SCRIPT_PIPELINE_LEGACY_DATASET;
     ScriptPipeline parsed_pipeline = script_pipeline_from_ast(script);
     if (parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
         parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) return parsed_pipeline;
     if (strstr(script, "funcion") != NULL) {
-        return SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT;
+        return SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS;
     }
     if ((strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL) &&
         strstr(script, "dataset cargar") == NULL) {
-        return SCRIPT_PIPELINE_ARRAY_COMPAT;
+        return SCRIPT_PIPELINE_LEGACY_ARRAY;
     }
-    return SCRIPT_PIPELINE_DATASET_COMPAT;
+    return SCRIPT_PIPELINE_LEGACY_DATASET;
 }
 
 static MilenaStatus run_canonical_functions(const char *script,
@@ -1127,7 +1131,8 @@ static MilenaStatus run_canonical_functions(const char *script,
     return MILENA_OK;
 }
 
-static MilenaStatus run_numeric_functions(const char *script, MilenaError *error) {
+/* COMPATIBILIDAD: las funciones nuevas deben usar parser + AST + Interpreter. */
+static MilenaStatus run_legacy_numeric_functions(const char *script, MilenaError *error) {
     const char *p = script; size_t total = strlen(script), used = 0;
     char *decls = (char *)malloc(total + 1), message[256] = {0};
     MilenaFunctionTable table; milena_function_table_init(&table);
@@ -1163,9 +1168,8 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     if (!filename) return MILENA_ERR_ARGUMENT;
     char *script = read_file(filename, error);
     if (!script) return error && error->code ? error->code : MILENA_ERR_IO;
-    /* Primera migración incremental al pipeline canónico. El reconocimiento
-     * textual solo decide compatibilidad; la sintaxis y la ejecución quedan
-     * completamente a cargo de lexer/parser/AST/language_runtime. */
+    /* El AST decide toda ejecución oficial. El router textual que queda abajo
+     * solo atiende sintaxis histórica explícita y no recibe capacidades nuevas. */
     ScriptPipeline pipeline = script_pipeline_for_source(script);
     if (pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) {
         MilenaStatus canonical_status = milena_run_array_program(script, stdout, error);
@@ -1183,16 +1187,17 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
         free(script);
         return function_status;
     }
-    if (pipeline == SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT) {
-        MilenaStatus fn_status = run_numeric_functions(script, error);
+    if (pipeline == SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS) {
+        MilenaStatus fn_status = run_legacy_numeric_functions(script, error);
         free(script);
         return fn_status;
     }
-    if (pipeline == SCRIPT_PIPELINE_ARRAY_COMPAT) {
-        MilenaStatus array_status = run_array_declarations(script, error);
+    if (pipeline == SCRIPT_PIPELINE_LEGACY_ARRAY) {
+        MilenaStatus array_status = run_legacy_array_declarations(script, error);
         free(script);
         return array_status;
     }
+    /* Desde aquí comienza únicamente la ruta histórica de compatibilidad. */
     MilenaSchema schema; schema_init(&schema);
     MilenaStatus status = parse_schema(script, &schema, error);
     if (status == MILENA_OK) status = validate_commands(script, error);
@@ -1222,7 +1227,7 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     if (status == MILENA_OK && has_text(script, "#periodo extraer(\"mes de fecha\")")) status = dataset_add_month(&dataset, "fecha", "periodo", error);
     if (status == MILENA_OK && has_text(script, "#condicion(\"total > 0\")")) status = dataset_filter_positive_product(&dataset, "precio", "cantidad", error);
     if (status == MILENA_OK) status = analysis_dataset_report(&dataset, &schema, resolved_output, error);
-    if (status == MILENA_OK) status = run_sst_commands(script, &dataset, resolved_output, error);
+    if (status == MILENA_OK) status = run_legacy_sst_commands(script, &dataset, resolved_output, error);
     if (status == MILENA_OK) { printf("Script ejecutado correctamente: %s\n", filename); printf("Filas: %zu | Columnas: %zu | Filas inválidas: %zu\n", dataset.row_count, dataset.column_count, dataset.invalid_rows); }
     dataset_destroy(&dataset); schema_destroy(&schema); free(script); return status;
 }
