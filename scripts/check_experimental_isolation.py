@@ -7,7 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTAL = {
     "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c",
-    "instructions.c", "ir.c", "module.c", "semantic.c", "symbol.c",
+    "instructions.c", "ir.c", "module.c", "semantic.c",
     "temp_scope.c", "vm.c",
 }
 

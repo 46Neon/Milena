@@ -18,12 +18,12 @@ CATEGORIES = {
         "ast.c", "lexer.c", "parser.c", "symbol_table.c",
     },
     "funciones": {
-        "function_parser.c", "user_functions.c",
+        "function_parser.c", "user_functions.c", "symbol.c",
     },
     "experimental": {
         "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c",
         "instructions.c", "interpreter.c", "ir.c", "module.c", "semantic.c",
-        "symbol.c", "temp_scope.c", "vm.c",
+        "temp_scope.c", "vm.c",
     },
 }
 
