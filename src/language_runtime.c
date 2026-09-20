@@ -10,6 +10,7 @@
 #include "sst_normality.h"
 #include "sst_rates.h"
 #include "sst_inference.h"
+#include "sst_correlation.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -817,6 +818,73 @@ static MilenaStatus runtime_write_sst_poisson(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_correlation(const MilenaTable *table,
+                                                       const char *specification,
+                                                       const char *output_path,
+                                                       MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *x_name = strtok(spec, ",");
+    char *y_name = strtok(NULL, ",");
+    if (!x_name || !y_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "La correlación requiere dos columnas");
+        return MILENA_ERR_PARSE;
+    }
+    int x_column = milena_table_column_index(table, x_name);
+    int y_column = milena_table_column_index(table, y_name);
+    const MilenaTableColumn *x_data = x_column < 0 ? NULL : milena_table_column(table, (size_t)x_column);
+    const MilenaTableColumn *y_data = y_column < 0 ? NULL : milena_table_column(table, (size_t)y_column);
+    if (!x_data || !y_data || x_data->type != MILENA_COLUMN_ARRAY ||
+        y_data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "La correlación requiere columnas numéricas");
+        return MILENA_ERR_TYPE;
+    }
+    double *x = table->row_count ? (double *)malloc(table->row_count * sizeof(*x)) : NULL;
+    double *y = table->row_count ? (double *)malloc(table->row_count * sizeof(*y)) : NULL;
+    if (table->row_count && (!x || !y)) {
+        free(x); free(y);
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para correlación SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)x_column, row) ||
+            milena_table_is_null(table, (size_t)y_column, row)) continue;
+        const void *xr = NULL, *yr = NULL;
+        if (milena_table_get_array_value(table, (size_t)x_column, row, &xr, error) != MILENA_OK ||
+            milena_table_get_array_value(table, (size_t)y_column, row, &yr, error) != MILENA_OK) break;
+        x[count] = x_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)xr :
+                   x_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)xr :
+                   x_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)xr :
+                   (double)*(const uint64_t *)xr;
+        y[count] = y_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)yr :
+                   y_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)yr :
+                   y_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)yr :
+                   (double)*(const uint64_t *)yr;
+        count++;
+    }
+    SstCorrelationResult result;
+    MilenaStatus status = sst_pearson(x, y, count, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.correlacion.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"correlacion\",\"pares\":%zu,\"coeficiente\":%.10g,\"muestra_pequena\":%s}\n",
+                        result.pairs, result.coefficient, result.warning_small_sample ? "true" : "false");
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    free(x); free(y);
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1312,6 +1380,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (strcmp(node->type_name, "poisson") == 0) {
                 status = runtime_write_sst_poisson(&canonical_table, node->value,
                                                    output_path, error);
+            } else if (strcmp(node->type_name, "correlacion") == 0) {
+                status = runtime_write_sst_correlation(&canonical_table, node->value,
+                                                       output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;

@@ -103,6 +103,7 @@ int main(void) {
         "  #normalidad(\"total_suma\")\n"
         "  #tasa(\"total_suma,total_suma,200000\")\n"
         "  #poisson(\"total_suma,total_suma,200000\")\n"
+        "  #correlacion(\"total_suma,total_suma\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -180,6 +181,15 @@ int main(void) {
     CHECK(strstr(poisson_text, "poisson") != NULL &&
           strstr(poisson_text, "ic_inferior") != NULL,
           "Poisson SST no usó la tabla canónica");
+    FILE *correlation_json = fopen("test-language-runtime.json.correlacion.json", "rb");
+    CHECK(correlation_json != NULL, "La correlación SST canónica no creó su reporte");
+    char correlation_text[2048];
+    size_t correlation_size = fread(correlation_text, 1, sizeof(correlation_text) - 1, correlation_json);
+    correlation_text[correlation_size] = '\0';
+    fclose(correlation_json);
+    CHECK(strstr(correlation_text, "correlacion") != NULL &&
+          strstr(correlation_text, "coeficiente") != NULL,
+          "La correlación SST no usó la tabla canónica");
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -215,6 +225,7 @@ int main(void) {
     remove("test-language-runtime.json.normalidad.json");
     remove("test-language-runtime.json.tasa.json");
     remove("test-language-runtime.json.poisson.json");
+    remove("test-language-runtime.json.correlacion.json");
 
     puts("language runtime: parser + AST + arrays + datasets OK");
     return 0;
