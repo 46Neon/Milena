@@ -1020,6 +1020,80 @@ static MilenaStatus runtime_write_sst_chi_square(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
+                                                const char *specification,
+                                                const char *output_path,
+                                                MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *exposure_name = strtok(spec, ",");
+    char *event_name = strtok(NULL, ",");
+    if (!exposure_name || !event_name) {
+        runtime_error(error, MILENA_ERR_PARSE, "Riesgo requiere dos columnas categóricas");
+        return MILENA_ERR_PARSE;
+    }
+    int exposure_column = milena_table_column_index(table, exposure_name);
+    int event_column = milena_table_column_index(table, event_name);
+    if (exposure_column < 0 || event_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna inexistente para riesgo SST");
+        return MILENA_ERR_DATA;
+    }
+    const MilenaTableColumn *exposure_data = milena_table_column(table, (size_t)exposure_column);
+    const MilenaTableColumn *event_data = milena_table_column(table, (size_t)event_column);
+    if ((exposure_data->type != MILENA_COLUMN_CATEGORICAL && exposure_data->type != MILENA_COLUMN_STRING) ||
+        (event_data->type != MILENA_COLUMN_CATEGORICAL && event_data->type != MILENA_COLUMN_STRING)) {
+        runtime_error(error, MILENA_ERR_TYPE, "Riesgo requiere columnas categóricas");
+        return MILENA_ERR_TYPE;
+    }
+    const char *exposure_labels[2] = {NULL, NULL};
+    const char *event_labels[2] = {NULL, NULL};
+    size_t counts[4] = {0, 0, 0, 0};
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)exposure_column, row) ||
+            milena_table_is_null(table, (size_t)event_column, row)) continue;
+        const char *exposure = NULL, *event = NULL;
+        if (exposure_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)exposure_column, row, &code, &exposure, error) != MILENA_OK) break;
+        } else if (milena_table_get_string(table, (size_t)exposure_column, row, &exposure, error) != MILENA_OK) break;
+        if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)event_column, row, &code, &event, error) != MILENA_OK) break;
+        } else if (milena_table_get_string(table, (size_t)event_column, row, &event, error) != MILENA_OK) break;
+        size_t ei = exposure_labels[0] && strcmp(exposure_labels[0], exposure) == 0 ? 0 :
+                    exposure_labels[1] && strcmp(exposure_labels[1], exposure) == 0 ? 1 : 2;
+        size_t vi = event_labels[0] && strcmp(event_labels[0], event) == 0 ? 0 :
+                    event_labels[1] && strcmp(event_labels[1], event) == 0 ? 1 : 2;
+        if (ei == 2 && !exposure_labels[0]) { exposure_labels[0] = exposure; ei = 0; }
+        else if (ei == 2 && !exposure_labels[1]) { exposure_labels[1] = exposure; ei = 1; }
+        if (vi == 2 && !event_labels[0]) { event_labels[0] = event; vi = 0; }
+        else if (vi == 2 && !event_labels[1]) { event_labels[1] = event; vi = 1; }
+        if (ei < 2 && vi < 2) counts[ei * 2 + vi]++;
+    }
+    if (!exposure_labels[0] || !exposure_labels[1] || !event_labels[0] || !event_labels[1]) {
+        runtime_error(error, MILENA_ERR_DATA, "Riesgo requiere dos categorías por columna");
+        return MILENA_ERR_DATA;
+    }
+    SstRiskMeasure result;
+    MilenaStatus status = sst_risk_ratio_odds_ratio(counts[0], counts[1], counts[2], counts[3], &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.riesgo.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"riesgo\",\"eventos_expuestos\":%zu,\"no_eventos_expuestos\":%zu,\"eventos_control\":%zu,\"no_eventos_control\":%zu,\"riesgo_relativo\":%.10g,\"odds_ratio\":%.10g}\n",
+                        counts[0], counts[1], counts[2], counts[3], result.relative_risk, result.odds_ratio);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1524,6 +1598,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (strcmp(node->type_name, "chi_cuadrado") == 0) {
                 status = runtime_write_sst_chi_square(&canonical_table, node->value,
                                                       output_path, error);
+            } else if (strcmp(node->type_name, "riesgo") == 0) {
+                status = runtime_write_sst_risk(&canonical_table, node->value,
+                                                output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;
