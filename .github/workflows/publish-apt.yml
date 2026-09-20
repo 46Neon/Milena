@@ -1,8 +1,4 @@
-name: Publish Milena Termux APT repository
-
-concurrency:
-  group: milena-termux-apt
-  cancel-in-progress: false
+name: Publish Mano APT repository
 
 on:
   workflow_dispatch:
@@ -10,7 +6,7 @@ on:
       release_tag:
         description: 'Tag de la Release que contiene los paquetes .deb'
         required: true
-        default: 'v0.1.1'
+        default: 'v0.1.0'
   push:
     tags:
       - 'v*'
@@ -24,7 +20,6 @@ env:
 jobs:
   publish-apt:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,46 +51,26 @@ jobs:
       - name: Import signing key
         shell: bash
         env:
-          MILENA_GPG_PRIVATE_KEY: ${{ secrets.MILENA_GPG_PRIVATE_KEY }}
+          MANO_GPG_PRIVATE_KEY: ${{ secrets.MANO_GPG_PRIVATE_KEY }}
         run: |
-          test -n "$MILENA_GPG_PRIVATE_KEY"
-          printf '%s\n' "$MILENA_GPG_PRIVATE_KEY" | gpg --batch --import
+          test -n "$MANO_GPG_PRIVATE_KEY"
+          printf '%s\n' "$MANO_GPG_PRIVATE_KEY" | gpg --batch --import
 
       - name: Generate signed repository
         shell: bash
         env:
-          MILENA_GPG_KEY_ID: ${{ secrets.MILENA_GPG_KEY_ID }}
-          MILENA_GPG_PASSPHRASE: ${{ secrets.MILENA_GPG_PASSPHRASE }}
+          MANO_GPG_KEY_ID: ${{ secrets.MANO_GPG_KEY_ID }}
+          MANO_GPG_PASSPHRASE: ${{ secrets.MANO_GPG_PASSPHRASE }}
         run: |
-          test -n "$MILENA_GPG_KEY_ID"
-          test -n "$MILENA_GPG_PASSPHRASE"
-          KEY_ID="$(printf '%s' "$MILENA_GPG_KEY_ID" | tr -d '[:space:]')"
+          test -n "$MANO_GPG_KEY_ID"
+          test -n "$MANO_GPG_PASSPHRASE"
+          KEY_ID="$(printf '%s' "$MANO_GPG_KEY_ID" | tr -d '[:space:]')"
           KEY_ID="${KEY_ID#rsa3072/}"
           KEY_ID="${KEY_ID#0x}"
-          export MILENA_GPG_KEY_ID="$KEY_ID"
+          export MANO_GPG_KEY_ID="$KEY_ID"
           ./packaging/termux/generate-apt-repo.sh dist/inputs dist/apt
-          gpg --batch --armor --export "$KEY_ID" > dist/apt/milena-archive-keyring.asc
-          test -s dist/apt/milena-archive-keyring.asc
-
-      - name: Validate APT repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -s dist/apt/dists/stable/Release
-          test -s dist/apt/dists/stable/InRelease
-          test -s dist/apt/dists/stable/Release.gpg
-          test -s dist/apt/dists/stable/main/binary-aarch64/Packages
-          test -s dist/apt/dists/stable/main/binary-aarch64/Packages.gz
-          grep -Fq 'Package: milena' dist/apt/dists/stable/main/binary-aarch64/Packages
-          test -n "$(find dist/apt/pool -type f -name '*.deb' -print -quit)"
-          dpkg-deb --info "$(find dist/apt/pool -type f -name '*.deb' -print -quit)"
-
-      - name: Create repository checksums
-        shell: bash
-        run: |
-          set -euo pipefail
-          find dist/apt -type f -print0 | sort -z | xargs -0 sha256sum > dist/apt/SHA256SUMS
-          test -s dist/apt/SHA256SUMS
+          gpg --batch --armor --export "$KEY_ID" > dist/apt/mano-archive-keyring.asc
+          test -s dist/apt/mano-archive-keyring.asc
 
       - name: Install Netlify CLI
         run: npm install --global netlify-cli
@@ -108,4 +83,4 @@ jobs:
         run: |
           test -n "$NETLIFY_AUTH_TOKEN"
           test -n "$NETLIFY_SITE_ID"
-          netlify deploy --dir=dist/apt --prod --site="$NETLIFY_SITE_ID" --message="Milena Termux ${{ steps.release.outputs.tag }}"
+          netlify deploy --dir=dist/apt --prod --site="$NETLIFY_SITE_ID" --message="Mano ${{ steps.release.outputs.tag }}"

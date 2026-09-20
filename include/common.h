@@ -12,7 +12,7 @@
 #include <float.h>
 #include <math.h>
 
-#define MILENA_VERSION "0.1.1"
+#define MILENA_VERSION "0.2.0-identity"
 #define MILENA_ERROR_TEXT 512
 
 typedef enum {
@@ -28,37 +28,18 @@ typedef enum {
     MILENA_ERR_INTERNAL
 } MilenaStatus;
 
-typedef enum {
-    MILENA_ERROR_NINGUNO,
-    MILENA_ERROR_SINTAXIS,
-    MILENA_ERROR_SEMANTICA,
-    MILENA_ERROR_TIPO,
-    MILENA_ERROR_DATOS,
-    MILENA_ERROR_MEMORIA,
-    MILENA_ERROR_EJECUCION
-} MilenaErrorCategory;
-
 typedef struct {
     MilenaStatus code;
-    MilenaErrorCategory category;
     size_t line;
     size_t column;
     size_t row;
     char message[MILENA_ERROR_TEXT];
 } MilenaError;
 
-typedef MilenaError MilenaErrorInfo;
-#define MILENA_ERROR_SYNTAX MILENA_ERR_PARSE
-#define MILENA_ERROR_MEMORY MILENA_ERR_MEMORY
-#define MILENA_ERROR_RUNTIME MILENA_ERR_INTERNAL
-#define MILENA_ERROR_IO MILENA_ERR_IO
-
-void milena_error_init(MilenaError *error);
 void milena_error_clear(MilenaError *error);
 void milena_error_set(MilenaError *error, MilenaStatus code, size_t line,
                     size_t column, size_t row, const char *message);
 const char *milena_status_name(MilenaStatus status);
-const char *milena_error_category_name(MilenaErrorCategory category);
 char *milena_strdup(const char *text);
 bool milena_size_add(size_t a, size_t b, size_t *out);
 bool milena_size_mul(size_t a, size_t b, size_t *out);

@@ -16,7 +16,7 @@ $SourceNames = @(
  'schema.c', 'script.c', 'sst_advanced.c', 'sst_contingency.c',
  'sst_correlation.c', 'sst_dates.c', 'sst_histogram.c', 'sst_inference.c',
  'sst_model.c', 'sst_normality.c', 'sst_rates.c', 'sst_report.c',
- 'sst_report_advanced.c', 'sst_stats.c', 'function_parser.c', 'user_functions.c'
+ 'sst_report_advanced.c', 'sst_stats.c'
 )
 $Compiler = if ($env:CC) { $env:CC } else { 'clang' }
 $Flags = @('-std=c17', '-Wall', '-Wextra', '-Wpedantic', '-O2', '-Iinclude')

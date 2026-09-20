@@ -1,10 +1,4 @@
-
 #include "parser.h"
-
-void parser_release(Parser *parser) {
-    if (!parser) return;
-    milena_symbols_release(&parser->symbols);
-}
 
 void parser_init(Parser *parser, Lexer *lexer) {
     parser->lexer = lexer;
@@ -12,12 +6,11 @@ void parser_init(Parser *parser, Lexer *lexer) {
     parser->previous = parser->current;
     parser->has_error = false;
     milena_error_init(&parser->error);
-    milena_symbols_init(&parser->symbols);
 }
 
 void parser_error(Parser *parser, const char *msg) {
-    milena_error_set(&parser->error, MILENA_ERR_PARSE,
-                     parser->current.line, parser->current.column, 0, msg);
+    milena_error_set(&parser->error, MILENA_ERROR_SYNTAX, msg,
+                  parser->current.line, parser->current.column);
     parser->has_error = true;
 }
 
@@ -30,23 +23,6 @@ bool parser_match(Parser *parser, TokenType type) {
     return parser->current.type == type;
 }
 
-static bool parser_is_identifier(Parser *parser) {
-    if (!parser) return false;
-    /* Names remain usable when the lexer classifies a reserved word as a
-       keyword.  `total` is part of the language vocabulary but is also a
-       valid variable name in existing scripts. */
-    return parser_match(parser, TOKEN_IDENTIFICADOR) ||
-           parser_match(parser, TOKEN_KW_TOTAL) ||
-           (parser->current.lexeme[0] != '\0' &&
-            strcmp(parser->current.lexeme, "total") == 0);
-}
-
-static bool parser_match_lexeme(Parser *parser, TokenType type, const char *lexeme) {
-    return parser_match(parser, type) ||
-           (parser_match(parser, TOKEN_IDENTIFICADOR) &&
-            strcmp(parser->current.lexeme, lexeme) == 0);
-}
-
 bool parser_expect(Parser *parser, TokenType type, const char *msg) {
     if (!parser_match(parser, type)) {
         parser_error(parser, msg);
@@ -57,9 +33,8 @@ bool parser_expect(Parser *parser, TokenType type, const char *msg) {
 }
 
 static ASTNode *parse_array_declaration(Parser *parser) {
-    if (!parser || !parser_is_identifier(parser) ||
-        (strcmp(parser->current.lexeme, "array") != 0 &&
-         strcmp(parser->current.lexeme, "arreglo") != 0)) return NULL;
+    if (!parser || !parser_match(parser, TOKEN_IDENTIFICADOR) ||
+        strcmp(parser->current.lexeme, "array") != 0) return NULL;
     parser_advance(parser);
 
     if (!parser_expect(parser, TOKEN_IDENTIFICADOR,
@@ -123,127 +98,9 @@ static ASTNode *parse_array_declaration(Parser *parser) {
     return declaration;
 }
 
-static ASTNode *parse_expression(Parser *parser) {
-    ASTNode *left = NULL;
-    if (parser_match(parser, TOKEN_NUMERO)) {
-        parser_advance(parser);
-        left = ast_create_number(parser->previous.number_value);
-    } else if (parser_is_identifier(parser)) {
-        if (!milena_symbols_exists(&parser->symbols, parser->current.lexeme)) {
-            parser_error(parser, "La variable usada no ha sido declarada");
-            return NULL;
-        }
-        left = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR, parser->current.lexeme);
-        parser_advance(parser);
-    } else {
-        parser_error(parser, "Se esperaba una expresión numérica");
-        return NULL;
-    }
-    if (!left) {
-        parser_error(parser, "No se pudo crear la expresión");
-        return NULL;
-    }
-
-    while (parser_match(parser, TOKEN_MAS) || parser_match(parser, TOKEN_MENOS)) {
-        TokenType operator_type = parser->current.type;
-        parser_advance(parser);
-        ASTNode *right = NULL;
-        if (parser_match(parser, TOKEN_NUMERO)) {
-            parser_advance(parser);
-            right = ast_create_number(parser->previous.number_value);
-        } else if (parser_is_identifier(parser)) {
-            if (!milena_symbols_exists(&parser->symbols, parser->current.lexeme)) {
-                ast_destroy(left);
-                parser_error(parser, "La variable usada no ha sido declarada");
-                return NULL;
-            }
-            right = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR, parser->current.lexeme);
-            parser_advance(parser);
-        } else {
-            ast_destroy(left);
-            parser_error(parser, "Se esperaba un valor después del operador");
-            return NULL;
-        }
-        ASTNode *operation = ast_create_leaf(AST_EXPRESION_OPERACION,
-                                             operator_type == TOKEN_MAS ? "+" : "-");
-        if (!operation || !right) {
-            ast_destroy(left);
-            ast_destroy(right);
-            ast_destroy(operation);
-            parser_error(parser, "No se pudo crear la expresión");
-            return NULL;
-        }
-        ast_add_child(operation, left);
-        ast_add_child(operation, right);
-        left = operation;
-    }
-    return left;
-}
-
-static ASTNode *parse_variable_declaration(Parser *parser) {
-    parser_advance(parser);
-    if (!parser_is_identifier(parser)) {
-        parser_error(parser, "Se esperaba nombre de variable");
-        return NULL;
-    }
-    char name[MAX_TOKEN_LEN];
-    strncpy(name, parser->current.lexeme, sizeof(name) - 1); name[sizeof(name) - 1] = '\0';
-    parser_advance(parser);
-    if (!parser_expect(parser, TOKEN_IGUAL, "Se esperaba '=' en la declaración de variable")) return NULL;
-    /* Register the name before parsing its initializer so the declaration
-       participates in the same scope rules as subsequent expressions. */
-    if (milena_symbols_declare(&parser->symbols, name, &parser->error) != MILENA_OK) {
-        parser->has_error = true;
-        return NULL;
-    }
-    ASTNode *value = parse_expression(parser);
-    if (!value) return NULL;
-    ASTNode *node = ast_create_leaf(AST_DECLARACION_VARIABLE, name);
-    if (!node) {
-        ast_destroy(value);
-        parser_error(parser, "No se pudo crear la variable");
-        return NULL;
-    }
-    ast_add_child(node, value);
-    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de la variable")) {
-        ast_destroy(node);
-        return NULL;
-    }
-    return node;
-}
-
-static ASTNode *parse_assignment(Parser *parser) {
-    char name[MAX_TOKEN_LEN];
-    strncpy(name, parser->current.lexeme, sizeof(name) - 1); name[sizeof(name) - 1] = '\0';
-    if (!milena_symbols_exists(&parser->symbols, name)) {
-        parser_error(parser, "La variable asignada no ha sido declarada");
-        return NULL;
-    }
-    parser_advance(parser);
-    if (!parser_expect(parser, TOKEN_IGUAL, "Se esperaba '=' en la asignación")) return NULL;
-    ASTNode *value = parse_expression(parser);
-    if (!value) return NULL;
-    ASTNode *node = ast_create_leaf(AST_ASIGNACION_VARIABLE, name);
-    if (!node) {
-        ast_destroy(value);
-        parser_error(parser, "No se pudo crear la asignación");
-        return NULL;
-    }
-    ast_add_child(node, value);
-    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de la asignación")) {
-        ast_destroy(node);
-        return NULL;
-    }
-    return node;
-}
-
 static ASTNode* parse_bloque_analisis(Parser *parser) {
     if (!parser_expect(parser, TOKEN_PUNTO, "Se esperaba '.'")) return NULL;
-    if (!parser_match_lexeme(parser, TOKEN_KW_ANALISIS, "analisis")) {
-        parser_error(parser, "Se esperaba 'analisis'");
-        return NULL;
-    }
-    parser_advance(parser);
+    if (!parser_expect(parser, TOKEN_KW_ANALISIS, "Se esperaba 'analisis'")) return NULL;
     if (!parser_expect(parser, TOKEN_IDENTIFICADOR, "Se esperaba nombre")) return NULL;
     
     ASTNode *node = ast_create_leaf(AST_BLOQUE_ANALISIS, parser->previous.lexeme);
@@ -254,20 +111,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
         return NULL;
     }
     
-    milena_symbols_enter_scope(&parser->symbols);
     // Parsear contenido del bloque
     while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
-        if (parser_match_lexeme(parser, TOKEN_KW_VARIABLE, "variable")) {
-            ASTNode *declaration = parse_variable_declaration(parser);
-            if (declaration) ast_add_child(node, declaration);
-        } else if (parser_is_identifier(parser) &&
-                   strcmp(parser->current.lexeme, "array") != 0 &&
-                   strcmp(parser->current.lexeme, "arreglo") != 0) {
-            ASTNode *assignment = parse_assignment(parser);
-            if (assignment) ast_add_child(node, assignment);
-        } else if (parser_is_identifier(parser) &&
-            (strcmp(parser->current.lexeme, "array") == 0 ||
-             strcmp(parser->current.lexeme, "arreglo") == 0)) {
+        if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+            strcmp(parser->current.lexeme, "array") == 0) {
             ASTNode *declaration = parse_array_declaration(parser);
             if (declaration) ast_add_child(node, declaration);
         } else if (parser_match(parser, TOKEN_NUMERAL)) {
@@ -370,7 +217,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 }
             } else {
                 // Otros bloques
-                if (parser_is_identifier(parser)) {
+                if (parser_match(parser, TOKEN_IDENTIFICADOR)) {
                     parser_advance(parser);
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
@@ -387,97 +234,24 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
     }
     
     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-    milena_symbols_leave_scope(&parser->symbols);
     return node;
 }
 
-static ASTNode *parse_declaracion(Parser *parser) {
-    if (!parser) return NULL;
-    if (parser_match(parser, TOKEN_KW_FUNCION)) {
-        parser_error(parser, "El parser de funciones aún no está implementado");
-        return NULL;
-    }
-    if (parser_match(parser, TOKEN_KW_VARIABLE)) {
-        return parse_variable_declaration(parser);
-    }
-    if (parser_match(parser, TOKEN_PUNTO)) {
-        return parse_bloque_analisis(parser);
-    }
-    if (parser_match(parser, TOKEN_FUNCION_MEDIANA) ||
-        parser_match(parser, TOKEN_FUNCION_PERCENTIL)) {
-        ASTNode *node = parser_parse_statistical_call(parser);
-        if (!node) return NULL;
-        if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
-                           "Se esperaba ';' después de la operación estadística")) {
-            ast_destroy(node);
-            return NULL;
-        }
-        return node;
-    }
-    parser_error(parser, "Se esperaba una declaración");
-    return NULL;
-}
-
-static ASTNode *parse_programa(Parser *parser) {
+ASTNode* parser_parse(Parser *parser) {
     ASTNode *program = ast_create(AST_PROGRAMA);
     if (!program) {
-        parser_error(parser, "No se pudo crear el programa");
+        parser_error(parser, "Error de memoria");
         return NULL;
     }
-    while (!parser_match(parser, TOKEN_EOF)) {
-        Token before = parser->current;
-        ASTNode *declaration = parse_declaracion(parser);
-        if (!declaration) {
-            ast_destroy(program);
-            return NULL;
-        }
-        ast_add_child(program, declaration);
-        if (parser->current.type == before.type &&
-            parser->current.line == before.line &&
-            parser->current.column == before.column) {
-            ast_destroy(program);
-            parser_error(parser, "El parser no avanzó después de la declaración");
-            return NULL;
-        }
+    
+    ASTNode *analisis = parse_bloque_analisis(parser);
+    if (analisis) {
+        ast_add_child(program, analisis);
     }
+    
+    if (!parser_match(parser, TOKEN_EOF)) {
+        parser_error(parser, "Se esperaba fin de archivo");
+    }
+    
     return program;
-}
-
-ASTNode* parser_parse(Parser *parser) {
-    if (!parser) return NULL;
-    return parse_programa(parser);
-}
-
-ASTNode* parser_parse_statistical_call(Parser *parser) {
-    if (!parser) return NULL;
-    bool median = parser->current.type == TOKEN_FUNCION_MEDIANA;
-    bool percentile = parser->current.type == TOKEN_FUNCION_PERCENTIL;
-    if (!median && !percentile) { parser_error(parser, "Se esperaba una operación estadística"); return NULL; }
-    parser_advance(parser);
-    if (!parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '(' después de la operación")) return NULL;
-    if (!parser_expect(parser, TOKEN_IDENTIFICADOR, "Se esperaba un arreglo como argumento")) return NULL;
-    ASTNode *argument = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR, parser->previous.lexeme);
-    if (!argument) { parser_error(parser, "No se pudo crear el argumento estadístico"); return NULL; }
-    double percentile_value = 50.0; int axis = -1; bool keepdims = false;
-    if (percentile) {
-        if (!parser_expect(parser, TOKEN_COMA, "Se esperaba el porcentaje" ) ||
-            !parser_expect(parser, TOKEN_NUMERO, "Se esperaba un porcentaje numérico")) { ast_destroy(argument); return NULL; }
-        percentile_value = parser->previous.number_value;
-        if (percentile_value < 0.0 || percentile_value > 100.0) { ast_destroy(argument); parser_error(parser, "El porcentaje debe estar entre 0 y 100"); return NULL; }
-    }
-    while (!parser_match(parser, TOKEN_PAR_DER)) {
-        if (!parser_expect(parser, TOKEN_COMA, "Se esperaba ',' entre argumentos")) { ast_destroy(argument); return NULL; }
-        if (parser_match(parser, TOKEN_CONCEPTO_EJE)) {
-            parser_advance(parser);
-            if (!parser_expect(parser, TOKEN_NUMERO, "Se esperaba un número después de 'eje'")) { ast_destroy(argument); return NULL; }
-            axis = (int)parser->previous.number_value;
-        } else if (parser_match(parser, TOKEN_CONCEPTO_CONSERVAR)) {
-            parser_advance(parser);
-            if (!parser_expect(parser, TOKEN_FUNCION_DIMENSIONES, "Se esperaba 'dimensiones' después de 'conservar'")) { ast_destroy(argument); return NULL; }
-            keepdims = true;
-        } else { ast_destroy(argument); parser_error(parser, "Argumento estadístico inesperado"); return NULL; }
-    }
-    parser_advance(parser);
-    ASTStatOperation op = median ? AST_ESTADISTICA_MEDIANA : AST_ESTADISTICA_PERCENTIL;
-    return ast_create_statistic(op, argument, axis, keepdims, percentile_value);
 }

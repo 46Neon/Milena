@@ -46,18 +46,6 @@ ASTNode* ast_create_number(double value) {
     return node;
 }
 
-ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,
-                              int axis, bool keepdims, double percentile) {
-    ASTNode *node = ast_create(AST_OPERACION_ESTADISTICA);
-    if (!node) return NULL;
-    node->statistical_operation = operation;
-    node->axis = axis;
-    node->keepdims = keepdims;
-    node->percentile = percentile;
-    if (argument) ast_add_child(node, argument);
-    return node;
-}
-
 void ast_add_child(ASTNode *parent, ASTNode *child) {
     if (!parent || !child) return;
     
@@ -122,7 +110,6 @@ const char* ast_type_name(ASTNodeType type) {
         "EXPRESION_FUNCION",
         "EXPRESION_ARRAY",
         "DECLARACION_ARRAY",
-        "DECLARACION_VARIABLE", "ASIGNACION_VARIABLE",
         "COMANDO_NULOS",
         "COMANDO_DUPLICADOS",
         "COMANDO_CONDICION",
@@ -130,9 +117,7 @@ const char* ast_type_name(ASTNodeType type) {
         "COMANDO_TOTAL",
         "COMANDO_PERIODO",
         "AGRUPACION_POR",
-        "RESUMEN_METRICA",
-        "OPERACION_ESTADISTICA", "DECLARACION_FUNCION", "COMANDO_RETORNAR",
-        "EXPRESION_LLAMADA", "BLOQUE_FUNCION", "CONDICION_SI"
+        "RESUMEN_METRICA"
     };
     size_t count = sizeof(names) / sizeof(names[0]);
     if ((size_t)type >= count) return "DESCONOCIDO";
