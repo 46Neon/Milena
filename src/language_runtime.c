@@ -474,8 +474,9 @@ static MilenaStatus dataset_runtime_clean(const ASTNode *block,
         if (!command || !command->value) continue;
         if (command->type == AST_COMANDO_NULOS &&
             strcmp(command->value, "eliminar") == 0) {
-            MilenaStatus status = dataset_remove_null_rows(dataset, error);
-            if (status != MILENA_OK) return status;
+            /* La eliminación de nulos pertenece ahora a MilenaTable; se
+             * ejecuta después de materializar el esquema tipado. */
+            (void)dataset;
         } else if (command->type == AST_COMANDO_DUPLICADOS &&
                    strcmp(command->value, "eliminar") == 0) {
             MilenaStatus status = dataset_remove_duplicates(dataset, error);
@@ -614,6 +615,26 @@ MilenaStatus milena_run_dataset_program(const char *source,
         status = milena_table_from_dataset(&canonical_table, &runtime.dataset,
                                            &schema, error);
     }
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < analysis->child_count; i++) {
+            const ASTNode *block = analysis->children[i];
+            if (!block || block->type != AST_BLOQUE_LIMPIAR) continue;
+            for (size_t j = 0; j < block->child_count; j++) {
+                const ASTNode *command = block->children[j];
+                if (!command || command->type != AST_COMANDO_NULOS ||
+                    !command->value || strcmp(command->value, "eliminar") != 0) continue;
+                MilenaTable cleaned;
+                milena_table_init(&cleaned);
+                status = milena_table_drop_null(&cleaned, &canonical_table, error);
+                if (status == MILENA_OK) {
+                    milena_table_swap(&canonical_table, &cleaned);
+                }
+                milena_table_destroy(&cleaned);
+                if (status != MILENA_OK) break;
+            }
+            if (status != MILENA_OK) break;
+        }
+    }
     Dataset canonical_dataset;
     dataset_init(&canonical_dataset);
     if (status == MILENA_OK) {
@@ -626,13 +647,15 @@ MilenaStatus milena_run_dataset_program(const char *source,
         status = analysis_dataset_report(&canonical_dataset, &schema,
                                          output_path, error);
     }
+    size_t final_rows = canonical_dataset.row_count;
+    size_t final_columns = canonical_dataset.column_count;
     dataset_destroy(&canonical_dataset);
     milena_table_destroy(&canonical_table);
     if (status == MILENA_OK) {
         FILE *stream = output ? output : stdout;
         fprintf(stream, "Programa canónico ejecutado: %s\n", script_filename ? script_filename : "<memoria>");
         fprintf(stream, "Filas: %zu | Columnas: %zu | Salida: %s\n",
-                runtime.dataset.row_count, runtime.dataset.column_count, output_path);
+                final_rows, final_columns, output_path);
     }
 
     schema_destroy(&schema);

@@ -77,7 +77,7 @@ int main(void) {
     const char *json_path = "test-language-runtime.json";
     FILE *csv = fopen(csv_path, "wb");
     CHECK(csv != NULL, "No se pudo crear el CSV de runtime");
-    fputs("precio,cantidad,ciudad,compro\n10,2,Caracas,1\n5,3,Maracaibo,0\n", csv);
+    fputs("precio,cantidad,ciudad,compro\n10,2,Caracas,1\n5,3,Maracaibo,0\n9,4,,1\n", csv);
     CHECK(fclose(csv) == 0, "No se pudo cerrar el CSV de runtime");
     const char *dataset_source =
         ".analisis ventas {\n"
@@ -102,6 +102,8 @@ int main(void) {
     fclose(json);
     CHECK(strstr(json_text, "total") != NULL,
           "La transformación no llegó al reporte unificado");
+    CHECK(strstr(json_text, "\"filas\": 2") != NULL,
+          "La limpieza de nulos no se ejecutó sobre la tabla canónica");
     CHECK(strstr(json_text, "numerica") != NULL,
           "El esquema del dataset no llegó al reporte unificado");
     CHECK(strstr(json_text, "entradas_categoricas") != NULL &&
