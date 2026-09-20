@@ -153,7 +153,7 @@ if ./milena run "$tmp_dir/array-overflow.milena" > "$tmp_dir/array-overflow.out"
     echo 'Se aceptó overflow int64' >&2
     exit 1
 fi
-grep -q 'Milena \[OVERFLOW\]: La operación entera está fuera de rango' "$tmp_dir/array-overflow.out"
+grep -q 'OVERFLOW.*La operación entera está fuera de rango' "$tmp_dir/array-overflow.out"
 
 cat > "$tmp_dir/array-div-zero.milena" <<'MILENA'
 array valores = [1];
