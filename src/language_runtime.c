@@ -568,7 +568,10 @@ MilenaStatus milena_run_dataset_program(const char *source,
     if (status == MILENA_OK) {
         for (size_t i = 0; i < analysis->child_count; i++) {
             const ASTNode *node = analysis->children[i];
-            if (!node || node->type != AST_DECLARACION_VARIABLE || !node->value) continue;
+            if (!node || !node->value) continue;
+            if (node->type != AST_DECLARACION_VARIABLE &&
+                node->type != AST_DECLARACION_ENTRADA &&
+                node->type != AST_DECLARACION_SALIDA) continue;
             MilenaVariableType type = MILENA_VAR_TEXT;
             if (node->type_name) {
                 if (strcmp(node->type_name, "numerica") == 0) type = MILENA_VAR_NUMERIC;
@@ -577,14 +580,27 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 else if (strcmp(node->type_name, "fecha") == 0 ||
                          strcmp(node->type_name, "texto") == 0) type = MILENA_VAR_TEXT;
             }
-            status = schema_add(&schema, node->value, type,
-                                MILENA_ROLE_FEATURE, error);
+            MilenaVariableRole role = MILENA_ROLE_FEATURE;
+            if (node->type == AST_DECLARACION_ENTRADA) {
+                role = MILENA_ROLE_CATEGORICAL_INPUT;
+                type = MILENA_VAR_CATEGORICAL;
+            } else if (node->type == AST_DECLARACION_SALIDA) {
+                role = MILENA_ROLE_BINARY_OUTPUT;
+                type = MILENA_VAR_BINARY;
+            }
+            status = schema_add(&schema, node->value, type, role, error);
             if (status != MILENA_OK) break;
         }
-        if (status == MILENA_OK && schema.count == 0) {
+        if (status == MILENA_OK) {
+            /* Las columnas derivadas por transformar también son parte del
+             * esquema canónico; no se dejan fuera del reporte. */
             for (size_t i = 0; i < runtime.dataset.column_count; i++) {
-                status = schema_add(&schema, runtime.dataset.headers[i],
-                                    MILENA_VAR_TEXT, MILENA_ROLE_FEATURE, error);
+                const char *name = runtime.dataset.headers[i];
+                if (schema_index(&schema, name) >= 0) continue;
+                MilenaVariableType type = strcmp(name, "total") == 0
+                    ? MILENA_VAR_NUMERIC : MILENA_VAR_TEXT;
+                status = schema_add(&schema, name, type,
+                                    MILENA_ROLE_FEATURE, error);
                 if (status != MILENA_OK) break;
             }
         }

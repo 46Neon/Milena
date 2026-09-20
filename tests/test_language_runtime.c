@@ -77,13 +77,15 @@ int main(void) {
     const char *json_path = "test-language-runtime.json";
     FILE *csv = fopen(csv_path, "wb");
     CHECK(csv != NULL, "No se pudo crear el CSV de runtime");
-    fputs("precio,cantidad\n10,2\n5,3\n", csv);
+    fputs("precio,cantidad,ciudad,compro\n10,2,Caracas,1\n5,3,Maracaibo,0\n", csv);
     CHECK(fclose(csv) == 0, "No se pudo cerrar el CSV de runtime");
     const char *dataset_source =
         ".analisis ventas {\n"
         "  dataset cargar datos(\"test-language-runtime.csv\")\n"
         "  variable precio numerica\n"
         "  variable cantidad numerica\n"
+        "  entrada categorica \"ciudad\"\n"
+        "  salida binaria \"compro\"\n"
         "  .limpiar dataset { #nulos(\"eliminar\") }\n"
         "  .transformar dataset { #total(\"precio * cantidad\") }\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
@@ -102,6 +104,12 @@ int main(void) {
           "La transformación no llegó al reporte unificado");
     CHECK(strstr(json_text, "numerica") != NULL,
           "El esquema del dataset no llegó al reporte unificado");
+    CHECK(strstr(json_text, "entradas_categoricas") != NULL &&
+          strstr(json_text, "ciudad") != NULL,
+          "La entrada categórica no llegó al reporte unificado");
+    CHECK(strstr(json_text, "salidas_binarias") != NULL &&
+          strstr(json_text, "compro") != NULL,
+          "La salida binaria no llegó al reporte unificado");
     remove(csv_path);
     remove(json_path);
 

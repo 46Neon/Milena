@@ -505,16 +505,44 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
         } else if (parser_is_identifier(parser) &&
                    (strcmp(parser->current.lexeme, "entrada") == 0 ||
                     strcmp(parser->current.lexeme, "salida") == 0)) {
-            /* Las anotaciones de rol se incorporarán al AST de esquema en la
-             * siguiente migración; por ahora se consumen sin crear otra ruta
-             * de ejecución. */
+            bool is_output = strcmp(parser->current.lexeme, "salida") == 0;
             parser_advance(parser);
-            while (!parser_match(parser, TOKEN_EOF) &&
-                   !parser_match(parser, TOKEN_LLAVE_DER) &&
-                   !parser_match(parser, TOKEN_PUNTO)) {
-                parser_advance(parser);
-                if (parser->previous.type == TOKEN_CADENA) break;
+            if (!parser_is_identifier(parser)) {
+                parser_error(parser, "Se esperaba tipo de rol de esquema");
+                continue;
             }
+            char type_name[MAX_TOKEN_LEN];
+            strncpy(type_name, parser->current.lexeme, sizeof(type_name) - 1);
+            type_name[sizeof(type_name) - 1] = '\0';
+            if (is_output && strcmp(type_name, "binaria") != 0) {
+                parser_error(parser, "La salida del esquema debe ser binaria");
+                continue;
+            }
+            if (!is_output && strcmp(type_name, "categorica") != 0) {
+                parser_error(parser, "La entrada del esquema debe ser categorica");
+                continue;
+            }
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_CADENA,
+                               "Se esperaba nombre de columna entre comillas")) continue;
+            char column_name[MAX_TOKEN_LEN];
+            strncpy(column_name, parser->previous.lexeme, sizeof(column_name) - 1);
+            column_name[sizeof(column_name) - 1] = '\0';
+            ASTNode *role = ast_create_leaf(is_output ? AST_DECLARACION_SALIDA
+                                                       : AST_DECLARACION_ENTRADA,
+                                            column_name);
+            if (!role) {
+                parser_error(parser, "No se pudo crear el rol del esquema");
+                continue;
+            }
+            role->type_name = milena_strdup(type_name);
+            if (!role->type_name) {
+                ast_destroy(role);
+                parser_error(parser, "Sin memoria para el tipo del esquema");
+                continue;
+            }
+            if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+            ast_add_child(node, role);
         } else if (parser_is_identifier(parser) &&
                    strcmp(parser->current.lexeme, "array") != 0 &&
                    strcmp(parser->current.lexeme, "arreglo") != 0) {
