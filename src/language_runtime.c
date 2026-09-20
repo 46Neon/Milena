@@ -9,6 +9,7 @@
 #include "sst_histogram.h"
 #include "sst_normality.h"
 #include "sst_rates.h"
+#include "sst_inference.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -742,6 +743,80 @@ static MilenaStatus runtime_write_sst_rate(const MilenaTable *table,
     return status;
 }
 
+static MilenaStatus runtime_write_sst_poisson(const MilenaTable *table,
+                                                  const char *specification,
+                                                  const char *output_path,
+                                                  MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *event_name = strtok(spec, ",");
+    char *exposure_name = strtok(NULL, ",");
+    char *factor_text = strtok(NULL, ",");
+    if (!event_name || !exposure_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "Poisson requiere evento, exposición y factor");
+        return MILENA_ERR_PARSE;
+    }
+    double factor = factor_text ? strtod(factor_text, NULL) : 200000.0;
+    int event_column = milena_table_column_index(table, event_name);
+    int exposure_column = milena_table_column_index(table, exposure_name);
+    if (event_column < 0 || exposure_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna inexistente para Poisson SST");
+        return MILENA_ERR_DATA;
+    }
+    size_t incidents = 0;
+    double exposure = 0.0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (!milena_table_is_null(table, (size_t)event_column, row)) {
+            const MilenaTableColumn *event_data = milena_table_column(table, (size_t)event_column);
+            const void *raw = NULL;
+            bool incident = false;
+            if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
+                const char *label = NULL; uint32_t code = 0;
+                if (milena_table_get_category(table, (size_t)event_column, row, &code, &label, error) == MILENA_OK)
+                    incident = strcmp(label, "1") == 0 || strcmp(label, "true") == 0 || strcmp(label, "verdadero") == 0;
+            } else if (event_data->type == MILENA_COLUMN_ARRAY &&
+                       milena_table_get_array_value(table, (size_t)event_column, row, &raw, error) == MILENA_OK) {
+                if (event_data->values.dtype == MILENA_DTYPE_FLOAT64) incident = *(const double *)raw > 0.0;
+                else if (event_data->values.dtype == MILENA_DTYPE_FLOAT32) incident = *(const float *)raw > 0.0f;
+                else if (event_data->values.dtype == MILENA_DTYPE_INT64) incident = *(const int64_t *)raw > 0;
+                else if (event_data->values.dtype == MILENA_DTYPE_UINT64) incident = *(const uint64_t *)raw > 0;
+            }
+            if (incident) incidents++;
+        }
+        if (!milena_table_is_null(table, (size_t)exposure_column, row)) {
+            const MilenaTableColumn *data = milena_table_column(table, (size_t)exposure_column);
+            const void *raw = NULL;
+            if (data->type == MILENA_COLUMN_ARRAY &&
+                milena_table_get_array_value(table, (size_t)exposure_column, row, &raw, error) == MILENA_OK) {
+                if (data->values.dtype == MILENA_DTYPE_FLOAT64) exposure += *(const double *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_FLOAT32) exposure += (double)*(const float *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_INT64) exposure += (double)*(const int64_t *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_UINT64) exposure += (double)*(const uint64_t *)raw;
+            }
+        }
+    }
+    SstPoissonInterval interval;
+    MilenaStatus status = sst_poisson_exact_interval(incidents, exposure, factor,
+                                                     0.95, &interval, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.poisson.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"poisson\",\"eventos\":%zu,\"tasa\":%.10g,\"ic_inferior\":%.10g,\"ic_superior\":%.10g}\n",
+                        incidents, interval.rate, interval.lower, interval.upper);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1234,6 +1309,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (strcmp(node->type_name, "tasa") == 0) {
                 status = runtime_write_sst_rate(&canonical_table, node->value,
                                                 output_path, error);
+            } else if (strcmp(node->type_name, "poisson") == 0) {
+                status = runtime_write_sst_poisson(&canonical_table, node->value,
+                                                   output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;
