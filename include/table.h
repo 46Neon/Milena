@@ -172,6 +172,9 @@ MilenaStatus milena_table_fill_null_f64(MilenaTable *table,
 MilenaStatus milena_table_drop_null(MilenaTable *out,
                                     const MilenaTable *source,
                                     MilenaError *error);
+MilenaStatus milena_table_drop_duplicates(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         MilenaError *error);
 MilenaStatus milena_table_drop_null_columns(MilenaTable *out,
                                             const MilenaTable *source,
                                             const char *const *column_names,

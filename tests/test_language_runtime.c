@@ -77,7 +77,7 @@ int main(void) {
     const char *json_path = "test-language-runtime.json";
     FILE *csv = fopen(csv_path, "wb");
     CHECK(csv != NULL, "No se pudo crear el CSV de runtime");
-    fputs("precio,cantidad,ciudad,compro\n10,2,Caracas,1\n5,3,Maracaibo,0\n9,4,,1\n", csv);
+    fputs("precio,cantidad,ciudad,compro\n10,2,Caracas,1\n5,3,Maracaibo,0\n9,4,,1\n5,3,Maracaibo,0\n", csv);
     CHECK(fclose(csv) == 0, "No se pudo cerrar el CSV de runtime");
     const char *dataset_source =
         ".analisis ventas {\n"
@@ -86,7 +86,7 @@ int main(void) {
         "  variable cantidad numerica\n"
         "  entrada categorica \"ciudad\"\n"
         "  salida binaria \"compro\"\n"
-        "  .limpiar dataset { #nulos(\"eliminar\") }\n"
+        "  .limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") }\n"
         "  .transformar dataset { #total(\"precio * cantidad\") }\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";

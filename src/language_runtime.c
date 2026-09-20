@@ -621,11 +621,18 @@ MilenaStatus milena_run_dataset_program(const char *source,
             if (!block || block->type != AST_BLOQUE_LIMPIAR) continue;
             for (size_t j = 0; j < block->child_count; j++) {
                 const ASTNode *command = block->children[j];
-                if (!command || command->type != AST_COMANDO_NULOS ||
-                    !command->value || strcmp(command->value, "eliminar") != 0) continue;
+                if (!command || !command->value ||
+                    strcmp(command->value, "eliminar") != 0) continue;
                 MilenaTable cleaned;
                 milena_table_init(&cleaned);
-                status = milena_table_drop_null(&cleaned, &canonical_table, error);
+                if (command->type == AST_COMANDO_NULOS) {
+                    status = milena_table_drop_null(&cleaned, &canonical_table, error);
+                } else if (command->type == AST_COMANDO_DUPLICADOS) {
+                    status = milena_table_drop_duplicates(&cleaned, &canonical_table, error);
+                } else {
+                    milena_table_destroy(&cleaned);
+                    continue;
+                }
                 if (status == MILENA_OK) {
                     milena_table_swap(&canonical_table, &cleaned);
                 }

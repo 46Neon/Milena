@@ -2349,3 +2349,108 @@ MilenaStatus milena_dataset_from_table(Dataset *out,
     }
     return MILENA_OK;
 }
+
+
+static MilenaStatus table_rows_equal(const MilenaTable *table,
+                                     size_t left, size_t right,
+                                     bool *equal, MilenaError *error) {
+    if (!table || !equal || left >= table->row_count || right >= table->row_count) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Fila inválida para duplicados");
+        return MILENA_ERR_ARGUMENT;
+    }
+    *equal = true;
+    for (size_t column = 0; column < table->column_count; column++) {
+        bool left_null = milena_table_is_null(table, column, left);
+        bool right_null = milena_table_is_null(table, column, right);
+        if (left_null != right_null) {
+            *equal = false;
+            return MILENA_OK;
+        }
+        if (left_null) continue;
+        const MilenaTableColumn *column_data = milena_table_column(table, column);
+        if (!column_data) {
+            table_error(error, MILENA_ERR_DATA, "Columna inválida al comparar duplicados");
+            return MILENA_ERR_DATA;
+        }
+        if (column_data->type == MILENA_COLUMN_STRING) {
+            const char *left_text = NULL, *right_text = NULL;
+            MilenaStatus status = milena_table_get_string(table, column, left,
+                                                          &left_text, error);
+            if (status != MILENA_OK) return status;
+            status = milena_table_get_string(table, column, right,
+                                             &right_text, error);
+            if (status != MILENA_OK) return status;
+            if (strcmp(left_text ? left_text : "", right_text ? right_text : "") != 0) {
+                *equal = false;
+                return MILENA_OK;
+            }
+        } else if (column_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t left_code = 0, right_code = 0;
+            const char *left_label = NULL, *right_label = NULL;
+            MilenaStatus status = milena_table_get_category(table, column, left,
+                                                             &left_code, &left_label, error);
+            if (status != MILENA_OK) return status;
+            status = milena_table_get_category(table, column, right,
+                                               &right_code, &right_label, error);
+            if (status != MILENA_OK) return status;
+            if (left_code != right_code) {
+                *equal = false;
+                return MILENA_OK;
+            }
+        } else {
+            const void *left_value = NULL, *right_value = NULL;
+            MilenaStatus status = milena_table_get_array_value(table, column, left,
+                                                               &left_value, error);
+            if (status != MILENA_OK) return status;
+            status = milena_table_get_array_value(table, column, right,
+                                                  &right_value, error);
+            if (status != MILENA_OK) return status;
+            if (memcmp(left_value, right_value, column_data->values.itemsize) != 0) {
+                *equal = false;
+                return MILENA_OK;
+            }
+        }
+    }
+    return MILENA_OK;
+}
+
+MilenaStatus milena_table_drop_duplicates(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         MilenaError *error) {
+    if (!out || !source) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Tabla inválida para eliminar duplicados");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(source, error);
+    if (status != MILENA_OK) return status;
+    size_t shape[1] = {source->row_count};
+    MilenaArray mask;
+    milena_array_init(&mask);
+    status = milena_array_zeros(&mask, MILENA_DTYPE_BOOL, 1, shape, error);
+    if (status != MILENA_OK) return status;
+    bool *keep = (bool *)milena_array_data(&mask);
+    if (source->row_count > 0 && !keep) {
+        milena_array_release(&mask);
+        table_error(error, MILENA_ERR_DATA, "Máscara de duplicados inválida");
+        return MILENA_ERR_DATA;
+    }
+    size_t kept_count = 0;
+    for (size_t row = 0; row < source->row_count; row++) {
+        bool duplicate = false;
+        for (size_t previous = 0; previous < row; previous++) {
+            if (!keep[previous]) continue;
+            status = table_rows_equal(source, row, previous, &duplicate, error);
+            if (status != MILENA_OK) break;
+            if (duplicate) break;
+        }
+        if (status != MILENA_OK) break;
+        keep[row] = !duplicate;
+        if (!duplicate) kept_count++;
+    }
+    if (status == MILENA_OK) {
+        status = milena_table_filter(out, source, &mask, error);
+    }
+    milena_array_release(&mask);
+    (void)kept_count;
+    return status;
+}
