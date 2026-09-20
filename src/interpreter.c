@@ -2,31 +2,212 @@
 #include <math.h>
 
 typedef struct { char *name; double value; } Binding;
-typedef struct Runtime { Binding *items; size_t count; struct Runtime *parent; unsigned depth; } Runtime;
-static double rt_value(Runtime*r,const char*n,bool*ok){for(;r;r=r->parent)for(size_t i=r->count;i>0;i--)if(strcmp(r->items[i-1].name,n)==0){*ok=true;return r->items[i-1].value;}*ok=false;return 0;}
-static bool eval_expr(Interpreter*i,ASTNode*n,Runtime*r,double*out);
-static bool invoke(Interpreter*i,ASTNode*f,ASTNode*call,Runtime*parent,double*out){
-    if(!f||f->child_count<2||f->children[0]->child_count!=call->child_count)return false;
-    if(parent->depth>=1000)return false;
-    Runtime child={0};child.parent=parent;child.depth=parent->depth+1;size_t pc=f->children[0]->child_count;
-    child.items=calloc(pc?pc:1,sizeof(Binding));if(!child.items&&pc)return false;child.count=pc;
-    for(size_t k=0;k<pc;k++){double v;if(!eval_expr(i,call->children[k],parent,&v))goto fail;child.items[k].name=milena_strdup(f->children[0]->children[k]->value);if(!child.items[k].name)goto fail;child.items[k].value=v;}
-    for(size_t k=0;k<f->children[1]->child_count;k++){ASTNode*x=f->children[1]->children[k];
-        if(x->type==AST_COMANDO_RETORNAR){if(!eval_expr(i,x->children[0],&child,out))goto fail;goto done;}
-        if(x->type==AST_CONDICION_SI){double c;if(!eval_expr(i,x->children[0],&child,&c))goto fail;size_t begin=c?1:x->child_count;
-            if(!c&&x->child_count>1&&x->children[x->child_count-1]->type==AST_BLOQUE_FUNCION){ASTNode*eb=x->children[x->child_count-1];for(size_t j=0;j<eb->child_count;j++){ASTNode*y=eb->children[j];if(y->type==AST_COMANDO_RETORNAR){if(!eval_expr(i,y->children[0],&child,out))goto fail;goto done;}if(y->type==AST_DECLARACION_VARIABLE||y->type==AST_ASIGNACION_VARIABLE){double v;if(!eval_expr(i,y->children[0],&child,&v))goto fail;Binding*z=realloc(child.items,(child.count+1)*sizeof(*z));if(!z)goto fail;child.items=z;child.items[child.count].name=milena_strdup(y->value);if(!child.items[child.count].name)goto fail;child.items[child.count++].value=v;}}} }
-            else if(c) begin=1;
-            if(c){for(size_t j=begin;j<x->child_count;j++){ASTNode*y=x->children[j];if(y->type==AST_COMANDO_RETORNAR){if(!eval_expr(i,y->children[0],&child,out))goto fail;goto done;}if(y->type==AST_DECLARACION_VARIABLE||y->type==AST_ASIGNACION_VARIABLE){double v;if(!eval_expr(i,y->children[0],&child,&v))goto fail;Binding*z=realloc(child.items,(child.count+1)*sizeof(*z));if(!z)goto fail;child.items=z;child.items[child.count].name=milena_strdup(y->value);if(!child.items[child.count].name)goto fail;child.items[child.count++].value=v;}}}
-        } else if(x->type==AST_DECLARACION_VARIABLE||x->type==AST_ASIGNACION_VARIABLE){double v;if(!eval_expr(i,x->children[0],&child,&v))goto fail;Binding*z=realloc(child.items,(child.count+1)*sizeof(*z));if(!z)goto fail;child.items=z;child.items[child.count].name=milena_strdup(x->value);if(!child.items[child.count].name)goto fail;child.items[child.count++].value=v;}
+typedef struct Runtime {
+    Binding *items;
+    size_t count;
+    struct Runtime *parent;
+    unsigned depth;
+} Runtime;
+
+static bool runtime_lookup(Runtime *runtime, const char *name, double *out) {
+    for (; runtime; runtime = runtime->parent) {
+        for (size_t i = runtime->count; i > 0; --i) {
+            if (strcmp(runtime->items[i - 1].name, name) == 0) {
+                *out = runtime->items[i - 1].value;
+                return true;
+            }
+        }
     }
-    *out=0;
-done: for(size_t k=0;k<child.count;k++)free(child.items[k].name);free(child.items);return true;
-fail: for(size_t k=0;k<child.count;k++)free(child.items[k].name);free(child.items);return false;
+    return false;
 }
-static bool eval_expr(Interpreter*i,ASTNode*n,Runtime*r,double*out){if(!n||!out)return false;
-    if(n->type==AST_EXPRESION_LITERAL){*out=n->number_value;return true;} if(n->type==AST_EXPRESION_IDENTIFICADOR){bool ok;*out=rt_value(r,n->value,&ok);return ok;}
-    if(n->type==AST_EXPRESION_OPERACION){double a,b;if(!eval_expr(i,n->children[0],r,&a)||!eval_expr(i,n->children[1],r,&b))return false;const char*o=n->value;if(strcmp(o,"+")==0)*out=a+b;else if(strcmp(o,"-")==0)*out=a-b;else if(strcmp(o,"*")==0)*out=a*b;else if(strcmp(o,"/")==0){if(b==0)return false;*out=a/b;}else if(strcmp(o,"==")==0)*out=a==b;else if(strcmp(o,"!=")==0)*out=a!=b;else if(strcmp(o,">")==0)*out=a>b;else if(strcmp(o,">=")==0)*out=a>=b;else if(strcmp(o,"<")==0)*out=a<b;else if(strcmp(o,"<=")==0)*out=a<=b;else return false;return true;}
-    if(n->type==AST_EXPRESION_LLAMADA){Symbol*s=symbol_table_lookup(i->symbols,n->value);return s&&s->declaration&&invoke(i,s->declaration,n,r,out);} return false;
+
+static bool runtime_assign(Runtime *runtime, const char *name, double value) {
+    for (; runtime; runtime = runtime->parent) {
+        for (size_t i = runtime->count; i > 0; --i) {
+            if (strcmp(runtime->items[i - 1].name, name) == 0) {
+                runtime->items[i - 1].value = value;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool runtime_bind(Runtime *runtime, const char *name, double value) {
+    Binding *items;
+    if (!runtime || !name) return false;
+    items = (Binding *)realloc(runtime->items,
+                               (runtime->count + 1) * sizeof *items);
+    if (!items) return false;
+    runtime->items = items;
+    runtime->items[runtime->count].name = milena_strdup(name);
+    if (!runtime->items[runtime->count].name) return false;
+    runtime->items[runtime->count].value = value;
+    runtime->count++;
+    return true;
+}
+
+static bool eval_expr(Interpreter *interpreter, ASTNode *node,
+                      Runtime *runtime, double *out);
+static bool execute_function_statement(Interpreter *interpreter, ASTNode *node,
+                                       Runtime *runtime, bool *returned,
+                                       double *return_value);
+
+static bool invoke(Interpreter *interpreter, ASTNode *function, ASTNode *call,
+                   Runtime *parent, double *out) {
+    Runtime local = {0};
+    bool returned = false;
+    double value = 0.0;
+
+    if (!function || function->child_count != 2 || !call || !parent ||
+        function->children[0]->child_count != call->child_count ||
+        parent->depth >= 1000) {
+        return false;
+    }
+
+    local.parent = parent;
+    local.depth = parent->depth + 1;
+    for (size_t i = 0; i < call->child_count; ++i) {
+        if (!eval_expr(interpreter, call->children[i], parent, &value) ||
+            !runtime_bind(&local,
+                          function->children[0]->children[i]->value,
+                          value)) {
+            goto fail;
+        }
+    }
+
+    for (size_t i = 0;
+         i < function->children[1]->child_count && !returned;
+         ++i) {
+        if (!execute_function_statement(interpreter,
+                                        function->children[1]->children[i],
+                                        &local, &returned, &value)) {
+            goto fail;
+        }
+    }
+
+    *out = returned ? value : 0.0;
+    for (size_t i = 0; i < local.count; ++i) free(local.items[i].name);
+    free(local.items);
+    return true;
+
+fail:
+    for (size_t i = 0; i < local.count; ++i) free(local.items[i].name);
+    free(local.items);
+    return false;
+}
+
+static bool eval_expr(Interpreter *interpreter, ASTNode *node,
+                      Runtime *runtime, double *out) {
+    double left, right;
+    if (!node || !out) return false;
+
+    switch (node->type) {
+        case AST_EXPRESION_LITERAL:
+            *out = node->number_value;
+            return true;
+        case AST_EXPRESION_IDENTIFICADOR:
+            return runtime_lookup(runtime, node->value, out);
+        case AST_EXPRESION_LLAMADA: {
+            Symbol *symbol = symbol_table_lookup(interpreter->symbols,
+                                                  node->value);
+            return symbol && symbol->declaration &&
+                   invoke(interpreter, symbol->declaration, node,
+                          runtime, out);
+        }
+        case AST_EXPRESION_OPERACION:
+            if (node->child_count != 2 ||
+                !eval_expr(interpreter, node->children[0], runtime, &left) ||
+                !eval_expr(interpreter, node->children[1], runtime, &right)) {
+                return false;
+            }
+            if (strcmp(node->value, "+") == 0) *out = left + right;
+            else if (strcmp(node->value, "-") == 0) *out = left - right;
+            else if (strcmp(node->value, "*") == 0) *out = left * right;
+            else if (strcmp(node->value, "/") == 0) {
+                if (right == 0.0) return false;
+                *out = left / right;
+            } else if (strcmp(node->value, "==") == 0) *out = left == right;
+            else if (strcmp(node->value, "!=") == 0) *out = left != right;
+            else if (strcmp(node->value, ">") == 0) *out = left > right;
+            else if (strcmp(node->value, ">=") == 0) *out = left >= right;
+            else if (strcmp(node->value, "<") == 0) *out = left < right;
+            else if (strcmp(node->value, "<=") == 0) *out = left <= right;
+            else return false;
+            return isfinite(*out);
+        default:
+            return false;
+    }
+}
+
+static bool execute_function_statement(Interpreter *interpreter, ASTNode *node,
+                                       Runtime *runtime, bool *returned,
+                                       double *return_value) {
+    double value;
+    if (!node) return true;
+
+    if (node->type == AST_COMANDO_RETORNAR) {
+        if (node->child_count != 1 ||
+            !eval_expr(interpreter, node->children[0], runtime, &value)) {
+            return false;
+        }
+        *return_value = value;
+        *returned = true;
+        return true;
+    }
+
+    if (node->type == AST_DECLARACION_VARIABLE) {
+        return node->child_count == 1 &&
+               eval_expr(interpreter, node->children[0], runtime, &value) &&
+               runtime_bind(runtime, node->value, value);
+    }
+
+    if (node->type == AST_ASIGNACION_VARIABLE) {
+        return node->child_count == 1 &&
+               eval_expr(interpreter, node->children[0], runtime, &value) &&
+               runtime_assign(runtime, node->value, value);
+    }
+
+    if (node->type == AST_CONDICION_SI) {
+        if (node->child_count < 1 ||
+            !eval_expr(interpreter, node->children[0], runtime, &value)) {
+            return false;
+        }
+        if (value != 0.0) {
+            size_t end = node->child_count;
+            if (end > 1 &&
+                node->children[end - 1]->type == AST_BLOQUE_FUNCION) {
+                end--;
+            }
+            for (size_t i = 1; i < end && !*returned; ++i) {
+                if (!execute_function_statement(interpreter, node->children[i],
+                                                runtime, returned,
+                                                return_value)) {
+                    return false;
+                }
+            }
+        } else if (node->child_count > 1 &&
+                   node->children[node->child_count - 1]->type ==
+                       AST_BLOQUE_FUNCION) {
+            return execute_function_statement(
+                interpreter, node->children[node->child_count - 1], runtime,
+                returned, return_value);
+        }
+        return true;
+    }
+
+    if (node->type == AST_BLOQUE_FUNCION) {
+        for (size_t i = 0; i < node->child_count && !*returned; ++i) {
+            if (!execute_function_statement(interpreter, node->children[i],
+                                            runtime, returned,
+                                            return_value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    return true;
 }
 
 bool interpreter_init(Interpreter *interpreter, ASTNode *ast) {
@@ -40,6 +221,11 @@ bool interpreter_init(Interpreter *interpreter, ASTNode *ast) {
     interpreter->has_error = false;
     interpreter->runtime = calloc(1, sizeof(Runtime));
     milena_error_init(&interpreter->error);
+    if (!interpreter->runtime) {
+        symbol_table_destroy(interpreter->symbols);
+        interpreter->symbols = NULL;
+        return false;
+    }
     
     return true;
 }
@@ -48,7 +234,25 @@ static bool interpreter_execute_node(Interpreter *interpreter, ASTNode *node);
 
 static bool interpreter_execute_program(Interpreter *interpreter, ASTNode *node) {
     if (!node) return true;
-    for(size_t i=0;i<node->child_count;i++) if(node->children[i]->type==AST_DECLARACION_FUNCION) { ASTNode*f=node->children[i]; if(!symbol_table_lookup_local(interpreter->symbols,f->value)){Symbol*s=symbol_create(f->value,SYMBOL_FUNCTION);if(!s||!symbol_table_insert(interpreter->symbols,s))return false;s->declaration=f;} }
+
+    /* Register every function before evaluating globals so recursion and
+       forward calls resolve through the same symbol table. */
+    for (size_t i = 0; i < node->child_count; i++) {
+        ASTNode *function = node->children[i];
+        if (function->type == AST_DECLARACION_FUNCION &&
+            !symbol_table_lookup_local(interpreter->symbols,
+                                       function->value)) {
+            Symbol *symbol = symbol_create(function->value, SYMBOL_FUNCTION);
+            if (!symbol) return false;
+            if (!symbol_table_insert(interpreter->symbols, symbol)) {
+                free(symbol->name);
+                free(symbol);
+                return false;
+            }
+            symbol->declaration = function;
+        }
+    }
+
     for (size_t i = 0; i < node->child_count; i++) {
         if (!interpreter_execute_node(interpreter, node->children[i])) {
             return false;
@@ -74,7 +278,7 @@ static bool interpreter_execute_cargar(Interpreter *interpreter, ASTNode *node) 
     if (!node || !node->value) {
         interpreter->has_error = true;
         milena_error_set(&interpreter->error, MILENA_ERROR_RUNTIME,
-                      "Cargar requiere nombre de archivo", 0, 0);
+                         0, 0, 0, "Cargar requiere nombre de archivo");
         return false;
     }
     
@@ -87,14 +291,14 @@ static bool interpreter_execute_cargar(Interpreter *interpreter, ASTNode *node) 
     if (!interpreter->dataset) {
         interpreter->has_error = true;
         milena_error_set(&interpreter->error, MILENA_ERROR_MEMORY,
-                      "No se pudo crear dataset", 0, 0);
+                         0, 0, 0, "No se pudo crear dataset");
         return false;
     }
     
     if (!dataset_cargar_csv(interpreter->dataset, node->value)) {
         interpreter->has_error = true;
         milena_error_set(&interpreter->error, MILENA_ERROR_IO,
-                      "No se pudo cargar CSV", 0, 0);
+                         0, 0, 0, "No se pudo cargar CSV");
         return false;
     }
     
@@ -109,14 +313,15 @@ static bool interpreter_execute_exportar(Interpreter *interpreter, ASTNode *node
     if (!interpreter->dataset || !node->value) {
         interpreter->has_error = true;
         milena_error_set(&interpreter->error, MILENA_ERROR_RUNTIME,
-                      "No hay dataset o nombre de archivo para exportar", 0, 0);
+                         0, 0, 0,
+                         "No hay dataset o nombre de archivo para exportar");
         return false;
     }
     
     if (!dataset_guardar_json(interpreter->dataset, node->value)) {
         interpreter->has_error = true;
         milena_error_set(&interpreter->error, MILENA_ERROR_IO,
-                      "No se pudo exportar JSON", 0, 0);
+                         0, 0, 0, "No se pudo exportar JSON");
         return false;
     }
     
@@ -125,10 +330,54 @@ static bool interpreter_execute_exportar(Interpreter *interpreter, ASTNode *node
 }
 
 static bool interpreter_execute_node(Interpreter *interpreter, ASTNode *node) {
+    Runtime *runtime;
     if (!node) return true;
-    Runtime *r=(Runtime*)interpreter->runtime;
-    if(node->type==AST_DECLARACION_FUNCION){Symbol*s=symbol_table_lookup_local(interpreter->symbols,node->value);if(!s){s=symbol_create(node->value,SYMBOL_FUNCTION);if(!s||!symbol_table_insert(interpreter->symbols,s)){free(s);return false;}}s->declaration=node;return true;}
-    if(node->type==AST_DECLARACION_VARIABLE||node->type==AST_ASIGNACION_VARIABLE){double v;if(!eval_expr(interpreter,node->children[0],r,&v))return false;Symbol*s=symbol_table_lookup(interpreter->symbols,node->value);if(!s){s=symbol_create(node->value,SYMBOL_VARIABLE);if(!s||!symbol_table_insert(interpreter->symbols,s)){free(s);return false;}}if(r->count==0||strcmp(r->items[r->count-1].name,node->value)!=0){r->items=realloc(r->items,(r->count+1)*sizeof(Binding));r->items[r->count].name=milena_strdup(node->value);r->count++;}r->items[r->count-1].value=v;return true;}
+    runtime = (Runtime *)interpreter->runtime;
+
+    if (node->type == AST_DECLARACION_FUNCION) {
+        Symbol *symbol = symbol_table_lookup_local(interpreter->symbols,
+                                                   node->value);
+        if (!symbol) {
+            symbol = symbol_create(node->value, SYMBOL_FUNCTION);
+            if (!symbol) return false;
+            if (!symbol_table_insert(interpreter->symbols, symbol)) {
+                free(symbol->name);
+                free(symbol);
+                return false;
+            }
+        }
+        symbol->declaration = node;
+        return true;
+    }
+
+    if (node->type == AST_DECLARACION_VARIABLE) {
+        double value;
+        Symbol *symbol;
+        if (node->child_count != 1 ||
+            !eval_expr(interpreter, node->children[0], runtime, &value) ||
+            !runtime_bind(runtime, node->value, value)) {
+            return false;
+        }
+        symbol = symbol_table_lookup(interpreter->symbols, node->value);
+        if (!symbol) {
+            symbol = symbol_create(node->value, SYMBOL_VARIABLE);
+            if (!symbol) return false;
+            if (!symbol_table_insert(interpreter->symbols, symbol)) {
+                free(symbol->name);
+                free(symbol);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (node->type == AST_ASIGNACION_VARIABLE) {
+        double value;
+        return node->child_count == 1 &&
+               eval_expr(interpreter, node->children[0], runtime, &value) &&
+               runtime_assign(runtime, node->value, value);
+    }
+
     switch (node->type) {
         case AST_PROGRAMA:
             return interpreter_execute_program(interpreter, node);
@@ -166,7 +415,7 @@ bool interpreter_run(Interpreter *interpreter) {
 
 bool interpreter_get_number(const Interpreter *interpreter, const char *name, double *value) {
     if (!interpreter || !name || !value || !interpreter->runtime) return false;
-    bool ok = false; *value = rt_value((Runtime *)interpreter->runtime, name, &ok); return ok;
+    return runtime_lookup((Runtime *)interpreter->runtime, name, value);
 }
 
 void interpreter_destroy(Interpreter *interpreter) {
