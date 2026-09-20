@@ -10,6 +10,9 @@
 #include "sst_rates.h"
 #include "array.h"
 #include "language_runtime.h"
+#include "ast.h"
+#include "lexer.h"
+#include "parser.h"
 #include "user_functions.h"
 #include <ctype.h>
 
@@ -1043,17 +1046,38 @@ typedef enum {
  * de la migración es reemplazar esta detección temporal por el resultado del
  * parser, sin volver a repartir condicionales por el ejecutor.
  */
+static void script_scan_canonical_ast(const ASTNode *node,
+                                      bool *has_dataset,
+                                      bool *has_array) {
+    if (!node) return;
+    if (node->type == AST_LLAMADA_CARGAR) *has_dataset = true;
+    if (node->type == AST_DECLARACION_ARRAY ||
+        node->type == AST_EXPRESION_ARRAY) *has_array = true;
+    for (size_t i = 0; i < node->child_count; i++)
+        script_scan_canonical_ast(node->children[i], has_dataset, has_array);
+}
+
+static ScriptPipeline script_pipeline_from_ast(const char *script) {
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, script);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    bool has_dataset = false, has_array = false;
+    if (program && !parser.has_error)
+        script_scan_canonical_ast(program, &has_dataset, &has_array);
+    ast_destroy(program);
+    parser_release(&parser);
+    if (has_dataset) return SCRIPT_PIPELINE_CANONICAL_DATASET;
+    if (has_array) return SCRIPT_PIPELINE_CANONICAL_ARRAY;
+    return SCRIPT_PIPELINE_DATASET_COMPAT;
+}
+
 static ScriptPipeline script_pipeline_for_source(const char *script) {
     if (!script) return SCRIPT_PIPELINE_DATASET_COMPAT;
-    if (strstr(script, "analisis") != NULL &&
-        strstr(script, "dataset cargar") != NULL) {
-        return SCRIPT_PIPELINE_CANONICAL_DATASET;
-    }
-    if (strstr(script, "analisis") != NULL &&
-        strstr(script, "arreglo") != NULL &&
-        strstr(script, "dataset cargar") == NULL) {
-        return SCRIPT_PIPELINE_CANONICAL_ARRAY;
-    }
+    ScriptPipeline parsed_pipeline = script_pipeline_from_ast(script);
+    if (parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
+        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) return parsed_pipeline;
     if (strstr(script, "funcion") != NULL) {
         return SCRIPT_PIPELINE_NUMERIC_FUNCTIONS_COMPAT;
     }
