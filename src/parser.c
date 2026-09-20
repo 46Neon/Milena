@@ -571,6 +571,21 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             } else if (parser_match(parser, TOKEN_KW_ESTADISTICA)) {
                 parser_advance(parser);
                 ast_add_child(node, ast_create(AST_DECLARACION_ESTADISTICA));
+            } else if (parser_is_identifier(parser) &&
+                       strcmp(parser->current.lexeme, "perfil_avanzado") == 0) {
+                char command_name[MAX_TOKEN_LEN];
+                strncpy(command_name, parser->current.lexeme, sizeof(command_name) - 1);
+                command_name[sizeof(command_name) - 1] = '\0';
+                parser_advance(parser);
+                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                    if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna SST")) {
+                        ASTNode *sst = ast_create_leaf(AST_COMANDO_SST,
+                                                       parser->previous.lexeme);
+                        if (sst) sst->type_name = milena_strdup(command_name);
+                        if (sst) ast_add_child(node, sst);
+                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de SST");
+                    }
+                }
             }
         } else if (parser_match(parser, TOKEN_KW_DATASET)) {
             parser_advance(parser);

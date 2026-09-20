@@ -47,6 +47,7 @@ typedef enum {
     AST_BLOQUE_UNIR,
     AST_COMANDO_DERECHA,
     AST_COMANDO_CLAVE,
+    AST_COMANDO_SST,
     AST_NODE_TYPE_COUNT
 } ASTNodeType;
 

@@ -5,6 +5,7 @@
 #include "analysis.h"
 #include "schema.h"
 #include "table.h"
+#include "sst_advanced.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -481,6 +482,58 @@ static MilenaStatus dataset_runtime_clean(const ASTNode *block,
     return MILENA_OK;
 }
 
+static MilenaStatus runtime_write_sst_profile(const MilenaTable *table,
+                                                 const char *column_name,
+                                                 const char *output_path,
+                                                 MilenaError *error) {
+    int column = milena_table_column_index(table, column_name);
+    const MilenaTableColumn *data = column < 0 ? NULL :
+        milena_table_column(table, (size_t)column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "El perfil SST requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = table->row_count == 0 ? NULL :
+        (double *)malloc(table->row_count * sizeof(*values));
+    if (table->row_count && !values) {
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para perfil SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)column, row)) continue;
+        const void *raw = NULL;
+        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
+        switch (data->values.dtype) {
+            case MILENA_DTYPE_INT64: values[count++] = (double)*(const int64_t *)raw; break;
+            case MILENA_DTYPE_UINT64: values[count++] = (double)*(const uint64_t *)raw; break;
+            case MILENA_DTYPE_FLOAT32: values[count++] = (double)*(const float *)raw; break;
+            case MILENA_DTYPE_FLOAT64: values[count++] = *(const double *)raw; break;
+            default: values[count++] = 0.0; break;
+        }
+    }
+    SstAdvancedStats stats;
+    MilenaStatus status = sst_advanced_compute(values, NULL, count, &stats, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.sst.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"perfil_avanzado\",\"variable\":\"");
+                for (const char *p = column_name; *p; p++) fputc(*p == '"' ? '\\' : *p, out);
+                fprintf(out, "\",\"n\":%zu,\"media\":%.10g,\"desviacion\":%.10g,\"p90\":%.10g,\"p95\":%.10g}\n",
+                        stats.count, stats.mean, stats.standard_deviation, stats.p90, stats.p95);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    free(values);
+    return status;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -951,6 +1004,20 @@ MilenaStatus milena_run_dataset_program(const char *source,
         /* La exportación final consume directamente la tabla tipada. */
         status = analysis_table_report(&canonical_table, &schema,
                                        output_path, error);
+    }
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < analysis->child_count; i++) {
+            const ASTNode *node = analysis->children[i];
+            if (!node || node->type != AST_COMANDO_SST || !node->value) continue;
+            if (!node->type_name || strcmp(node->type_name, "perfil_avanzado") != 0) {
+                runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
+                status = MILENA_ERR_UNSUPPORTED;
+                break;
+            }
+            status = runtime_write_sst_profile(&canonical_table, node->value,
+                                               output_path, error);
+            if (status != MILENA_OK) break;
+        }
     }
     size_t final_rows = canonical_table.row_count;
     size_t final_columns = canonical_table.column_count;

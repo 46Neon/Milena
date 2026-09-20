@@ -98,6 +98,7 @@ int main(void) {
         "  .agrupar dataset { #por(\"ciudad\") #suma(\"total\") #media(\"total\") #conteo(\"total\") }\n"
         "  .unir { #derecha(\"test-language-runtime-right.csv\") #clave(\"ciudad\") }\n"
         "  .seleccionar { #columnas(\"ciudad,total_suma,region\") }\n"
+        "  #perfil_avanzado(\"total_suma\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -131,6 +132,15 @@ int main(void) {
     CHECK(strstr(json_text, "salidas_binarias") != NULL &&
           strstr(json_text, "compro") != NULL,
           "La salida binaria no llegó al reporte unificado");
+    FILE *sst_json = fopen("test-language-runtime.json.sst.json", "rb");
+    CHECK(sst_json != NULL, "El perfil SST canónico no creó su reporte");
+    char sst_text[2048];
+    size_t sst_size = fread(sst_text, 1, sizeof(sst_text) - 1, sst_json);
+    sst_text[sst_size] = '\0';
+    fclose(sst_json);
+    CHECK(strstr(sst_text, "perfil_avanzado") != NULL &&
+          strstr(sst_text, "total_suma") != NULL,
+          "El perfil SST no usó la tabla canónica");
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -161,6 +171,7 @@ int main(void) {
     remove(csv_path);
     remove(right_csv_path);
     remove(json_path);
+    remove("test-language-runtime.json.sst.json");
 
     puts("language runtime: parser + AST + arrays + datasets OK");
     return 0;
