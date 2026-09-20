@@ -20,6 +20,7 @@ static bool read_stream(FILE *stream, char *buffer, size_t size) {
 }
 
 int main(void) {
+    fprintf(stderr, "language runtime: arrays begin\n");
     const char *source =
         ".analisis prueba {\n"
         "  arreglo valores = [1, 2, 3, 4];\n"
@@ -47,6 +48,7 @@ int main(void) {
           "Percentil incorrecto");
     CHECK(strstr(text, "shape=(1)") != NULL, "keepdims no se conservó");
 
+    fprintf(stderr, "language runtime: arrays first complete\n");
     const char *zeros =
         ".analisis matriz {\n"
         "  arreglo matriz = ceros(2, 3);\n"
@@ -65,6 +67,7 @@ int main(void) {
           "La forma de la reducción de ceros es incorrecta");
     fclose(output);
 
+    fprintf(stderr, "language runtime: zeros complete\n");
     const char *invalid =
         ".analisis error { media(variable_no_declarada); }";
     milena_error_clear(&error);
@@ -73,6 +76,7 @@ int main(void) {
     CHECK(strstr(error.message, "no ha sido declarado") != NULL,
           "El primer diagnóstico fue sobrescrito");
 
+    fprintf(stderr, "language runtime: invalid parse complete\n");
     const char *csv_path = "test-language-runtime.csv";
     const char *json_path = "test-language-runtime.json";
     const char *right_csv_path = "test-language-runtime-right.csv";
@@ -110,10 +114,12 @@ int main(void) {
         "  #interes_simple(\"total_suma,total_suma,2\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
+    fprintf(stderr, "language runtime: dataset begin\n");
     milena_error_clear(&error);
     CHECK(milena_run_dataset_program(dataset_source, "test-language-runtime.milena",
                                      NULL, &error) == MILENA_OK,
           error.message);
+    fprintf(stderr, "language runtime: dataset complete\n");
     FILE *json = fopen(json_path, "rb");
     CHECK(json != NULL, "El runtime no creó el JSON del dataset");
     char json_text[4096];
@@ -239,6 +245,7 @@ int main(void) {
     CHECK(strstr(finance_text, "interes_simple") != NULL &&
           strstr(finance_text, "finance") != NULL,
           "Finanzas no usó la tabla canónica");
+    fprintf(stderr, "language runtime: reports complete\n");
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -249,6 +256,7 @@ int main(void) {
         "  .resumir dataset { #suma(\"total\") #media(\"total\") #conteo(\"total\") #varianza(\"total\") #desviacion_estandar(\"total\") #mediana(\"total\") #percentil(\"total,50\") }\n"
         "  .exportar { (\"test-language-runtime-summary.json\") }\n"
         "}\n";
+    fprintf(stderr, "language runtime: summary begin\n");
     milena_error_clear(&error);
     CHECK(milena_run_dataset_program(summary_source, "test-language-runtime-summary.milena",
                                      NULL, &error) == MILENA_OK,
