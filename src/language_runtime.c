@@ -13,6 +13,7 @@
 #include "sst_correlation.h"
 #include "sst_contingency.h"
 #include "sst_model.h"
+#include "language_semantic.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -337,6 +338,13 @@ MilenaStatus milena_run_array_program(const char *source, FILE *output,
         ast_destroy(program);
         parser_release(&parser);
         return error && error->code != MILENA_OK ? error->code : MILENA_ERR_PARSE;
+    }
+
+    MilenaStatus semantic_status = milena_validate_ast(program, error);
+    if (semantic_status != MILENA_OK) {
+        ast_destroy(program);
+        parser_release(&parser);
+        return semantic_status;
     }
 
     MilenaArrayRuntime runtime = {0};
@@ -1191,6 +1199,13 @@ MilenaStatus milena_run_dataset_program(const char *source,
         ast_destroy(program);
         parser_release(&parser);
         return error && error->code != MILENA_OK ? error->code : MILENA_ERR_PARSE;
+    }
+
+    MilenaStatus semantic_status = milena_validate_ast(program, error);
+    if (semantic_status != MILENA_OK) {
+        ast_destroy(program);
+        parser_release(&parser);
+        return semantic_status;
     }
 
     const ASTNode *analysis = NULL;
