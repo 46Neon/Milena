@@ -175,6 +175,11 @@ MilenaStatus milena_table_drop_null(MilenaTable *out,
 MilenaStatus milena_table_drop_duplicates(MilenaTable *out,
                                          const MilenaTable *source,
                                          MilenaError *error);
+MilenaStatus milena_table_add_product(MilenaTable *table,
+                                     const char *left_column,
+                                     const char *right_column,
+                                     const char *output_column,
+                                     MilenaError *error);
 MilenaStatus milena_table_drop_null_columns(MilenaTable *out,
                                             const MilenaTable *source,
                                             const char *const *column_names,

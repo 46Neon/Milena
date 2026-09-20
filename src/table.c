@@ -2,6 +2,8 @@
 #include "dataset.h"
 #include "schema.h"
 
+#include <math.h>
+
 #define MILENA_TABLE_MAGIC UINT64_C(0x4d494c5441424c45)
 
 static void table_error(MilenaError *error, MilenaStatus code,
@@ -2452,5 +2454,100 @@ MilenaStatus milena_table_drop_duplicates(MilenaTable *out,
     }
     milena_array_release(&mask);
     (void)kept_count;
+    return status;
+}
+
+
+static MilenaStatus table_numeric_cell(const MilenaTable *table, size_t column,
+                                       size_t row, double *value,
+                                       MilenaError *error) {
+    const MilenaTableColumn *data = milena_table_column(table, column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        table_error(error, MILENA_ERR_TYPE, "La transformación requiere columnas numéricas");
+        return MILENA_ERR_TYPE;
+    }
+    const void *raw = NULL;
+    MilenaStatus status = milena_table_get_array_value(table, column, row, &raw, error);
+    if (status != MILENA_OK) return status;
+    switch (data->values.dtype) {
+        case MILENA_DTYPE_BOOL: *value = *(const bool *)raw ? 1.0 : 0.0; break;
+        case MILENA_DTYPE_INT8: *value = (double)*(const int8_t *)raw; break;
+        case MILENA_DTYPE_INT16: *value = (double)*(const int16_t *)raw; break;
+        case MILENA_DTYPE_INT32: *value = (double)*(const int32_t *)raw; break;
+        case MILENA_DTYPE_INT64: *value = (double)*(const int64_t *)raw; break;
+        case MILENA_DTYPE_UINT8: *value = (double)*(const uint8_t *)raw; break;
+        case MILENA_DTYPE_UINT16: *value = (double)*(const uint16_t *)raw; break;
+        case MILENA_DTYPE_UINT32: *value = (double)*(const uint32_t *)raw; break;
+        case MILENA_DTYPE_UINT64: *value = (double)*(const uint64_t *)raw; break;
+        case MILENA_DTYPE_FLOAT32: *value = (double)*(const float *)raw; break;
+        case MILENA_DTYPE_FLOAT64: *value = *(const double *)raw; break;
+        default:
+            table_error(error, MILENA_ERR_TYPE, "Tipo numérico no soportado en producto");
+            return MILENA_ERR_TYPE;
+    }
+    return isfinite(*value) ? MILENA_OK : MILENA_ERR_DATA;
+}
+
+MilenaStatus milena_table_add_product(MilenaTable *table,
+                                     const char *left_column,
+                                     const char *right_column,
+                                     const char *output_column,
+                                     MilenaError *error) {
+    if (!table || !left_column || !right_column || !output_column) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Columnas inválidas para producto");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(table, error);
+    if (status != MILENA_OK) return status;
+    int left = milena_table_column_index(table, left_column);
+    int right = milena_table_column_index(table, right_column);
+    if (left < 0 || right < 0) {
+        table_error(error, MILENA_ERR_DATA, "Columna de producto inexistente");
+        return MILENA_ERR_DATA;
+    }
+    if (milena_table_column_index(table, output_column) >= 0) {
+        table_error(error, MILENA_ERR_DATA, "La columna de salida ya existe");
+        return MILENA_ERR_DATA;
+    }
+    double *values = NULL;
+    bool *validity = NULL;
+    if (table->row_count > 0) {
+        values = (double *)calloc(table->row_count, sizeof(*values));
+        validity = (bool *)calloc(table->row_count, sizeof(*validity));
+        if (!values || !validity) {
+            free(values); free(validity);
+            table_error(error, MILENA_ERR_MEMORY, "Sin memoria para producto de tabla");
+            return MILENA_ERR_MEMORY;
+        }
+    }
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)left, row) ||
+            milena_table_is_null(table, (size_t)right, row)) continue;
+        double left_value = 0.0, right_value = 0.0;
+        status = table_numeric_cell(table, (size_t)left, row, &left_value, error);
+        if (status == MILENA_OK)
+            status = table_numeric_cell(table, (size_t)right, row, &right_value, error);
+        if (status != MILENA_OK) break;
+        values[row] = left_value * right_value;
+        if (!isfinite(values[row])) {
+            table_error(error, MILENA_ERR_OVERFLOW, "Producto fuera de rango");
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
+        validity[row] = true;
+    }
+    if (status == MILENA_OK) {
+        MilenaArray result;
+        milena_array_init(&result);
+        size_t shape[1] = {table->row_count};
+        status = milena_array_from_f64(&result, 1, shape, values, error);
+        if (status == MILENA_OK) {
+            status = milena_table_add_column_copy(table, output_column, &result,
+                                                  validity, error);
+        }
+        milena_array_release(&result);
+    }
+    free(values);
+    free(validity);
     return status;
 }

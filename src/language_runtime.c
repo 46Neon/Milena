@@ -442,16 +442,9 @@ static MilenaStatus dataset_runtime_transform(const ASTNode *block,
         const ASTNode *command = block->children[i];
         if (!command) continue;
         if (command->type == AST_COMANDO_TOTAL) {
-            char left[128] = {0}, right[128] = {0};
-            if (!command->value ||
-                sscanf(command->value, " %127s * %127s", left, right) != 2) {
-                runtime_error(error, MILENA_ERR_PARSE,
-                              "La transformación total debe tener la forma columna * columna");
-                return MILENA_ERR_PARSE;
-            }
-            MilenaStatus status = dataset_add_product(dataset, left, right,
-                                                       "total", error);
-            if (status != MILENA_OK) return status;
+            /* El producto se ejecuta sobre MilenaTable después de materializar
+             * el esquema; aquí solo se conserva el comando AST. */
+            (void)dataset;
         } else if (command->type == AST_COMANDO_PERIODO) {
             if (!command->value || strcmp(command->value, "mes de fecha") != 0) {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED,
@@ -618,26 +611,48 @@ MilenaStatus milena_run_dataset_program(const char *source,
     if (status == MILENA_OK) {
         for (size_t i = 0; i < analysis->child_count; i++) {
             const ASTNode *block = analysis->children[i];
-            if (!block || block->type != AST_BLOQUE_LIMPIAR) continue;
-            for (size_t j = 0; j < block->child_count; j++) {
-                const ASTNode *command = block->children[j];
-                if (!command || !command->value ||
-                    strcmp(command->value, "eliminar") != 0) continue;
-                MilenaTable cleaned;
-                milena_table_init(&cleaned);
-                if (command->type == AST_COMANDO_NULOS) {
-                    status = milena_table_drop_null(&cleaned, &canonical_table, error);
-                } else if (command->type == AST_COMANDO_DUPLICADOS) {
-                    status = milena_table_drop_duplicates(&cleaned, &canonical_table, error);
-                } else {
+            if (!block) continue;
+            if (block->type == AST_BLOQUE_LIMPIAR) {
+                for (size_t j = 0; j < block->child_count; j++) {
+                    const ASTNode *command = block->children[j];
+                    if (!command || !command->value ||
+                        strcmp(command->value, "eliminar") != 0) continue;
+                    MilenaTable cleaned;
+                    milena_table_init(&cleaned);
+                    if (command->type == AST_COMANDO_NULOS) {
+                        status = milena_table_drop_null(&cleaned, &canonical_table, error);
+                    } else if (command->type == AST_COMANDO_DUPLICADOS) {
+                        status = milena_table_drop_duplicates(&cleaned, &canonical_table, error);
+                    } else {
+                        milena_table_destroy(&cleaned);
+                        continue;
+                    }
+                    if (status == MILENA_OK) {
+                        milena_table_swap(&canonical_table, &cleaned);
+                    }
                     milena_table_destroy(&cleaned);
-                    continue;
+                    if (status != MILENA_OK) break;
                 }
-                if (status == MILENA_OK) {
-                    milena_table_swap(&canonical_table, &cleaned);
+            } else if (block->type == AST_BLOQUE_TRANSFORMAR) {
+                for (size_t j = 0; j < block->child_count; j++) {
+                    const ASTNode *command = block->children[j];
+                    if (!command || command->type != AST_COMANDO_TOTAL ||
+                        !command->value) continue;
+                    char left[128] = {0}, right[128] = {0};
+                    if (sscanf(command->value, " %127s * %127s", left, right) != 2) {
+                        runtime_error(error, MILENA_ERR_PARSE,
+                                      "La transformación total debe tener la forma columna * columna");
+                        status = MILENA_ERR_PARSE;
+                        break;
+                    }
+                    status = milena_table_add_product(&canonical_table, left, right,
+                                                      "total", error);
+                    if (status == MILENA_OK) {
+                        status = schema_add(&schema, "total", MILENA_VAR_NUMERIC,
+                                            MILENA_ROLE_FEATURE, error);
+                    }
+                    if (status != MILENA_OK) break;
                 }
-                milena_table_destroy(&cleaned);
-                if (status != MILENA_OK) break;
             }
             if (status != MILENA_OK) break;
         }
