@@ -25,3 +25,8 @@ cambios salvo correcciones de seguridad o aislamiento.
 La clasificación textual puede decidir que un archivo es legado, pero nunca
 puede decidir cómo se ejecuta una capacidad oficial. Toda capacidad oficial
 debe estar representada por tokens, AST, validación semántica y runtime común.
+
+La ejecución SST textual heredada fue retirada del router. Los comandos SST
+solo se ejecutan desde `AST_COMANDO_SST` y `language_runtime.c`; un archivo
+antiguo debe migrarse a la sintaxis oficial en vez de obtener un reporte SST
+por una segunda ruta.
