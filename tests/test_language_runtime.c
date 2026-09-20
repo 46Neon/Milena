@@ -108,6 +108,7 @@ int main(void) {
         "  #chi_cuadrado(\"ciudad,region\")\n"
         "  #riesgo(\"ciudad,region,Caracas,Centro\")\n"
         "  #modelo_sst(\"ciudad,total_suma,region\")\n"
+        "  #interes_simple(\"total_suma,total_suma,2\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
@@ -230,6 +231,15 @@ int main(void) {
     CHECK(strstr(model_text, "modelo_sst") != NULL &&
           strstr(model_text, "MilenaTable") != NULL,
           "Modelo SST no usó la tabla canónica");
+    FILE *finance_json = fopen("test-language-runtime.json.interes_simple.json", "rb");
+    CHECK(finance_json != NULL, "Finanzas canónicas no creó su reporte");
+    char finance_text[2048];
+    size_t finance_size = fread(finance_text, 1, sizeof(finance_text) - 1, finance_json);
+    finance_text[finance_size] = '\0';
+    fclose(finance_json);
+    CHECK(strstr(finance_text, "interes_simple") != NULL &&
+          strstr(finance_text, "finance") != NULL,
+          "Finanzas no usó la tabla canónica");
     const char *summary_json_path = "test-language-runtime-summary.json";
     const char *summary_source =
         ".analisis resumen {\n"
@@ -270,6 +280,7 @@ int main(void) {
     remove("test-language-runtime.json.chi_cuadrado.json");
     remove("test-language-runtime.json.riesgo.json");
     remove("test-language-runtime.json.modelo_sst.json");
+    remove("test-language-runtime.json.interes_simple.json");
 
     puts("language runtime: parser + AST + arrays + datasets OK");
     return 0;

@@ -14,6 +14,7 @@
 #include "sst_contingency.h"
 #include "sst_model.h"
 #include "language_semantic.h"
+#include "finance.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -1125,6 +1126,90 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
     return status;
 }
 
+static bool runtime_numeric_value(const MilenaTable *table, size_t column,
+                                   size_t row, double *value,
+                                   MilenaError *error) {
+    const MilenaTableColumn *data = milena_table_column(table, column);
+    const void *raw = NULL;
+    if (!data || data->type != MILENA_COLUMN_ARRAY ||
+        milena_table_get_array_value(table, column, row, &raw, error) != MILENA_OK) return false;
+    if (data->values.dtype == MILENA_DTYPE_FLOAT64) *value = *(const double *)raw;
+    else if (data->values.dtype == MILENA_DTYPE_FLOAT32) *value = (double)*(const float *)raw;
+    else if (data->values.dtype == MILENA_DTYPE_INT64) *value = (double)*(const int64_t *)raw;
+    else if (data->values.dtype == MILENA_DTYPE_UINT64) *value = (double)*(const uint64_t *)raw;
+    else return false;
+    return isfinite(*value);
+}
+
+static double runtime_decimal_double(const MilenaDecimal *value) {
+    double scale = 1.0;
+    for (int32_t i = 0; i < value->scale; i++) scale *= 10.0;
+    return (double)value->coefficient / scale;
+}
+
+static MilenaStatus runtime_write_finance_simple_interest(const MilenaTable *table,
+                                                           const char *specification,
+                                                           const char *output_path,
+                                                           MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *principal_name = strtok(spec, ",");
+    char *rate_name = strtok(NULL, ",");
+    char *period_text = strtok(NULL, ",");
+    if (!principal_name || !rate_name || !period_text) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "interes_simple requiere principal,tasa,periodos");
+        return MILENA_ERR_PARSE;
+    }
+    char *end = NULL;
+    unsigned long periods_value = strtoul(period_text, &end, 10);
+    if (!end || *end != '\0' || periods_value > UINT32_MAX) {
+        runtime_error(error, MILENA_ERR_PARSE, "Periodos financieros inválidos");
+        return MILENA_ERR_PARSE;
+    }
+    int principal_column = milena_table_column_index(table, principal_name);
+    int rate_column = milena_table_column_index(table, rate_name);
+    if (principal_column < 0 || rate_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna financiera inexistente");
+        return MILENA_ERR_DATA;
+    }
+    MilenaDecimal total;
+    if (milena_decimal_from_i64(&total, 0, error) != MILENA_OK) return MILENA_ERR_INTERNAL;
+    size_t rows = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)principal_column, row) ||
+            milena_table_is_null(table, (size_t)rate_column, row)) continue;
+        double principal_value = 0.0, rate_value = 0.0;
+        if (!runtime_numeric_value(table, (size_t)principal_column, row, &principal_value, error) ||
+            !runtime_numeric_value(table, (size_t)rate_column, row, &rate_value, error)) continue;
+        char principal_text[64], rate_text[64];
+        snprintf(principal_text, sizeof(principal_text), "%.17g", principal_value);
+        snprintf(rate_text, sizeof(rate_text), "%.17g", rate_value);
+        MilenaDecimal principal, rate_decimal, interest;
+        MilenaRate rate;
+        MilenaStatus status = milena_decimal_from_string(&principal, principal_text, error);
+        if (status == MILENA_OK) status = milena_decimal_from_string(&rate_decimal, rate_text, error);
+        if (status == MILENA_OK) status = milena_rate_init(&rate, rate_decimal,
+                                                            MILENA_RATE_PERIODIC, 1, error);
+        if (status == MILENA_OK) status = milena_simple_interest(&interest, &principal,
+                                                                   &rate, (uint32_t)periods_value, error);
+        if (status != MILENA_OK) return status;
+        status = milena_decimal_add(&total, &total, &interest, error);
+        if (status != MILENA_OK) return status;
+        rows++;
+    }
+    char path[2048];
+    int written = snprintf(path, sizeof(path), "%s.interes_simple.json", output_path);
+    if (written < 0 || (size_t)written >= sizeof(path)) return MILENA_ERR_OVERFLOW;
+    FILE *out = fopen(path, "wb");
+    if (!out) return MILENA_ERR_IO;
+    fprintf(out, "{\"operacion\":\"interes_simple\",\"filas\":%zu,\"interes_total\":%.17g,\"fuente\":\"MilenaTable+finance\"}\n",
+            rows, runtime_decimal_double(&total));
+    if (fclose(out) != 0) return MILENA_ERR_IO;
+    return MILENA_OK;
+}
+
 static MilenaStatus runtime_write_sst_model(const MilenaTable *table,
                                                  const char *specification,
                                                  const char *output_path,
@@ -1720,6 +1805,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
             } else if (strcmp(node->type_name, "modelo_sst") == 0) {
                 status = runtime_write_sst_model(&canonical_table, node->value,
                                                  output_path, error);
+            } else if (strcmp(node->type_name, "interes_simple") == 0) {
+                status = runtime_write_finance_simple_interest(&canonical_table, node->value,
+                                                               output_path, error);
             } else {
                 runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
                 status = MILENA_ERR_UNSUPPORTED;

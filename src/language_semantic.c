@@ -4,7 +4,8 @@
 static bool known_sst_command(const char *name) {
     static const char *const commands[] = {
         "perfil_avanzado", "histograma", "normalidad", "tasa", "poisson",
-        "correlacion", "wilcoxon", "chi_cuadrado", "riesgo", "modelo_sst"
+        "correlacion", "wilcoxon", "chi_cuadrado", "riesgo", "modelo_sst",
+        "interes_simple"
     };
     if (!name || !name[0]) return false;
     for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
@@ -49,7 +50,8 @@ static MilenaStatus validate_sst_arguments(const ASTNode *node,
              strcmp(node->type_name, "wilcoxon") == 0 ||
              strcmp(node->type_name, "chi_cuadrado") == 0) expected = 2;
     else if (strcmp(node->type_name, "riesgo") == 0) expected = 4;
-    else if (strcmp(node->type_name, "modelo_sst") == 0) expected = 3;
+    else if (strcmp(node->type_name, "modelo_sst") == 0 ||
+             strcmp(node->type_name, "interes_simple") == 0) expected = 3;
     if (!valid || count != expected)
         return semantic_error(node, error, "Cantidad de argumentos SST inválida");
     return MILENA_OK;
@@ -138,6 +140,9 @@ static MilenaStatus validate_sst_table_node(const ASTNode *node,
             status = validate_sst_column(node, table, a, false, true, error);
             if (status == MILENA_OK) status = validate_sst_column(node, table, b, false, true, error);
             (void)c; (void)d;
+        } else if (strcmp(node->type_name, "interes_simple") == 0) {
+            status = validate_sst_column(node, table, a, true, false, error);
+            if (status == MILENA_OK) status = validate_sst_column(node, table, b, true, false, error);
         } else if (strcmp(node->type_name, "modelo_sst") == 0) {
             status = validate_sst_column(node, table, a, false, true, error);
             if (status == MILENA_OK) status = validate_sst_column(node, table, b, true, false, error);

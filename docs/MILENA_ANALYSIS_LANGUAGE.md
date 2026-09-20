@@ -15,6 +15,7 @@ La superficie oficial de análisis usa una única cadena lexer → parser → AS
 #chi_cuadrado("fila,columna")
 #riesgo("exposicion,evento,categoria_expuesta,categoria_evento")
 #modelo_sst("area,severidad,cargo")
+#interes_simple("principal,tasa,periodos")
 ```
 
-`#riesgo` requiere categorías positivas explícitas; el resultado ya no depende del orden accidental de las filas. Las columnas se resuelven contra la `MilenaTable` que produce el análisis.
+`#riesgo` requiere categorías positivas explícitas; el resultado ya no depende del orden accidental de las filas. Las columnas se resuelven contra la `MilenaTable` que produce el análisis. `#interes_simple` usa las operaciones decimales de finanzas sobre columnas numéricas de esa misma tabla.
