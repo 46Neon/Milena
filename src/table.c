@@ -864,7 +864,10 @@ MilenaStatus milena_table_select_columns(MilenaTable *out,
     for (size_t i = 0; status == MILENA_OK && i < name_count; ++i) {
         int index = milena_table_column_index(source, names[i]);
         if (index < 0) {
-            table_error(error, MILENA_ERR_DATA, "Columna seleccionada no existe");
+            char message[256];
+            (void)snprintf(message, sizeof(message), "Columna seleccionada no existe: %s",
+                           names[i] ? names[i] : "(nula)");
+            table_error(error, MILENA_ERR_DATA, message);
             status = MILENA_ERR_DATA;
         } else {
             status = add_column_rows(&temporary, &source->columns[index],
