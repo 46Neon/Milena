@@ -1188,13 +1188,15 @@ MilenaStatus milena_table_sort_keys(MilenaTable *out,
         indices[i] = (size_t)index;
     }
     size_t n = source->row_count;
-    size_t *order = n == 0 ? NULL : (size_t *)malloc(n * sizeof(size_t));
-    size_t *work = n == 0 ? NULL : (size_t *)malloc(n * sizeof(size_t));
-    if (n != 0 && (order == NULL || work == NULL)) {
-        free(indices); free(order); free(work);
+    size_t *order_storage = n == 0 ? NULL : (size_t *)malloc(n * sizeof(size_t));
+    size_t *work_storage = n == 0 ? NULL : (size_t *)malloc(n * sizeof(size_t));
+    if (n != 0 && (order_storage == NULL || work_storage == NULL)) {
+        free(indices); free(order_storage); free(work_storage);
         table_error(error, MILENA_ERR_MEMORY, "No se pudo reservar mergesort");
         return MILENA_ERR_MEMORY;
     }
+    size_t *order = order_storage;
+    size_t *work = work_storage;
     for (size_t i = 0; i < n; ++i) order[i] = i;
     for (size_t width = 1; width < n;) {
         for (size_t begin = 0; begin < n;) {
@@ -1216,7 +1218,7 @@ MilenaStatus milena_table_sort_keys(MilenaTable *out,
         else width *= 2;
     }
     status = table_take_rows(out, source, order, n, error);
-    free(indices); free(order); free(work);
+    free(indices); free(order_storage); free(work_storage);
     return status;
 }
 

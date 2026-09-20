@@ -1754,7 +1754,7 @@ static MilenaStatus calculate_binary(NumericValue left, NumericValue right,
     }
 overflow:
     array_error(error, MILENA_ERR_OVERFLOW,
-                "La operación entera no es representable");
+                "La operación entera está fuera de rango y no es representable");
     return MILENA_ERR_OVERFLOW;
 }
 
