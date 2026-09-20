@@ -105,6 +105,7 @@ void ast_destroy(ASTNode *node) {
     }
     free(node->children);
     free(node->value);
+    free(node->type_name);
     free(node);
 }
 

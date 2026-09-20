@@ -2,6 +2,8 @@
 
 #include "array.h"
 #include "dataset.h"
+#include "analysis.h"
+#include "schema.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
@@ -561,8 +563,34 @@ MilenaStatus milena_run_dataset_program(const char *source,
         status = dataset_runtime_path(requested_output, script_filename, true,
                                       output_path, sizeof(output_path), error);
     }
+    MilenaSchema schema;
+    schema_init(&schema);
     if (status == MILENA_OK) {
-        status = dataset_save_json(&runtime.dataset, output_path, error);
+        for (size_t i = 0; i < analysis->child_count; i++) {
+            const ASTNode *node = analysis->children[i];
+            if (!node || node->type != AST_DECLARACION_VARIABLE || !node->value) continue;
+            MilenaVariableType type = MILENA_VAR_TEXT;
+            if (node->type_name) {
+                if (strcmp(node->type_name, "numerica") == 0) type = MILENA_VAR_NUMERIC;
+                else if (strcmp(node->type_name, "categorica") == 0) type = MILENA_VAR_CATEGORICAL;
+                else if (strcmp(node->type_name, "binaria") == 0) type = MILENA_VAR_BINARY;
+                else if (strcmp(node->type_name, "fecha") == 0 ||
+                         strcmp(node->type_name, "texto") == 0) type = MILENA_VAR_TEXT;
+            }
+            status = schema_add(&schema, node->value, type,
+                                MILENA_ROLE_FEATURE, error);
+            if (status != MILENA_OK) break;
+        }
+        if (status == MILENA_OK && schema.count == 0) {
+            for (size_t i = 0; i < runtime.dataset.column_count; i++) {
+                status = schema_add(&schema, runtime.dataset.headers[i],
+                                    MILENA_VAR_TEXT, MILENA_ROLE_FEATURE, error);
+                if (status != MILENA_OK) break;
+            }
+        }
+    }
+    if (status == MILENA_OK) {
+        status = analysis_dataset_report(&runtime.dataset, &schema, output_path, error);
     }
     if (status == MILENA_OK) {
         FILE *stream = output ? output : stdout;
@@ -571,6 +599,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 runtime.dataset.row_count, runtime.dataset.column_count, output_path);
     }
 
+    schema_destroy(&schema);
     if (runtime.loaded) dataset_destroy(&runtime.dataset);
     ast_destroy(program);
     parser_release(&parser);

@@ -60,6 +60,7 @@ typedef struct ASTNode {
     ASTNodeType type;
     ASTStatOperation statistical_operation;
     char *value;
+    char *type_name;
     double number_value;
     double percentile;
     int axis;

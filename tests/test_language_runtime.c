@@ -82,6 +82,8 @@ int main(void) {
     const char *dataset_source =
         ".analisis ventas {\n"
         "  dataset cargar datos(\"test-language-runtime.csv\")\n"
+        "  variable precio numerica\n"
+        "  variable cantidad numerica\n"
         "  .limpiar dataset { #nulos(\"eliminar\") }\n"
         "  .transformar dataset { #total(\"precio * cantidad\") }\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
@@ -98,6 +100,8 @@ int main(void) {
     fclose(json);
     CHECK(strstr(json_text, "total") != NULL,
           "La transformación no llegó al reporte unificado");
+    CHECK(strstr(json_text, "numerica") != NULL,
+          "El esquema del dataset no llegó al reporte unificado");
     remove(csv_path);
     remove(json_path);
 

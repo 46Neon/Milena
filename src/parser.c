@@ -245,6 +245,14 @@ static ASTNode *parse_expression(Parser *parser) {
     return left;
 }
 
+static bool parser_is_schema_type(const char *text) {
+    return text && (strcmp(text, "numerica") == 0 ||
+                    strcmp(text, "categorica") == 0 ||
+                    strcmp(text, "binaria") == 0 ||
+                    strcmp(text, "texto") == 0 ||
+                    strcmp(text, "fecha") == 0);
+}
+
 static ASTNode *parse_variable_declaration(Parser *parser) {
     parser_advance(parser);
     if (!parser_is_identifier(parser)) {
@@ -255,7 +263,32 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
     strncpy(name, parser->current.lexeme, sizeof(name) - 1);
     name[sizeof(name) - 1] = '\0';
     parser_advance(parser);
-    if (!parser_expect(parser, TOKEN_IGUAL, "Se esperaba '=' en la declaración de variable")) return NULL;
+
+    /* Declaración de columna de un dataset: variable edad numerica */
+    if (parser_is_identifier(parser) &&
+        parser_is_schema_type(parser->current.lexeme)) {
+        char type_name[MAX_TOKEN_LEN];
+        strncpy(type_name, parser->current.lexeme, sizeof(type_name) - 1);
+        type_name[sizeof(type_name) - 1] = '\0';
+        parser_advance(parser);
+        if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+        ASTNode *node = ast_create_leaf(AST_DECLARACION_VARIABLE, name);
+        if (!node) {
+            parser_error(parser, "No se pudo crear la declaración de columna");
+            return NULL;
+        }
+        node->type_name = milena_strdup(type_name);
+        if (!node->type_name ||
+            milena_symbols_declare(&parser->symbols, name, &parser->error) != MILENA_OK) {
+            ast_destroy(node);
+            parser->has_error = true;
+            return NULL;
+        }
+        return node;
+    }
+
+    if (!parser_expect(parser, TOKEN_IGUAL,
+                       "Se esperaba '=' en la declaración de variable")) return NULL;
     ASTNode *value = parse_expression(parser);
     if (!value) return NULL;
     if (milena_symbols_declare(&parser->symbols, name, &parser->error) != MILENA_OK) {
@@ -269,8 +302,14 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
         parser_error(parser, "No se pudo crear la variable");
         return NULL;
     }
-    ast_add_child(node, value);
-    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de la variable")) {
+    if (!ast_add_child(node, value)) {
+        ast_destroy(node);
+        ast_destroy(value);
+        parser_error(parser, "No se pudo conectar la variable al AST");
+        return NULL;
+    }
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después de la variable")) {
         ast_destroy(node);
         return NULL;
     }
@@ -463,6 +502,19 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
         if (parser_match(parser, TOKEN_KW_VARIABLE)) {
             ASTNode *declaration = parse_variable_declaration(parser);
             if (declaration) ast_add_child(node, declaration);
+        } else if (parser_is_identifier(parser) &&
+                   (strcmp(parser->current.lexeme, "entrada") == 0 ||
+                    strcmp(parser->current.lexeme, "salida") == 0)) {
+            /* Las anotaciones de rol se incorporarán al AST de esquema en la
+             * siguiente migración; por ahora se consumen sin crear otra ruta
+             * de ejecución. */
+            parser_advance(parser);
+            while (!parser_match(parser, TOKEN_EOF) &&
+                   !parser_match(parser, TOKEN_LLAVE_DER) &&
+                   !parser_match(parser, TOKEN_PUNTO)) {
+                parser_advance(parser);
+                if (parser->previous.type == TOKEN_CADENA) break;
+            }
         } else if (parser_is_identifier(parser) &&
                    strcmp(parser->current.lexeme, "array") != 0 &&
                    strcmp(parser->current.lexeme, "arreglo") != 0) {
