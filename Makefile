@@ -10,10 +10,11 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
           src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c
 OBJECTS = $(SOURCES:.c=.o)
+SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions check-source-manifest debug
+.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -98,6 +99,18 @@ test-functions: tests/test_functions
 tests/test_functions: tests/test_functions.c src/parser.c src/lexer.c src/ast.c src/interpreter.c src/symbol.c src/symbol_table.c src/dataset.c src/common.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
+test-script-functions: tests/test_script_functions
+	./tests/test_script_functions
+
+tests/test_script_functions: tests/test_script_functions.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+
+test-user-functions: tests/test_user_functions
+	./tests/test_user_functions
+
+tests/test_user_functions: tests/test_user_functions.c src/function_parser.c src/user_functions.c
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+
 tests/test_parser_variables: tests/test_parser_variables.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
 	$(CC) $(CFLAGS) tests/test_parser_variables.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
 
@@ -136,7 +149,7 @@ debug:
 
 test: check-source-manifest $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance \
       test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics \
-      test-parser-variables test-functions
+      test-parser-variables test-functions test-script-functions test-user-functions
 	./tests/run_tests.sh
 
 clean:
