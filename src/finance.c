@@ -624,6 +624,7 @@ MilenaStatus milena_date_init(MilenaDate *out, int32_t year, uint8_t month,
     out->year = year;
     out->month = month;
     out->day = day;
+    out->valid = true;
     return MILENA_OK;
 }
 
