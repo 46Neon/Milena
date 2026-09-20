@@ -197,12 +197,12 @@ sed \
 
 ./milena run "$tmp_dir/clasificacion_binaria.milena" >/dev/null
 test -s "$tmp_dir/reporte_clientes.json"
-test -s "$tmp_dir/reporte_clientes.json.sst.json"
-grep -q '"salidas_binarias"' "$tmp_dir/reporte_clientes.json"
-grep -q '"unos": 5' "$tmp_dir/reporte_clientes.json"
-grep -q '"histograma"' "$tmp_dir/reporte_clientes.json.sst.json"
-grep -q '"pearson"' "$tmp_dir/reporte_clientes.json.sst.json"
-grep -q '"normalidad"' "$tmp_dir/reporte_clientes.json.sst.json"
+test -s "$tmp_dir/reporte_clientes.json.histograma.json"
+test -s "$tmp_dir/reporte_clientes.json.correlacion.json"
+test -s "$tmp_dir/reporte_clientes.json.normalidad.json"
+grep -q '"histograma"' "$tmp_dir/reporte_clientes.json.histograma.json"
+grep -q '"coeficiente"' "$tmp_dir/reporte_clientes.json.correlacion.json"
+grep -q '"normalidad"' "$tmp_dir/reporte_clientes.json.normalidad.json"
 
 ./milena perfil "$tmp_dir/clientes.csv" "$tmp_dir/perfil.json" >/dev/null
 test -s "$tmp_dir/perfil.json"
