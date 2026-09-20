@@ -9,6 +9,7 @@
 #include "sst_normality.h"
 #include "sst_rates.h"
 #include "array.h"
+#include "user_functions.h"
 #include <ctype.h>
 
 static char *read_file(const char *filename, MilenaError *error) {
@@ -1024,10 +1025,47 @@ array_cleanup_error:
     return error && error->code ? error->code : MILENA_ERR_INTERNAL;
 }
 
+
+/* Execute the numeric function section of a script before the data-script path.
+ * Function declarations are deliberately isolated from the legacy command parser,
+ * so adding functions cannot change statistical/array semantics. */
+static MilenaStatus run_numeric_functions(const char *script, MilenaError *error) {
+    const char *p = script; size_t total = strlen(script), used = 0;
+    char *decls = (char *)malloc(total + 1), message[256] = {0};
+    MilenaFunctionTable table; milena_function_table_init(&table);
+    if (!decls) { milena_error_set(error, MILENA_ERR_MEMORY, 0, 0, 0, "Sin memoria para funciones"); return MILENA_ERR_MEMORY; }
+    while ((p = strstr(p, "funcion")) != NULL) {
+        const char *open = strchr(p, '{'); const char *q; int depth = 0;
+        if (!open) break;
+        for (q = open; *q; q++) { if (*q == '{') depth++; else if (*q == '}' && --depth == 0) { q++; break; } }
+        if (depth != 0) { free(decls); milena_function_table_release(&table); milena_error_set(error, MILENA_ERR_PARSE, 0, 0, 0, "Función sin cierre"); return MILENA_ERR_PARSE; }
+        memcpy(decls + used, p, (size_t)(q - p)); used += (size_t)(q - p); decls[used++] = ' '; p = q;
+    }
+    decls[used] = '\0';
+    if (!milena_parse_numeric_functions(decls, &table, message, sizeof message)) {
+        free(decls); milena_function_table_release(&table); milena_error_set(error, MILENA_ERR_PARSE, 0, 0, 0, message); return MILENA_ERR_PARSE;
+    }
+    free(decls);
+    /* A script invokes a function with: llamar nombre(1, 2); (also llama). */
+    const char *call = strstr(script, "llamar");
+    if (!call) call = strstr(script, "llama");
+    if (call) {
+        call += (strncmp(call, "llamar", 6) == 0 ? 6 : 5); while (isspace((unsigned char)*call)) call++;
+        char name[128]; size_t ni = 0; while ((isalnum((unsigned char)*call) || *call == '_') && ni + 1 < sizeof name) name[ni++] = *call++;
+        name[ni] = '\0'; while (isspace((unsigned char)*call)) call++;
+        if (*call != '(' || !name[0]) { milena_function_table_release(&table); milena_error_set(error, MILENA_ERR_PARSE, 0, 0, 0, "Llamada de función inválida"); return MILENA_ERR_PARSE; }
+        call++; double args[64]; size_t argc = 0; while (1) { char *end; while (isspace((unsigned char)*call)) call++; if (*call == ')') { call++; break; } if (argc == 64) { milena_function_table_release(&table); return MILENA_ERR_PARSE; } args[argc] = strtod(call, &end); if (end == call) { milena_function_table_release(&table); milena_error_set(error, MILENA_ERR_PARSE, 0, 0, 0, "Argumento numérico inválido"); return MILENA_ERR_PARSE; } argc++; call = end; while (isspace((unsigned char)*call)) call++; if (*call == ',') { call++; continue; } if (*call == ')') { call++; break; } milena_function_table_release(&table); milena_error_set(error, MILENA_ERR_PARSE, 0, 0, 0, "Se esperaba ',' o ')'"); return MILENA_ERR_PARSE; }
+        double result = 0.0; if (!milena_function_call(&table, name, args, argc, &result, message, sizeof message)) { milena_function_table_release(&table); milena_error_set(error, MILENA_ERROR_RUNTIME, 0, 0, 0, message); return MILENA_ERROR_RUNTIME; }
+        printf("%s = %.17g\n", name, result);
+    }
+    milena_function_table_release(&table); return MILENA_OK;
+}
+
 MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     if (!filename) return MILENA_ERR_ARGUMENT;
     char *script = read_file(filename, error);
     if (!script) return error && error->code ? error->code : MILENA_ERR_IO;
+    if (strstr(script, "funcion") != NULL) { MilenaStatus fn_status = run_numeric_functions(script, error); free(script); return fn_status; }
     if ((strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL) &&
         strstr(script, "dataset cargar") == NULL) {
         MilenaStatus array_status = run_array_declarations(script, error);
@@ -1067,3 +1105,4 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     if (status == MILENA_OK) { printf("Script ejecutado correctamente: %s\n", filename); printf("Filas: %zu | Columnas: %zu | Filas inválidas: %zu\n", dataset.row_count, dataset.column_count, dataset.invalid_rows); }
     dataset_destroy(&dataset); schema_destroy(&schema); free(script); return status;
 }
+

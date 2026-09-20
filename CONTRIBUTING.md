@@ -27,6 +27,10 @@ make clean
 - Las decisiones SST deben conservar advertencias sobre causalidad, supuestos y revisión profesional.
 - Los cambios en `main` requieren revisión del mantenedor.
 
+## Identidad visual
+
+Antes de proponer o redistribuir recursos visuales, consulta [BRAND.md](BRAND.md). La procedencia y la licencia o el permiso aplicable deben quedar documentados; no asumas que la licencia MIT del código cubre estos archivos.
+
 ## Calidad mínima
 
 Los cambios de código deben compilar con C17 y conservar las advertencias estrictas del proyecto. Las nuevas funciones deben incluir pruebas y documentación cuando corresponda.

@@ -16,7 +16,13 @@ int main(void) {
     assert(milena_forest_predict(&forest, &features, &predicted, &error) == MILENA_OK);
     const int64_t *result = milena_array_const_data(&predicted);
     for (size_t i = 0; i < 4; i++) assert(result[i] == labels[i]);
-    milena_array_release(&predicted); milena_forest_release(&forest);
+    milena_array_release(&predicted);
+    for (size_t i = 0; i < 3; i++) {
+        assert(milena_forest_predict(&forest, &features, &predicted, &error) == MILENA_OK);
+        assert(predicted.size == 4);
+        milena_array_release(&predicted);
+    }
+    milena_forest_release(&forest);
     milena_array_release(&target); milena_array_release(&features);
 
     const double multiclass_values[] = {0, 0, 1, 0, 2, 0};
