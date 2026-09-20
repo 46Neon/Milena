@@ -269,16 +269,18 @@ static void test_integer_true_division(void) {
 static void test_memory_ownership(void) {
     const size_t shape[] = {4};
     const int64_t values[] = {1, 2, 3, 4};
-    MilenaArray source = {0}, view = {0}, result = {0}, empty = {0};
+    MilenaArray source = {0}, view = {0}, shared = {0};
+    MilenaArray result = {0}, empty = {0};
     MilenaError error; milena_error_clear(&error);
     expect_ok(milena_array_from_i64(&source, 1, shape, values, &error), &error);
     expect_ok(milena_array_slice_view(&view, &source, 0, 1, 3, 1, &error), &error);
-    milena_array_retain(&source);
+    expect_ok(milena_array_share(&shared, &source, &error), &error);
     milena_array_release(&source);
     assert(source.storage == NULL);
-    milena_array_release(&source);
-    assert(view.size == 2);
+    assert(view.size == 2 && shared.size == 4);
     assert(((const int64_t *)milena_array_const_data(&view))[0] == 2);
+    assert(((const int64_t *)milena_array_const_data(&shared))[3] == 4);
+    milena_array_release(&shared);
     milena_array_release(&view);
     milena_array_release(&view);
     assert(view.storage == NULL);
