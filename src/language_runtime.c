@@ -688,10 +688,28 @@ static MilenaStatus runtime_write_sst_rate(const MilenaTable *table,
     double exposure = 0.0;
     for (size_t row = 0; row < table->row_count; row++) {
         if (!milena_table_is_null(table, (size_t)event_column, row)) {
+            const MilenaTableColumn *event_data = milena_table_column(table, (size_t)event_column);
             const char *event = NULL;
-            if (milena_table_get_string(table, (size_t)event_column, row, &event, error) == MILENA_OK &&
-                (strcmp(event, "1") == 0 || strcmp(event, "true") == 0 ||
-                 strcmp(event, "verdadero") == 0)) incidents++;
+            bool incident = false;
+            if (event_data->type == MILENA_COLUMN_STRING) {
+                if (milena_table_get_string(table, (size_t)event_column, row, &event, error) == MILENA_OK)
+                    incident = strcmp(event, "1") == 0 || strcmp(event, "true") == 0 ||
+                               strcmp(event, "verdadero") == 0;
+            } else if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
+                uint32_t code = 0;
+                if (milena_table_get_category(table, (size_t)event_column, row, &code, &event, error) == MILENA_OK)
+                    incident = strcmp(event, "1") == 0 || strcmp(event, "true") == 0 ||
+                               strcmp(event, "verdadero") == 0;
+            } else {
+                const void *raw = NULL;
+                if (milena_table_get_array_value(table, (size_t)event_column, row, &raw, error) == MILENA_OK) {
+                    if (event_data->values.dtype == MILENA_DTYPE_FLOAT64) incident = *(const double *)raw > 0.0;
+                    else if (event_data->values.dtype == MILENA_DTYPE_FLOAT32) incident = *(const float *)raw > 0.0f;
+                    else if (event_data->values.dtype == MILENA_DTYPE_INT64) incident = *(const int64_t *)raw > 0;
+                    else if (event_data->values.dtype == MILENA_DTYPE_UINT64) incident = *(const uint64_t *)raw > 0;
+                }
+            }
+            if (incident) incidents++;
         }
         if (!milena_table_is_null(table, (size_t)exposure_column, row)) {
             const void *raw = NULL;

@@ -101,7 +101,7 @@ int main(void) {
         "  #perfil_avanzado(\"total_suma\")\n"
         "  #histograma(\"total_suma\")\n"
         "  #normalidad(\"total_suma\")\n"
-        "  #tasa(\"compro,cantidad,200000\")\n"
+        "  #tasa(\"total_suma,total_suma,200000\")\n"
         "  .exportar { (\"test-language-runtime.json\") }\n"
         "}\n";
     milena_error_clear(&error);
