@@ -19,6 +19,10 @@ make clean
 
 ## Reglas del proyecto
 
+Milena es un prototipo no registrado y tiene un responsable del proyecto que revisa los cambios del perfil y del repositorio. Las contribuciones externas no se incorporan automáticamente: deben ser evaluadas por el responsable antes de fusionarse. La revisión considera la necesidad del cambio, su seguridad, sus pruebas, su compatibilidad, su documentación y su coherencia con el alcance actual de Milena.
+
+Enviar un Pull Request no concede autorización para publicar en `main`, modificar releases, usar la identidad visual como respaldo oficial ni representar una distribución como oficial. Solo los cambios aceptados mediante revisión forman parte del proyecto.
+
 - No incluy datos reales de clientes, pacientes, trabajadores o empresas.
 - Usa datos sintéticos para pruebas y ejemplos.
 - No incluy claves, tokens, contraseñas ni archivos `.env`.

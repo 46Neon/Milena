@@ -1,5 +1,24 @@
 # 🌿 Milena
 
+![Portada de Milena](assets/milena-banner.png)
+
+<h1 align="center">
+<pre>##      ##  ######  ##          ##########  ##      ##    ######
+##      ##  ##  ##  ##          # ########  ##      ##    ######
+# ##  ## #    ##    ##          ##          # ##    ##  ##      ##
+# ##  ## #    ##    ##          ##          # ##    ##  ##      ##
+##  ##  ##    ##    ##          # ######    ##  ##  ##  # ###### #
+##  ##  ##    ##    ##          # ######    ##  ##  ##  # ###### #
+##      ##    ##    ##          ##          ##    ## #  ##      ##
+##      ##    ##    ##          ##          ##    ## #  ##      ##
+##      ##  ##  ##  # ########  # ########  ##      ##  ##      ##
+##      ##  ######  ##########  ##########  ##      ##  ##      ##</pre>
+</h1>
+
+<p align="center"><strong>Milena</strong> — lenguaje de programación para análisis de datos.</p>
+
+[Logo original de Milena](assets/milena-logo.jpg)
+
 ## Análisis de datos intuitivo y nativo en español
 
 Milena es un lenguaje y motor para análisis de datos, estadística y computación científica. Permite trabajar con arreglos, tablas y operaciones reproducibles mediante scripts con extensión `.milena`.
@@ -195,3 +214,23 @@ Las contribuciones deben mantener la portabilidad, los errores explícitos, las 
 ## 📄 Licencia
 
 Milena se distribuye bajo la licencia MIT.
+
+## Identidad visual y licencia
+
+El bloque ASCII y la imagen de `assets/milena-logo.jpg` forman parte de la identidad visual del proyecto Milena.
+
+El código fuente se distribuye bajo la licencia MIT indicada en `LICENSE`. Milena es actualmente un prototipo no registrado. La licencia MIT cubre el código, pero no concede automáticamente derechos sobre marcas, nombres comerciales o logotipos.
+
+El repositorio tiene una persona responsable de evaluar y aceptar los cambios que se propongan en el perfil y en el proyecto. Enviar una contribución no significa que haya sido aceptada ni que su autor pueda representar el proyecto oficialmente.
+
+Para redistribuir el proyecto de forma responsable:
+
+- conservar `LICENSE`;
+- conservar esta nota de identidad;
+- no presentar una versión modificada como una distribución oficial;
+- no modificar el logotipo para aparentar respaldo oficial;
+- documentar el autor y el origen de la imagen;
+- obtener autorización escrita si la imagen procede de un tercero;
+- considerar un archivo de marcas separado si el proyecto empieza a recibir contribuciones o distribución pública.
+
+La imagen incluida debe considerarse provisional hasta confirmar quién posee sus derechos y bajo qué permiso puede redistribuirse.
