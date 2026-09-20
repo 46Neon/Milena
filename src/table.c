@@ -1607,15 +1607,17 @@ MilenaStatus milena_table_group_by(MilenaTable *out,
                                    const MilenaAggregateSpec *aggregates,
                                    size_t aggregate_count,
                                    MilenaError *error) {
-    if (out == NULL || source == NULL || out == source || key_count == 0 ||
-        key_columns == NULL || (aggregate_count != 0 && aggregates == NULL)) {
+    if (out == NULL || source == NULL || out == source ||
+        (key_count != 0 && key_columns == NULL) ||
+        (aggregate_count != 0 && aggregates == NULL)) {
         table_error(error, MILENA_ERR_ARGUMENT, "Group-by requiere claves y salida sin alias");
         return MILENA_ERR_ARGUMENT;
     }
     MilenaStatus status = milena_table_validate(source, error);
     if (status != MILENA_OK) return status;
-    size_t *keys = (size_t *)malloc(key_count * sizeof(size_t));
-    if (keys == NULL) return MILENA_ERR_MEMORY;
+    size_t *keys = key_count == 0 ? NULL :
+        (size_t *)malloc(key_count * sizeof(size_t));
+    if (key_count != 0 && keys == NULL) return MILENA_ERR_MEMORY;
     for (size_t i = 0; i < key_count; ++i) {
         int index = milena_table_column_index(source, key_columns[i]);
         if (index < 0) { status = MILENA_ERR_DATA; break; }
@@ -1690,6 +1692,15 @@ MilenaStatus milena_table_group_by(MilenaTable *out,
     milena_table_destroy(&temporary);
     free(keys); free(slots); free(first_rows); free(group_of);
     return status;
+}
+
+MilenaStatus milena_table_summarize(MilenaTable *out,
+                                      const MilenaTable *source,
+                                      const MilenaAggregateSpec *aggregates,
+                                      size_t aggregate_count,
+                                      MilenaError *error) {
+    return milena_table_group_by(out, source, NULL, 0, aggregates,
+                                 aggregate_count, error);
 }
 
 MilenaStatus milena_table_group_by_aggregate(MilenaTable *out,

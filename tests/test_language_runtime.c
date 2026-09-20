@@ -122,6 +122,30 @@ int main(void) {
     CHECK(strstr(json_text, "salidas_binarias") != NULL &&
           strstr(json_text, "compro") != NULL,
           "La salida binaria no llegó al reporte unificado");
+    const char *summary_json_path = "test-language-runtime-summary.json";
+    const char *summary_source =
+        ".analisis resumen {\n"
+        "  dataset cargar datos(\"test-language-runtime.csv\")\n"
+        "  variable precio numerica\n"
+        "  variable cantidad numerica\n"
+        "  .transformar dataset { #total(\"precio * cantidad\") }\n"
+        "  .resumir dataset { #suma(\"total\") #media(\"total\") #conteo(\"total\") }\n"
+        "  .exportar { (\"test-language-runtime-summary.json\") }\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(summary_source, "test-language-runtime-summary.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    FILE *summary_json = fopen(summary_json_path, "rb");
+    CHECK(summary_json != NULL, "El resumen no creó su reporte JSON");
+    char summary_text[4096];
+    size_t summary_size = fread(summary_text, 1, sizeof(summary_text) - 1, summary_json);
+    summary_text[summary_size] = '\0';
+    fclose(summary_json);
+    CHECK(strstr(summary_text, "\"filas\": 1") != NULL &&
+          strstr(summary_text, "total_mean") != NULL,
+          "El bloque resumir no usó la tabla canónica");
+    remove(summary_json_path);
     remove(csv_path);
     remove(json_path);
 

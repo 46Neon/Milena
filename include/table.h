@@ -211,6 +211,11 @@ MilenaStatus milena_table_group_by_aggregate(MilenaTable *out,
                                              const char *value_column,
                                              MilenaAggregateOp operation,
                                              MilenaError *error);
+MilenaStatus milena_table_summarize(MilenaTable *out,
+                                      const MilenaTable *source,
+                                      const MilenaAggregateSpec *aggregates,
+                                      size_t aggregate_count,
+                                      MilenaError *error);
 MilenaStatus milena_table_group_by(MilenaTable *out,
                                    const MilenaTable *source,
                                    const char *const *key_columns,

@@ -731,6 +731,63 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     }
                     milena_table_destroy(&grouped);
                 }
+            } else if (block->type == AST_BLOQUE_RESUMIR) {
+                MilenaAggregateSpec specifications[16];
+                MilenaAggregateOp operations[16];
+                char value_columns[16][128];
+                char metrics[16][32];
+                size_t summary_count = block->child_count > 16 ? 16 : block->child_count;
+                bool valid_specifications = summary_count > 0;
+                for (size_t j = 0; valid_specifications && j < summary_count; j++) {
+                    const ASTNode *summary = block->children[j];
+                    if (!summary || summary->type != AST_RESUMEN_METRICA ||
+                        !summary->value ||
+                        sscanf(summary->value, "%31[^:]:%127s", metrics[j],
+                               value_columns[j]) != 2) {
+                        valid_specifications = false;
+                        break;
+                    }
+                    if (strcmp(metrics[j], "suma") == 0) operations[j] = MILENA_AGG_SUM;
+                    else if (strcmp(metrics[j], "media") == 0) operations[j] = MILENA_AGG_MEAN;
+                    else if (strcmp(metrics[j], "minimo") == 0) operations[j] = MILENA_AGG_MIN;
+                    else if (strcmp(metrics[j], "maximo") == 0) operations[j] = MILENA_AGG_MAX;
+                    else if (strcmp(metrics[j], "conteo") == 0) operations[j] = MILENA_AGG_COUNT;
+                    else {
+                        runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                      "Métrica de resumen no soportada");
+                        status = MILENA_ERR_UNSUPPORTED;
+                        valid_specifications = false;
+                        break;
+                    }
+                    specifications[j].value_column = value_columns[j];
+                    specifications[j].operation = operations[j];
+                    specifications[j].output_name = NULL;
+                }
+                if (!valid_specifications && status == MILENA_OK) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "El resumen requiere una o más métricas");
+                    status = MILENA_ERR_PARSE;
+                }
+                if (status == MILENA_OK) {
+                    MilenaTable summarized;
+                    milena_table_init(&summarized);
+                    status = milena_table_summarize(&summarized, &canonical_table,
+                                                   specifications, summary_count,
+                                                   error);
+                    if (status == MILENA_OK) {
+                        milena_table_swap(&canonical_table, &summarized);
+                        for (size_t j = 0; j < summary_count; j++) {
+                            char aggregate_name[160];
+                            (void)snprintf(aggregate_name, sizeof(aggregate_name),
+                                           "%s_%s", value_columns[j], metrics[j]);
+                            status = schema_add(&schema, aggregate_name,
+                                                MILENA_VAR_NUMERIC,
+                                                MILENA_ROLE_FEATURE, error);
+                            if (status != MILENA_OK) break;
+                        }
+                    }
+                    milena_table_destroy(&summarized);
+                }
             } else if (block->type == AST_BLOQUE_FILTRAR) {
                 const ASTNode *condition = block->child_count > 0 ? block->children[0] : NULL;
                 char column[128] = {0}, operator_text[3] = {0};

@@ -710,6 +710,45 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     if (agrupar && agrupar->child_count > 1) ast_add_child(node, agrupar);
                     else ast_destroy(agrupar);
                 }
+            } else if (parser_match(parser, TOKEN_KW_RESUMIR)) {
+                parser_advance(parser);
+                if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
+                if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
+                    ASTNode *resumir = ast_create(AST_BLOQUE_RESUMIR);
+                    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                            parser_advance(parser);
+                            continue;
+                        }
+                        parser_advance(parser);
+                        const char *metric = NULL;
+                        if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
+                            parser_match(parser, TOKEN_FUNCION_MEDIA) ||
+                            parser_match(parser, TOKEN_FUNCION_MINIMO) ||
+                            parser_match(parser, TOKEN_FUNCION_MAXIMO)) {
+                            metric = parser->current.lexeme;
+                        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                                   strcmp(parser->current.lexeme, "conteo") == 0) {
+                            metric = "conteo";
+                        }
+                        if (!metric) continue;
+                        parser_advance(parser);
+                        if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                            if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de resumen")) {
+                                char specification[MAX_TOKEN_LEN * 2];
+                                (void)snprintf(specification, sizeof(specification),
+                                               "%s:%s", metric, parser->previous.lexeme);
+                                if (resumir) ast_add_child(resumir,
+                                    ast_create_leaf(AST_RESUMEN_METRICA, specification));
+                                parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del resumen");
+                            }
+                        }
+                    }
+                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                    if (resumir && resumir->child_count > 0) ast_add_child(node, resumir);
+                    else ast_destroy(resumir);
+                }
             } else if (parser_match(parser, TOKEN_KW_EXPORTAR)) {
                 parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
