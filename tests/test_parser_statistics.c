@@ -20,6 +20,7 @@ static void expect_error(const char *body) {
     assert(parser.has_error);
     assert(parser.error.code == MILENA_ERR_PARSE);
     assert(parser.error.message[0] != '\0');
+    parser_release(&parser);
 }
 
 int main(void) {
@@ -70,6 +71,7 @@ int main(void) {
     assert(percentile->keepdims);
     assert(percentile->percentile == 90.0);
     ast_destroy(program);
+    parser_release(&parser);
 
     for (int type = 0; type < AST_NODE_TYPE_COUNT; type++) {
         assert(strcmp(ast_type_name((ASTNodeType)type), "DESCONOCIDO") != 0);

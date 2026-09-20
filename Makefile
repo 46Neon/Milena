@@ -12,7 +12,7 @@ OBJECTS = $(SOURCES:.c=.o)
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all clean test test-sst test-array test-array-worker2 test-forest test-arena test-table test-finance test-language-array test-parser-array test-parser-statistics test-parser-variables test-functions debug
+.PHONY: all clean test test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance test-language-array test-parser-array test-parser-statistics test-parser-variables test-functions debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -22,6 +22,12 @@ test-array-worker2: tests/test_array_worker2
 
 tests/test_array_worker2: tests/test_array_worker2.c src/array.c src/common.c
 	$(CC) $(CFLAGS) tests/test_array_worker2.c src/array.c src/common.c $(LDFLAGS) -o $@
+
+test-array-worker3: tests/test_array_worker3
+	./tests/test_array_worker3
+
+tests/test_array_worker3: tests/test_array_worker3.c src/array.c src/common.c
+	$(CC) $(CFLAGS) tests/test_array_worker3.c src/array.c src/common.c $(LDFLAGS) -o $@
 
 test-forest: tests/test_forest
 	./tests/test_forest
@@ -112,14 +118,14 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: $(TARGET) test-sst test-array test-array-worker2 test-forest test-arena test-table test-finance \
+test: $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-finance \
       test-language-array test-parser-array test-parser-statistics \
       test-parser-variables test-functions
 	./tests/run_tests.sh
 
 clean:
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules \
-		tests/test_array tests/test_array_worker2 tests/test_forest tests/test_arena tests/test_table \
+		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table \
 		tests/test_finance tests/test_language_array tests/test_parser_array \
 		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
 		tests/test_script_functions tests/test_user_functions reporte.json resultado.json
