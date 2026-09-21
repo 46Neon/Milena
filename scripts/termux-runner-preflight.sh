@@ -13,7 +13,12 @@ PREFIX_DIR="${PREFIX:-}"
     echo 'PREFIX must point to the Termux .../usr directory' >&2
     exit 1
 }
-for command in clang make dpkg dpkg-deb python3 sha256sum readelf; do
+TERMUX_PACKAGES_DIR="${TERMUX_PACKAGES_DIR:-}"
+[[ -n "$TERMUX_PACKAGES_DIR" && -x "$TERMUX_PACKAGES_DIR/build-package.sh" ]] || {
+    echo 'TERMUX_PACKAGES_DIR must point to an existing official termux-packages checkout' >&2
+    exit 1
+}
+for command in clang make dpkg dpkg-deb python3 sha256sum readelf pkg; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required Termux command: $command" >&2
         exit 1
@@ -27,6 +32,7 @@ mkdir -p "$EVIDENCE_DIR"
     printf 'uname_m=%s\n' "$ARCH"
     printf 'dpkg_architecture=%s\n' "$DPKG_ARCH"
     printf 'prefix=%s\n' "$PREFIX_DIR"
+    printf 'termux_packages_dir=%s\n' "$TERMUX_PACKAGES_DIR"
     printf 'termux_version='; (termux-info 2>/dev/null || true) | head -n 1
     printf 'clang='; clang --version | head -n 1
     printf 'commit='; git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf 'unknown'

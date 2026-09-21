@@ -47,17 +47,32 @@ El equipo debe documentar antes de habilitarlo:
 
 La primera ejecución debe ser manual y no publicar nada (sin `release_tag`): el workflow ejecuta
 `scripts/termux-runner-preflight.sh`, exige `uname -m=aarch64` y
-`dpkg --print-architecture=aarch64`, luego ejecuta
-`packaging/termux/build-local-deb.sh`, valida el checksum y conserva logs del
-build. Después debe probarse en el mismo dispositivo la instalación local,
-`command -v milena`, `milena --help`, actualización, ejecución de un script y
-eliminación. `scripts/termux-real-smoke.sh` ejecuta esa prueba y, únicamente si
-el operador proporciona una URL HTTPS de APT ya configurada, prueba también
-`pkg update`, `pkg install -y milena` y `pkg uninstall -y milena`; sin esa URL
-queda no ejecutada y el informe lo marca como fail-closed. La prueba APT completa
-requiere además una sesión limpia y verificación de la clave. Hasta entonces, el
-workflow Linux de publicación solo prepara y valida metadatos; no afirma
-`pkg install`.
+`dpkg --print-architecture=aarch64`, luego copia la receta candidata a `packages/milena/`, valida el checkout y
+usa el builder oficial `./build-package.sh -I -f milena`. El artefacto se valida
+por checksum, ELF Bionic, rutas bajo `$PREFIX` y arquitectura. Después debe
+probarse en el mismo dispositivo la instalación local, `command -v milena`,
+`milena --help`, actualización y eliminación. `scripts/termux-real-smoke.sh`
+ejecuta literalmente `pkg install`, `pkg upgrade` y `pkg remove`; si el operador
+proporciona una URL HTTPS de APT ya configurada, prueba además el ciclo desde
+ese repositorio. Sin esa URL el tramo APT queda no ejecutado y el informe lo
+marca como fail-closed. La prueba APT completa requiere además una sesión limpia
+y verificación de la clave. Hasta entonces no se afirma `pkg install` para
+terceros.
+
+## Checkout oficial y divergencia del fork
+
+El fork personal `46Neon/termux-packages` estaba deliberadamente divergente
+(`master` tenía un commit local y estaba 816 commits detrás de
+`termux/termux-packages:master`). PR23 no sobrescribe ni fuerza ese `master`:
+la candidata se prepara en la rama `feature/milena-termux-official`, basada
+fast-forward en el `master` upstream observado, y el runner usa un checkout
+oficial indicado por `TERMUX_PACKAGES_DIR`. La rama del fork no equivale a una
+aceptación de Termux ni abre una PR adicional en Milena.
+
+La validación de receta puede ejecutarse sin clonar más de lo necesario con
+`python3 scripts/validate_termux_recipe.py ... --official-dir "$TERMUX_PACKAGES_DIR"`;
+el build real requiere el `build-package.sh` oficial y solo se habilita en el
+runner self-hosted Android/aarch64.
 
 ## Frontera compiler/IR/VM y tabla canónica
 

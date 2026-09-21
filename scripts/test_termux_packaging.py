@@ -16,6 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts/validate_termux_artifact.py"
+RECIPE_VALIDATOR = ROOT / "scripts/validate_termux_recipe.py"
+RECIPE = ROOT / "packaging/termux-packages/milena/build.sh"
 
 
 def command(*args: str) -> None:
@@ -54,7 +56,30 @@ def run_validator(package: Path, *extra: str, expect_success: bool = True) -> No
         raise AssertionError(f"validator success={result.returncode == 0}, expected {expect_success}")
 
 
+def run_recipe(path: Path, expect_success: bool = True) -> None:
+    result = subprocess.run(
+        [sys.executable, str(RECIPE_VALIDATOR), str(path)],
+        cwd=ROOT, text=True, capture_output=True,
+    )
+    if (result.returncode == 0) != expect_success:
+        print(result.stdout, end="")
+        print(result.stderr, end="", file=sys.stderr)
+        raise AssertionError(f"recipe validator success={result.returncode == 0}, expected {expect_success}")
+
+
 def main() -> int:
+    run_recipe(RECIPE)
+    with tempfile.TemporaryDirectory(prefix="milena-termux-recipe-") as raw_recipe:
+        base = RECIPE.read_text(encoding="utf-8")
+        missing_sha = Path(raw_recipe) / "missing-sha.sh"
+        missing_sha.write_text(base.replace(
+            "TERMUX_PKG_SHA256=21eb3cba83916e24198a68ed8f783442efbe4d01ca2236e36662d958b10d60de",
+            "TERMUX_PKG_SHA256=",
+        ), encoding="utf-8")
+        run_recipe(missing_sha, expect_success=False)
+        debian_path = Path(raw_recipe) / "debian-path.sh"
+        debian_path.write_text(base.replace("$TERMUX_PREFIX/bin/milena", "/usr/bin/milena"), encoding="utf-8")
+        run_recipe(debian_path, expect_success=False)
     with tempfile.TemporaryDirectory(prefix="milena-termux-boundary-") as raw:
         work = Path(raw)
         package = make_package(work)

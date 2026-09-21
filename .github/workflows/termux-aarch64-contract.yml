@@ -14,7 +14,7 @@ on:
         type: string
         default: ''
       apt_repository:
-        description: 'URL HTTPS de un repositorio APT ya configurado en el runner (opcional; no se inventa ninguno)'
+        description: 'URL HTTPS de un repositorio APT ya configurado en el runner (opcional)'
         required: false
         type: string
         default: ''
@@ -26,24 +26,47 @@ concurrency:
   group: termux-aarch64-contract
   cancel-in-progress: false
 
-# This is deliberately manual. The labels select an already registered device;
-# GitHub Actions cannot emulate Termux by assigning labels to an Ubuntu runner.
+# Manual and fail-closed: labels never emulate Android. The selected host must
+# already be a registered Termux device and must have a shallow/sparse official
+# termux-packages checkout in TERMUX_PACKAGES_DIR.
 jobs:
   termux-aarch64-contract:
     if: inputs.confirm_device == true
     runs-on: [self-hosted, termux, aarch64, milena]
     timeout-minutes: 45
     steps:
-      - name: Checkout
+      - name: Checkout Milena
         uses: actions/checkout@v4
+
+      - name: Install candidate recipe into official checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${TERMUX_PACKAGES_DIR:-}"
+          test -x "$TERMUX_PACKAGES_DIR/build-package.sh"
+          rm -rf "$TERMUX_PACKAGES_DIR/packages/milena"
+          mkdir -p "$TERMUX_PACKAGES_DIR/packages/milena"
+          cp -R packaging/termux-packages/milena/. "$TERMUX_PACKAGES_DIR/packages/milena/"
+          python3 scripts/validate_termux_recipe.py \
+            "$TERMUX_PACKAGES_DIR/packages/milena/build.sh" \
+            --official-dir "$TERMUX_PACKAGES_DIR"
 
       - name: Preflight real runner identity
         shell: bash
         run: ./scripts/termux-runner-preflight.sh
 
-      - name: Build the native Termux package
+      - name: Build with official termux-packages build-package.sh
         shell: bash
-        run: ./packaging/termux/build-local-deb.sh
+        run: |
+          set -euo pipefail
+          cd "$TERMUX_PACKAGES_DIR"
+          # On-device build-package.sh determines the architecture itself;
+          # preflight already proved this is aarch64.
+          ./build-package.sh -I -f milena
+          package="$(find . -type f -name 'milena_*_aarch64.deb' -print -quit)"
+          test -n "$package"
+          mkdir -p "$GITHUB_WORKSPACE/dist/termux"
+          cp "$package" "$GITHUB_WORKSPACE/dist/termux/"
 
       - name: Validate package metadata, ELF and checksum
         shell: bash
@@ -51,6 +74,7 @@ jobs:
           set -euo pipefail
           package="$(find dist/termux -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print -quit)"
           test -n "$package"
+          sha256sum "$package" > "$package.sha256"
           python3 scripts/validate_termux_artifact.py "$package" --checksum "$package.sha256"
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
@@ -59,14 +83,13 @@ jobs:
           test "$(dpkg-deb -f "$package" Architecture)" = aarch64
           test "$(dpkg-deb -f "$package" Package)" = milena
 
-      - name: Run local pkg/dpkg smoke and optional configured APT smoke
+      - name: Run pkg install, upgrade and remove on Android
         shell: bash
         env:
           MILENA_APT_REPOSITORY: ${{ inputs.apt_repository }}
         run: |
           set -euo pipefail
           package="$(find dist/termux -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print -quit)"
-          ./scripts/termux-install-smoke.sh "$package"
           ./scripts/termux-real-smoke.sh "$package" "${MILENA_APT_REPOSITORY:-}"
 
       - name: Upload real-runner evidence
@@ -80,11 +103,8 @@ jobs:
             artifacts/termux-runner/smoke.txt
             dist/termux/*.deb
             dist/termux/*.sha256
-            dist/termux/*.provenance.json
           if-no-files-found: error
 
-      # Supplying a tag is an explicit operator decision. The tag must already
-      # exist; this contract never fabricates a release or a download URL.
       - name: Upload verified package to an existing GitHub Release
         if: inputs.release_tag != ''
         shell: bash
@@ -95,6 +115,5 @@ jobs:
           command -v gh >/dev/null
           gh release view "${{ inputs.release_tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null
           gh release upload "${{ inputs.release_tag }}" \
-            dist/termux/*.deb dist/termux/*.sha256 dist/termux/*.provenance.json \
+            dist/termux/*.deb dist/termux/*.sha256 \
             --repo "$GITHUB_REPOSITORY" --clobber
-

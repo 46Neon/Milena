@@ -1,112 +1,98 @@
 # Paquete Termux de Milena
 
-## Estado actual
+## Estado de PR23
 
-Este directorio construye un `.deb` nativo de Termux para **aarch64**, sin root y bajo `$PREFIX`. El resultado local es verificable; todavía no existe un repositorio APT oficial ni una afirmación de instalación para terceros.
+El camino oficial candidato es `packaging/termux-packages/milena/build.sh`, que
+se instala temporalmente como `packages/milena/build.sh` dentro de un checkout
+de `termux/termux-packages`. La receta usa el tarball real `v0.1.1` y un SHA-256
+verificado; todavía no existe aceptación ni repositorio APT oficial de Milena.
 
-La secuencia que aún debe completarse antes de una solicitud oficial es:
+El workflow manual de PR23 solo compila si existe un dispositivo Android/Termux
+registrado con las etiquetas `self-hosted`, `termux`, `aarch64`, `milena` y la
+variable `TERMUX_PACKAGES_DIR` apunta al checkout oficial. Sin ese runner, el
+job no se ejecuta y no se afirma compilación o instalación real.
 
-```text
-fuente Milena
-  ↓
-clang + make + pruebas
-  ↓
-.deb Termux/aarch64 + SHA-256
-  ↓
-instalación y ejecución en un dispositivo Termux real
-  ↓
-índices APT y firmas Release/InRelease
-  ↓
-prueba de instalación, actualización y eliminación desde el repositorio publicado
-```
-
-## Requisitos en Termux
+## Entorno Termux real
 
 ```bash
 pkg update
 pkg install -y git clang make dpkg python binutils
+export TERMUX_PACKAGES_DIR="$HOME/termux-packages"
 ```
 
-El compilador es Clang. La validación con GCC se ejecuta en otro entorno Linux o en CI; un binario Termux no se mezcla con un binario Debian/Ubuntu.
+El compilador es Clang y la libc es Android/Bionic. `aarch64` se comprueba con
+`uname -m` y `dpkg --print-architecture`; no se mezcla un binario Debian/glibc.
+El entorno Termux es Linux incompleto respecto a Debian: no presupone `sudo`,
+`/usr/bin`, systemd, glibc, APT externo ni rutas de staging Debian.
 
-## Construcción local
+## Candidata y build oficial
 
-Desde la raíz del proyecto:
+Desde la raíz de Milena se valida la receta y luego se copia al checkout oficial:
+
+```bash
+python3 scripts/validate_termux_recipe.py \
+  packaging/termux-packages/milena/build.sh --fetch
+mkdir -p "$TERMUX_PACKAGES_DIR/packages/milena"
+cp packaging/termux-packages/milena/build.sh "$TERMUX_PACKAGES_DIR/packages/milena/"
+python3 scripts/validate_termux_recipe.py \
+  "$TERMUX_PACKAGES_DIR/packages/milena/build.sh" \
+  --official-dir "$TERMUX_PACKAGES_DIR"
+cd "$TERMUX_PACKAGES_DIR"
+./build-package.sh -I -f milena
+```
+
+El builder oficial genera el `.deb` en su directorio de salida. El workflow lo
+copia a `dist/termux/`, valida `Architecture: aarch64`, `$PREFIX`, el ELF y el
+checksum, y conserva evidencia del runner. No se incluye ningún test, header,
+fuente, objeto, example ni módulo compiler/IR/VM en el paquete; el `Makefile`
+canónico enlaza lexer → parser → AST → semántica → runtime → MilenaTable.
+
+Para una comprobación local de staging (no sustituye `build-package.sh`) existe:
 
 ```bash
 ./packaging/termux/build-local-deb.sh
 ```
 
-El script:
+Ese script también exige `$PREFIX`, `aarch64` y Clang/Bionic, y no debe
+interpretarse como una construcción Debian.
 
-1. compila Milena con Clang y ejecuta las pruebas;
-2. exige que `dpkg --print-architecture` sea `aarch64`;
-3. instala el binario y la documentación bajo el prefijo real de Termux;
-4. normaliza timestamps y permisos mediante `SOURCE_DATE_EPOCH`;
-5. genera `dist/termux/milena_VERSION_aarch64.deb` y su `.sha256`.
+## Ciclo de vida en Android
 
-Prueba local (en un dispositivo Termux, sin confundirla con una prueba APT):
+En el runner dedicado, el smoke test ejecuta realmente:
 
 ```bash
-dpkg -i dist/termux/milena_*.deb
-command -v milena
-milena --help
-sha256sum -c dist/termux/*.deb.sha256
+pkg install -y dist/termux/milena_..._aarch64.deb
+pkg upgrade -y
+pkg remove -y milena
 ```
 
-La instalación se debe revertir con el gestor local después de la prueba. Esta instrucción no demuestra que exista un repositorio remoto.
+La prueba se niega a continuar si `milena` ya estaba instalado. Una URL HTTPS
+opcional permite probar además un repositorio APT previamente configurado; PR23
+no inventa host, source-list, clave ni secreto. Sin URL, ese tramo queda marcado
+como `apt_smoke=not-run (fail-closed)`.
 
-El paquete contiene exactamente el binario `data/data/com.termux/files/usr/bin/milena`
-y `share/doc/milena/README.md`; no contiene examples, tests, headers, fuentes,
-objetos ni módulos compiler/IR/VM experimentales. El nombre canónico es lowercase
-`milena`, por lo que una futura instalación sería `pkg install milena` solo después
-de la aceptación y publicación oficial; hoy ese comando no está disponible como
-promesa para terceros.
+## Runner y pruebas virtuales
 
-## Repositorio APT preparado, pero no oficial
+Registrar un runner self-hosted en un dispositivo Android/aarch64 dedicado con
+las etiquetas exactas `termux`, `aarch64`, `milena`; instalar el runner usando
+el método soportado por GitHub para ese dispositivo, configurar
+`TERMUX_PACKAGES_DIR` a un checkout oficial mantenido y limpiar el workspace
+entre ejecuciones. El workflow manual exige `confirm_device=true`.
 
-`generate-apt-repo.sh` se ejecuta en Linux/CI y acepta exactamente un paquete `milena` de arquitectura `aarch64`. Rechaza artefactos Debian, genera solo:
+Un contenedor Debian, WSL, Ubuntu hosted runner o emulador no demuestra Termux,
+Bionic ni aarch64: solo puede ejecutar las pruebas estáticas y la fixture de
+metadatos (`python3 scripts/test_termux_packaging.py`). Si no existe hardware
+registrado, esa limitación debe permanecer visible y no se genera una falsa
+marca de compilación/instalación.
 
-```text
-dists/stable/Release
-dists/stable/InRelease
-dists/stable/Release.gpg
-dists/stable/main/binary-aarch64/Packages.gz
-pool/main/m/milena/milena_VERSION_aarch64.deb
-milena-archive-keyring.asc
-```
+## Antes de solicitar inclusión oficial
 
-El workflow descarga únicamente el artefacto Termux con ese nombre, valida su arquitectura y sus rutas bajo `$PREFIX`, y nunca declara `arm`, `i686`, `x86_64` ni `amd64` sin paquetes construidos. Netlify es solo el hosting opcional documentado en el workflow; no es una dependencia de Milena.
-
-## Arquitecturas y rutas
-
-`aarch64` es el único objetivo Termux activo hasta contar con builds y pruebas reales para otras arquitecturas. El paquete usa rutas bajo `$PREFIX`, no `/usr/local/bin`, `/usr/bin` ni `sudo`. Debian/Ubuntu tiene un constructor separado y no se puede reutilizar aquí.
-
-## Pendientes antes de la solicitud oficial
-
-- construir en un dispositivo o runner Termux/aarch64 real;
-- instalar, ejecutar, actualizar y eliminar el paquete local;
-- comprobar checksum y dependencias dinámicas;
-- generar y revisar `Packages.gz`, `Release`, `InRelease` y `Release.gpg`;
-- publicar el repositorio en el único hosting configurado y probarlo desde Termux;
-- verificar la clave pública y la instalación desde APT en una sesión limpia;
-- documentar commit, versión de Termux, arquitectura, ELF bionic, checksum y resultados;
-- ejecutar el smoke contract con `scripts/termux-real-smoke.sh`; si no se proporciona
-  una URL HTTPS de APT configurada, la prueba APT queda explícitamente no ejecutada;
-- solo después, preparar la solicitud oficial a los repositorios de Termux.
-
-## Runner real y Release
-
-El registro requiere un dispositivo aarch64 dedicado, Android/Termux actualizado,
-`pkg install git clang make dpkg python binutils` y, si se desea subir artefactos a
-una Release existente, `gh`. En GitHub se registra como runner self-hosted con las
-etiquetas exactas `termux`, `aarch64` y `milena`; el workflow manual exige además
-confirmación humana. No se debe añadir un runner hospedado genérico ni inventar una
-URL de repositorio. Al pasar `release_tag`, el contrato comprueba que la Release ya
-exista y sube únicamente `.deb`, `.sha256` y `.provenance.json`; nunca crea una
-Release silenciosamente.
-
-`packaging/termux-packages/milena/build.sh` es solo una plantilla compatible para
-preparar una propuesta futura. El placeholder de SHA-256 impide presentarla como
-receta aceptada y la disponibilidad de `pkg install milena` depende de la revisión
-oficial.
+1. Ejecutar lint y `build-package.sh -I -f milena` en el checkout oficial.
+2. Registrar modelo Android, versión de Termux, commit, `PREFIX`, arquitectura,
+   versión de Clang, checksum y logs sin secretos.
+3. Completar `pkg install`, `pkg upgrade`, ejecución y `pkg remove` en una sesión
+   limpia; verificar también el caso de actualización desde la versión previa.
+4. Revisar licencia, dependencias vacías, rutas `$TERMUX_PREFIX` y el contenido
+   mínimo del paquete.
+5. Preparar el cambio para `termux/termux-packages` siguiendo su revisión; no
+   afirmar disponibilidad hasta que los mantenedores lo acepten y publiquen.

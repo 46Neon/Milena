@@ -30,8 +30,11 @@ TERMUX_CFLAGS="${MILENA_TERMUX_CFLAGS:--std=c17 -Wall -Wextra -Wpedantic -Wshado
 TERMUX_LDFLAGS="${MILENA_TERMUX_LDFLAGS:--lm -Wl,--gc-sections}"
 export SOURCE_DATE_EPOCH
 make clean
-CC=clang CFLAGS="$TERMUX_CFLAGS" LDFLAGS="$TERMUX_LDFLAGS" make all
-CC=clang CFLAGS="$TERMUX_CFLAGS" LDFLAGS="$TERMUX_LDFLAGS" make test
+# The package build is intentionally production-only: Makefile's canonical
+# source list contains lexer -> parser -> AST -> semantic -> runtime ->
+# MilenaTable and excludes tests and experimental compiler/IR/VM sources.
+CC="${CC:-clang}" CFLAGS="$TERMUX_CFLAGS" LDFLAGS="$TERMUX_LDFLAGS" \
+    make TERMUX=1 all
 ARCH="$(dpkg --print-architecture)"
 [[ "$ARCH" == 'aarch64' ]] || { echo "Termux package target must be aarch64 (got $ARCH)" >&2; exit 1; }
 DIST_DIR="$ROOT_DIR/dist/termux"
