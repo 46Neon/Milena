@@ -219,6 +219,17 @@ La reducción no se realiza dentro de los workers: el caller debe combinar los
 resultados en un orden definido. Así se conserva la posibilidad de obtener un
 resultado determinista antes de añadir red.
 
+## Quinto hito implementado en PR #27
+
+Se añadió `partition_reduce.c` para reducir resultados parciales en orden
+estable de identificador de partición. El contrato exige exactamente una
+parcial por partición, rechaza identificadores desordenados y valores no
+finitos, ignora explícitamente parciales inválidas y utiliza acumulación
+compensada. La prueba cubre equivalencia, parciales ausentes y datos inválidos.
+
+La reducción permanece separada de los workers: los workers producen
+resultados parciales y una fase posterior los combina de manera reproducible.
+
 ## Estado honesto del proyecto
 
 PR #27 implementa el primer componente distribuible: el planner físico local y
