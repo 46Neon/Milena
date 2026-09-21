@@ -14,7 +14,7 @@ REQUIRED = (
     "TERMUX_PKG_MAINTAINER", "TERMUX_PKG_VERSION", "TERMUX_PKG_SRCURL",
     "TERMUX_PKG_SHA256", "TERMUX_PKG_DEPENDS", "TERMUX_PKG_BUILD_IN_SRC",
 )
-FORBIDDEN = ("@REPLACE", "/usr/bin", "/usr/local", "apt-get", "dpkg-buildpackage", "glibc")
+FORBIDDEN = ("@REPLACE", "/usr/local", "apt-get", "dpkg-buildpackage", "glibc")
 
 
 def assignment(text: str, name: str) -> str | None:
@@ -50,6 +50,10 @@ def validate(recipe: Path, fetch: bool = False, official_dir: Path | None = None
     for token in FORBIDDEN:
         if token.lower() in text.lower():
             errors.append(f"recipe contains forbidden non-Termux token: {token}")
+    # The Termux bash shebang legitimately contains .../com.termux/files/usr/bin;
+    # reject only an unqualified Debian /usr/bin destination.
+    if re.search(r"(?<!com\.termux/files)/usr/bin(?:[/'\"]|$)", text):
+        errors.append("recipe contains a Debian /usr/bin path")
     if fetch and not errors:
         url = srcurl.replace("${TERMUX_PKG_VERSION}", version)
         try:

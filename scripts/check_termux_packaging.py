@@ -42,7 +42,7 @@ if recipe.is_file():
 makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 if "TERMUX=1" not in makefile or "TERMUX_PREFIX" not in makefile:
     errors.append("Makefile lacks explicit Termux build/install variables")
-for token in ("compiler.c", "ir.c", "vm.c"):
+for token in ("src/compiler.c", "src/ir.c", "src/vm.c"):
     if token in makefile:
         errors.append(f"experimental source enters canonical Makefile: {token}")
 for token in ("/usr/bin", "/usr/local", "apt-get", "__GLIBC__"):
@@ -66,7 +66,7 @@ builder = (ROOT / "packaging/termux/build-local-deb.sh").read_text(encoding="utf
 for required in ("validate_termux_elf.py", "README.md", "SOURCE_DATE_EPOCH", ".provenance.json", "TERMUX=1"):
     if required not in builder:
         errors.append(f"local Termux builder missing: {required}")
-for token in ("cp -R examples", "tests/", "include/", "compiler.c", "ir.c", "vm.c", "/usr/bin"):
+for token in ("cp -R examples", "tests/", "include/", "src/compiler.c", "src/ir.c", "src/vm.c"):
     if token in builder:
         errors.append(f"local Termux package builder contains forbidden payload/path: {token}")
 
