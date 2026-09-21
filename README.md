@@ -235,11 +235,7 @@ sudo apt install milena
 winget install milena
 ```
 
-```bash
-pkg install milena
-```
-
-Estos comandos **todavía no se presentan como disponibles** porque los repositorios y manifiestos oficiales aún deben publicarse. Mientras tanto, las rutas verificadas son la compilación desde el repositorio, el paquete Debian local, el ejecutable portable de Windows y la compilación desde Termux.
+La instalación mediante un gestor de paquetes de Termux **todavía no se presenta como disponible**: falta publicar y probar un repositorio APT real. Mientras tanto, las rutas verificadas son la compilación desde el repositorio, el paquete Debian local, el ejecutable portable de Windows y la compilación desde Termux.
 
 ## Empaquetado y distribución
 
