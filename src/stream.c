@@ -266,7 +266,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         options->max_record_bytes < STREAM_INITIAL_RECORD ||
         options->max_record_bytes > STREAM_DEFAULT_MAX_RECORD ||
         options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS ||
-        options->max_groups == 0 || options->max_groups > STREAM_HARD_MAX_GROUPS)
+        (options->max_groups != 0 && options->max_groups > STREAM_HARD_MAX_GROUPS))
         return MILENA_ERR_ARGUMENT;
     if (report) memset(report, 0, sizeof(*report));
     if (error) milena_error_clear(error);
@@ -432,9 +432,10 @@ MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
     MilenaError *error) {
     MilenaStreamOptions defaults = milena_stream_options_default();
     const MilenaStreamOptions *o = requested ? requested : &defaults;
+    size_t max_groups = o->max_groups ? o->max_groups : defaults.max_groups;
     if (!input_path || !output_path || !group_column || !group_column[0] ||
         !metrics || !metric_count || metric_count > STREAM_MAX_METRICS ||
-        !o->max_groups || o->max_groups > STREAM_HARD_MAX_GROUPS) return MILENA_ERR_ARGUMENT;
+        max_groups > STREAM_HARD_MAX_GROUPS) return MILENA_ERR_ARGUMENT;
     FILE *in=fopen(input_path,"rb"); if(!in){milena_error_set(error,MILENA_ERR_IO,0,0,0,"No se pudo abrir el CSV agrupado");return MILENA_ERR_IO;}
     char *record=NULL, **fields=NULL, **headers=NULL; size_t cap=0,len=0,cols=0,groups=0,rows=0,malformed=0,observed=0; MilenaStatus st;
     st=stream_read_record(in,&record,&cap,o->max_record_bytes,&len,error); if(st!=MILENA_OK) goto done;
@@ -445,15 +446,15 @@ MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
     int gi=stream_column_index(headers,cols,group_column), ix[STREAM_MAX_METRICS];
     if(gi<0){milena_error_set(error,MILENA_ERR_DATA,0,0,0,"La columna de agrupación no existe");st=MILENA_ERR_DATA;goto done;}
     for(size_t i=0;i<metric_count;i++){ix[i]=stream_column_index(headers,cols,metrics[i].column);if(ix[i]<0){milena_error_set(error,MILENA_ERR_DATA,0,0,0,"La columna métrica no existe");st=MILENA_ERR_DATA;goto done;}}
-    StreamGroup *gs=calloc(o->max_groups,sizeof(*gs)); if(!gs){st=MILENA_ERR_MEMORY;goto done;}
+    StreamGroup *gs=calloc(max_groups,sizeof(*gs)); if(!gs){st=MILENA_ERR_MEMORY;goto done;}
     while((st=stream_read_record(in,&record,&cap,o->max_record_bytes,&len,error))==MILENA_OK){
       rows++; if(len>observed)observed=len; size_t fc=0; st=stream_split(record,',',fields,o->max_columns,&fc,error); if(st!=MILENA_OK)break; if(fc!=cols){malformed++;continue;}
       size_t k=0; while(k<groups && strcmp(gs[k].key,fields[gi]))k++;
-      if(k==groups){if(groups>=o->max_groups){milena_error_set(error,MILENA_ERR_OVERFLOW,0,0,0,"Se superó el límite máximo de grupos del flujo");st=MILENA_ERR_OVERFLOW;break;} gs[k].key=milena_strdup(fields[gi]);gs[k].acc=calloc(metric_count,sizeof(StreamAccumulator));if(!gs[k].key||!gs[k].acc){st=MILENA_ERR_MEMORY;break;}groups++;}
+      if(k==groups){if(groups>=max_groups){milena_error_set(error,MILENA_ERR_OVERFLOW,0,0,0,"Se superó el límite máximo de grupos del flujo");st=MILENA_ERR_OVERFLOW;break;} gs[k].key=milena_strdup(fields[gi]);gs[k].acc=calloc(metric_count,sizeof(StreamAccumulator));if(!gs[k].key||!gs[k].acc){st=MILENA_ERR_MEMORY;break;}groups++;}
       bool bad=false; for(size_t i=0;i<metric_count;i++){double v;if(!stream_parse_number(fields[ix[i]],&v)){gs[k].invalid++;bad=true;continue;}stream_accumulate(&gs[k].acc[i],v);} if(bad)malformed++;
     }
     if(st==MILENA_ERR_IO&&feof(in))st=MILENA_OK; if(st!=MILENA_OK)goto grouped_done;
-    {FILE*out=fopen(output_path,"wb");if(!out){st=MILENA_ERR_IO;goto grouped_done;} fprintf(out,"{\"modo\":\"flujo_agrupado\",\"grupo\":");milena_json_write_string(out,group_column);fprintf(out,",\"filas\":%zu,\"grupos\":%zu,\"limite_grupos\":%zu,\"resultados\":[",rows,groups,o->max_groups);
+    {FILE*out=fopen(output_path,"wb");if(!out){st=MILENA_ERR_IO;goto grouped_done;} fprintf(out,"{\"modo\":\"flujo_agrupado\",\"grupo\":");milena_json_write_string(out,group_column);fprintf(out,",\"filas\":%zu,\"grupos\":%zu,\"limite_grupos\":%zu,\"resultados\":[",rows,groups,max_groups);
       for(size_t k=0;k<groups;k++){if(k)fputc(',',out);fprintf(out,"{\"clave\":");milena_json_write_string(out,gs[k].key);fputs(",\"metricas\":[",out);for(size_t i=0;i<metric_count;i++){if(i)fputc(',',out);const char*n=metrics[i].name;char gen[256];if(!n||!n[0]){snprintf(gen,sizeof(gen),"%s_%s",metrics[i].column,milena_stream_operation_name(metrics[i].operation));n=gen;}double v=stream_value(&gs[k].acc[i],metrics[i].operation);fprintf(out,"{\"nombre\":");milena_json_write_string(out,n);fprintf(out,",\"operacion\":");milena_json_write_string(out,milena_stream_operation_name(metrics[i].operation));fprintf(out,",\"valores_invalidos\":%zu,\"valor\":",gs[k].invalid);if(isnan(v))fputs("null",out);else fprintf(out,"%.17g",v);fputc('}',out);}fputs("]}",out);}fputs("]}\n",out);if(fclose(out)!=0)st=MILENA_ERR_IO;}
  grouped_done: for(size_t k=0;k<groups;k++){free(gs[k].key);free(gs[k].acc);}free(gs);
  done: if(in)fclose(in);free(record);free(fields);stream_free_headers(headers,cols);return st;
