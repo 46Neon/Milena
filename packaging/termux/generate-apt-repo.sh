@@ -30,6 +30,9 @@ if (( ${#packages[@]} != 1 )); then
     exit 1
 fi
 package="${packages[0]}"
+checksum_file="$package.sha256"
+[[ -f "$checksum_file" ]] || { echo "Falta el checksum del paquete: $checksum_file" >&2; exit 1; }
+sha256sum -c "$checksum_file" >/dev/null || { echo "Checksum del paquete no coincide" >&2; exit 1; }
 PACKAGE_NAME="$(dpkg-deb -f "$package" Package)"
 PACKAGE_ARCH="$(dpkg-deb -f "$package" Architecture)"
 PACKAGE_VERSION="$(dpkg-deb -f "$package" Version)"
@@ -89,4 +92,11 @@ gpg "${GPG_ARGS[@]}" --armor --detach-sign \
 rm -f "$PASSPHRASE_FILE"
 PASSPHRASE_FILE=""
 
+python3 - "$OUTPUT_DIR" "$package" "$PACKAGE_VERSION" <<'PY2'
+import hashlib, json, os, sys
+root, package, version = sys.argv[1:]
+data = {"schema":"milena.termux.apt-provenance.v1", "package":os.path.basename(package), "version":version, "architecture":"aarch64", "sha256":hashlib.sha256(open(package,"rb").read()).hexdigest(), "source_date_epoch":int(os.environ.get("SOURCE_DATE_EPOCH","0"))}
+print(json.dumps(data, sort_keys=True, indent=2), file=open(os.path.join(root,"repository-provenance.json"),"w"))
+PY2
+sha256sum "$OUTPUT_DIR"/pool/main/m/milena/*.deb "$OUTPUT_DIR"/dists/stable/main/binary-aarch64/Packages.gz "$OUTPUT_DIR"/dists/stable/Release > "$OUTPUT_DIR/SHA256SUMS"
 printf 'Repositorio APT Termux aarch64 generado en %s\n' "$OUTPUT_DIR"

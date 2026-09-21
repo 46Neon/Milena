@@ -22,6 +22,10 @@ else:
         "build-local-deb.sh",
         "validate_termux_artifact.py",
         "if-no-files-found: error",
+        "concurrency:",
+        "cancel-in-progress: false",
+        "termux-install-smoke.sh",
+        "toolchain.txt",
     )
     for fragment in required:
         if fragment not in workflow:
@@ -36,7 +40,9 @@ else:
     for fragment in (
         '[[ "$ARCH" == aarch64 ]]',
         '[[ "$DPKG_ARCH" == aarch64 ]]',
-        '[[ "$PREFIX_DIR" == */usr',
+        'PREFIX_DIR" =~ ^/data/data/',
+        'readelf',
+        'workspace-sha256.txt',
         "termux-info",
         "preflight.txt",
     ):

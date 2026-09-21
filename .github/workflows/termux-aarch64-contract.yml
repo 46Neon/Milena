@@ -12,42 +12,68 @@ on:
 permissions:
   contents: read
 
-# This is deliberately manual. The labels select an already registered device;
-# GitHub Actions cannot emulate Termux by assigning labels to an Ubuntu runner.
+concurrency:
+  group: termux-aarch64-contract
+  cancel-in-progress: false
+
 jobs:
   termux-aarch64-contract:
     if: inputs.confirm_device == true
     runs-on: [self-hosted, termux, aarch64, milena]
-    timeout-minutes: 45
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash --noprofile --norc -eo pipefail {0}
     steps:
-      - name: Checkout
+      - name: Checkout and isolate workspace
         uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
 
-      - name: Preflight real runner identity
-        shell: bash
+      - name: Preflight real runner identity and toolchain
         run: ./scripts/termux-runner-preflight.sh
 
-      - name: Build the native Termux package
-        shell: bash
-        run: ./packaging/termux/build-local-deb.sh
-
-      - name: Validate package metadata and checksum
-        shell: bash
+      - name: Check canonical compiler boundary and packaging gates
         run: |
-          set -euo pipefail
+          python3 scripts/check_compiler_boundary.py
+          python3 scripts/check_experimental_isolation.py
+          python3 scripts/check_termux_industrial.py
+
+      - name: Build reproducible native Termux package
+        env:
+          MILENA_VERSION: 0.0.0-run.${{ github.run_number }}
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          ./packaging/termux/build-local-deb.sh
+
+      - name: Validate package, provenance, SBOM and checksums
+        run: |
           package="$(find dist/termux -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print -quit)"
           test -n "$package"
           python3 scripts/validate_termux_artifact.py "$package" \
-            --checksum "$package.sha256"
-          test "$(dpkg-deb -f "$package" Architecture)" = aarch64
-          test "$(dpkg-deb -f "$package" Package)" = milena
+            --checksum "$package.sha256" \
+            --provenance "$package.provenance.json" \
+            --require-provenance
+          test -s "$package.sbom.json"
+          sha256sum -c dist/termux/SHA256SUMS
+
+      - name: Install upgrade remove smoke on the real device
+        run: |
+          package="$(find dist/termux -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print -quit)"
+          ./scripts/termux-install-smoke.sh "$package"
 
       - name: Upload real-runner evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: milena-termux-aarch64-contract-${{ github.run_id }}
           path: |
             artifacts/termux-runner/preflight.txt
+            artifacts/termux-runner/toolchain.txt
+            artifacts/termux-runner/workspace-sha256.txt
             dist/termux/*.deb
             dist/termux/*.sha256
+            dist/termux/*.json
+            dist/termux/*.txt
           if-no-files-found: error

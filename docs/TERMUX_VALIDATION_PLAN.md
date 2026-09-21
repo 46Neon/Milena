@@ -74,3 +74,28 @@ podría crear un runtime paralelo. La siguiente fase segura es especificar una
 IR que represente operaciones de `MilenaTable`, añadir pruebas AST→IR→ejecución
 con resultados comparados contra el runtime canónico y solo entonces evaluar
 cada módulo para inclusión.
+
+## Evidencia de release
+
+Cada build real debe conservar el SBOM CycloneDX, el checksum SHA-256 y la procedencia del commit. La ausencia de cualquiera de ellos detiene la publicación.
+
+## Guardrails industriales verificables en PR23
+
+El contrato no confunde etiquetas con hardware: exige preflight de arquitectura,
+PREFIX, Termux, libc/plataforma, toolchain, dependencias, workspace limpio y
+objetivo Clang. El workflow manual tiene timeout y concurrencia serializada,
+y conserva preflight, toolchain, hashes, SBOM, procedencia y paquete como
+artefactos; si falta un artefacto, la ejecución falla.
+
+El flujo APT es fail-closed: descarga únicamente el conjunto Termux/aarch64,
+comprueba sus metadatos y hashes, rechaza mezcla Debian/Ubuntu, genera solo el
+índice `binary-aarch64`, verifica las firmas con `gpgv` y compara la huella del
+keyring antes de cualquier publicación. La publicación requiere confirmación
+manual y no se ejecuta en este PR.
+
+La garantía industrial real **no está declarada**: no hay todavía hardware
+Termux/aarch64 registrado, ni resultados de instalación/actualización/
+eliminación en Android, ni una prueba de cliente contra un repositorio remoto.
+La CI de Linux y los fixtures sintéticos validan el contrato y los metadatos,
+pero no pueden demostrar compatibilidad con Android, bionic, almacenamiento,
+permisos o el gestor APT de un dispositivo.

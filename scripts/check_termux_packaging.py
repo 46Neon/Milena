@@ -20,6 +20,8 @@ ACTIVE = [
     ROOT / 'README.md',
     ROOT / 'scripts/validate_termux_artifact.py',
     ROOT / 'scripts/test_termux_packaging.py',
+    ROOT / 'scripts/check_termux_industrial.py',
+    ROOT / 'scripts/termux-install-smoke.sh',
     ROOT / 'scripts/check_compiler_boundary.py',
     ROOT / 'docs/TERMUX_VALIDATION_PLAN.md',
 ]
@@ -47,12 +49,12 @@ for required in ('MILENA_GPG_PRIVATE_KEY', 'MILENA_GPG_KEY_ID',
                  'MILENA_GPG_PASSPHRASE', "--pattern 'milena_*_aarch64.deb'",
                  'binary-aarch64/Packages.gz',
                  'scripts/validate_termux_artifact.py',
-                 '--apt-root dist/apt'):
+                 '--apt-root dist/apt', '--require-provenance', '--expected-fingerprint'):
     if required not in workflow:
         errors.append(f'workflow sin control requerido: {required}')
 for required in ('MILENA_GPG_KEY_ID', 'MILENA_GPG_PASSPHRASE',
                  'Architectures "aarch64"', 'binary-aarch64',
-                 'PACKAGE_ARCH" == aarch64'):
+                 'PACKAGE_ARCH" == aarch64', 'repository-provenance.json'):
     if required not in generator:
         errors.append(f'generador APT sin control requerido: {required}')
 if 'MILENA_GPG_' in builder or 'GPG_' in builder:

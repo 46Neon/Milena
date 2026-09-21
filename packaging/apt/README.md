@@ -1,14 +1,14 @@
-# Repositorio APT de Milena
+# Repositorio APT de Milena para Termux
 
-Este directorio documenta el formato del repositorio Termux que el workflow único `.github/workflows/publish-apt.yml` puede generar. El canal todavía no es oficial ni debe anunciarse como disponible: falta una prueba real desde un dispositivo Termux y desde el repositorio remoto publicado.
+La publicación es manual, con confirmación explícita y `concurrency` sin
+cancelación, en `.github/workflows/publish-apt.yml`. No se publica en cada tag:
+una etiqueta por sí sola no es autorización. Si no existe un artefacto Termux
+real acompañado por checksum, SBOM y procedencia, el workflow falla antes de
+firmar o publicar.
 
-## Fuente única de publicación
+## Aislamiento de arquitectura y plataforma
 
-La única definición ejecutable es `.github/workflows/publish-apt.yml`. `packaging/ci/publish-apt.yml` fue eliminado para impedir que dos workflows diverjan. El generador reutilizable es `packaging/termux/generate-apt-repo.sh`.
-
-## Estructura mínima actual
-
-Mientras solo exista un build Termux real, el repositorio debe contener exactamente el objetivo `aarch64`:
+El repositorio contiene exactamente `aarch64`:
 
 ```text
 dists/stable/Release
@@ -17,13 +17,21 @@ dists/stable/Release.gpg
 dists/stable/main/binary-aarch64/Packages.gz
 pool/main/m/milena/milena_VERSION_aarch64.deb
 milena-archive-keyring.asc
+repository-provenance.json
+SHA256SUMS
 ```
 
-No se declaran índices para otras arquitecturas. Un `.deb` Debian/Ubuntu (`amd64`, por ejemplo) no puede ocupar el lugar del paquete Termux.
+No se crean índices para otras arquitecturas. El validador comprueba nombre,
+versión, arquitectura, rutas bajo `$PREFIX`, ausencia de dependencias Debian,
+hash del pool, índice `Packages.gz`, arquitectura declarada en `Release`,
+checksum del índice y que no haya artefactos extra.
 
-## Secretos de GitHub Actions
+La clave pública se exporta como `milena-archive-keyring.asc`; `gpgv` verifica
+`Release.gpg` y `InRelease`, y se compara la huella esperada con la clave
+importada antes de publicar. Las claves privadas y contraseñas solo viven en
+los secretos de CI. El hosting no se considera una prueba de instalación.
 
-Configura únicamente como secretos del repositorio, nunca en archivos versionados:
+## Secretos requeridos
 
 ```text
 MILENA_GPG_PRIVATE_KEY
@@ -33,16 +41,7 @@ NETLIFY_SITE_ID
 NETLIFY_AUTH_TOKEN
 ```
 
-La clave privada y la contraseña se pasan solo al proceso de CI. La clave pública se publica como `milena-archive-keyring.asc`; antes de una publicación oficial debe comprobarse su huella digital en un dispositivo limpio.
-
-## Flujo y validaciones
-
-1. Crear una Release que contenga un `.deb` Termux/aarch64 real y su checksum.
-2. Ejecutar manualmente el workflow con la etiqueta.
-3. Descargar exclusivamente `milena_*_aarch64.deb`.
-4. Validar nombre, versión, arquitectura y rutas bajo `$PREFIX`.
-5. Generar `Packages.gz`, `Release`, `InRelease` y `Release.gpg`.
-6. Verificar estructura, firma, checksum y ausencia de índices no construidos.
-7. Publicar en el único hosting configurado y realizar la prueba real desde Termux.
-
-Hasta completar el último paso, este es un artefacto de preparación y no una instrucción de instalación para usuarios.
+Antes de solicitar cualquier incorporación a un repositorio oficial, un
+operador debe probar en un dispositivo Termux/aarch64 limpio la clave, descarga,
+instalación, actualización, ejecución y eliminación desde el repositorio
+publicado, y conservar la evidencia asociada al commit.

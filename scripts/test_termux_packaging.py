@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,11 @@ def main() -> int:
         checksum = work / (package.name + ".sha256")
         checksum.write_text(f"{hashlib.sha256(package.read_bytes()).hexdigest()}  {package}\n", encoding="utf-8")
         run_validator(package, "--checksum", str(checksum))
+        provenance = work / (package.name + ".provenance.json")
+        provenance.write_text(json.dumps({"artifact": {"filename": package.name, "sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "architecture": "aarch64"}, "source": {"commit": "fixture-commit"}}), encoding="utf-8")
+        run_validator(package, "--provenance", str(provenance), "--require-provenance")
+        provenance.write_text(provenance.read_text(encoding="utf-8").replace("fixture-commit", ""), encoding="utf-8")
+        run_validator(package, "--provenance", str(provenance), "--require-provenance", expect_success=False)
 
         wrong_arch = make_package(work / "wrong-arch", architecture="arm64")
         run_validator(wrong_arch, expect_success=False)

@@ -4,17 +4,21 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag de la Release que contiene el paquete Termux aarch64'
+        description: 'Tag de la Release que contiene los artefactos Termux aarch64'
         required: true
-        default: 'v0.1.1'
-  push:
-    tags:
-      - 'v*'
+        type: string
+      confirm_publish:
+        description: 'Confirmar publicación manual del repositorio firmado'
+        required: true
+        type: boolean
+        default: false
 
-# Este es el único workflow de publicación APT. La definición anterior que vivía
-# en packaging/ci fue eliminada para que no existan dos fuentes ejecutables.
 permissions:
   contents: read
+
+concurrency:
+  group: milena-termux-apt-publication
+  cancel-in-progress: false
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -22,100 +26,110 @@ env:
 
 jobs:
   publish-apt:
+    if: inputs.confirm_publish == true
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 1
 
       - name: Install APT tooling
         run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg
 
-      - name: Select release tag
+      - name: Validate requested release tag
         id: release
         shell: bash
         run: |
-          if [ -n "${{ inputs.release_tag }}" ]; then
-            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          tag='${{ inputs.release_tag }}'
+          [[ "$tag" =~ ^v[0-9][0-9A-Za-z.+:~-]*$ ]] || { echo 'invalid release tag' >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Download the Termux package only
+      - name: Download the complete Termux evidence set only
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist/inputs
-          # Debian artifacts are deliberately not downloaded by this workflow.
-          gh release download "${{ steps.release.outputs.tag }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern 'milena_*_aarch64.deb' \
-            --dir dist/inputs \
-            --clobber
+          gh release download '${{ steps.release.outputs.tag }}' --repo "$GITHUB_REPOSITORY" \
+            --pattern 'milena_*_aarch64.deb' --pattern 'milena_*_aarch64.deb.sha256' \
+            --pattern 'milena_*_aarch64.deb.provenance.json' --pattern 'milena_*_aarch64.deb.sbom.json' \
+            --dir dist/inputs --clobber
           mapfile -t packages < <(find dist/inputs -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print)
           test "${#packages[@]}" -eq 1
           package="${packages[0]}"
+          test -s "$package.sha256"
+          test -s "$package.provenance.json"
+          test -s "$package.sbom.json"
+          sha256sum -c "$package.sha256"
+          python3 scripts/validate_termux_artifact.py "$package" --checksum "$package.sha256" \
+            --provenance "$package.provenance.json" --require-provenance
           test "$(dpkg-deb -f "$package" Package)" = milena
           test "$(dpkg-deb -f "$package" Architecture)" = aarch64
-          test -n "$(dpkg-deb -f "$package" Version)"
-          # A Termux package must not contain Debian filesystem destinations.
-          if dpkg-deb --contents "$package" | grep -Eq '(^|[[:space:]])(usr|bin|lib|etc)/'; then
-            echo 'El paquete Termux contiene una ruta Debian; publicación detenida.' >&2
-            exit 1
-          fi
-          sha256sum "$package" > "$package.sha256"
-          python3 scripts/validate_termux_artifact.py "$package" --checksum "$package.sha256"
+          if find dist/inputs -type f -name '*amd64*' -o -name '*arm64*' | grep -q .; then exit 1; fi
 
-      - name: Run reproducible Termux boundary fixture tests
-        run: python3 scripts/test_termux_packaging.py
+      - name: Run static and boundary tests
+        run: |
+          python3 scripts/check_termux_packaging.py
+          python3 scripts/check_termux_runner_contract.py
+          python3 scripts/check_termux_industrial.py
+          python3 scripts/test_termux_packaging.py
 
-      - name: Import Milena signing key
+      - name: Import signing key and capture fingerprint
         shell: bash
         env:
           MILENA_GPG_PRIVATE_KEY: ${{ secrets.MILENA_GPG_PRIVATE_KEY }}
+          MILENA_GPG_KEY_ID: ${{ secrets.MILENA_GPG_KEY_ID }}
         run: |
           set -euo pipefail
-          test -n "$MILENA_GPG_PRIVATE_KEY"
+          test -n "$MILENA_GPG_PRIVATE_KEY"; test -n "$MILENA_GPG_KEY_ID"
           printf '%s\n' "$MILENA_GPG_PRIVATE_KEY" | gpg --batch --import
+          key_id="$(printf '%s' "$MILENA_GPG_KEY_ID" | tr -d '[:space:]' | sed -E 's/^(rsa[0-9]+\/|0x)//')"
+          fingerprint="$(gpg --batch --with-colons --list-keys "$key_id" | awk -F: '$1=="fpr" {print $10; exit}')"
+          test -n "$fingerprint"
+          echo "key_id=$key_id" >> "$GITHUB_ENV"
+          echo "key_fingerprint=$fingerprint" >> "$GITHUB_ENV"
 
       - name: Generate and verify signed repository
         shell: bash
         env:
-          MILENA_GPG_KEY_ID: ${{ secrets.MILENA_GPG_KEY_ID }}
           MILENA_GPG_PASSPHRASE: ${{ secrets.MILENA_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
-          test -n "$MILENA_GPG_KEY_ID"
           test -n "$MILENA_GPG_PASSPHRASE"
           package="$(find dist/inputs -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print -quit)"
           export MILENA_VERSION="$(dpkg-deb -f "$package" Version)"
-          KEY_ID="$(printf '%s' "$MILENA_GPG_KEY_ID" | tr -d '[:space:]')"
-          KEY_ID="${KEY_ID#rsa3072/}"
-          KEY_ID="${KEY_ID#0x}"
-          export MILENA_GPG_KEY_ID="$KEY_ID"
+          export MILENA_GPG_KEY_ID="$key_id"
           ./packaging/termux/generate-apt-repo.sh dist/inputs dist/apt
-          gpg --batch --armor --export "$KEY_ID" > dist/apt/milena-archive-keyring.asc
-          test -s dist/apt/milena-archive-keyring.asc
-          test -s dist/apt/dists/stable/Release
-          test -s dist/apt/dists/stable/InRelease
-          test -s dist/apt/dists/stable/Release.gpg
+          gpg --batch --armor --export "$key_id" > dist/apt/milena-archive-keyring.asc
+          test -s dist/apt/repository-provenance.json
           test -s dist/apt/dists/stable/main/binary-aarch64/Packages.gz
-          test ! -e dist/apt/dists/stable/main/binary-amd64
+          gpgv --version >/dev/null
           python3 scripts/validate_termux_artifact.py "$package" \
-            --checksum "dist/inputs/$(basename "$package").sha256" \
-            --apt-root dist/apt \
-            --keyring dist/apt/milena-archive-keyring.asc
+            --checksum "$package.sha256" --provenance "$package.provenance.json" \
+            --require-provenance --apt-root dist/apt --keyring dist/apt/milena-archive-keyring.asc \
+            --expected-fingerprint "$key_fingerprint"
 
       - name: Install pinned Netlify CLI
         run: npm install --global "netlify-cli@${NETLIFY_CLI_VERSION}"
 
-      - name: Publish the single APT channel to Netlify
+      - name: Publish the single APT channel after verification
         shell: bash
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
           set -euo pipefail
-          test -n "$NETLIFY_AUTH_TOKEN"
-          test -n "$NETLIFY_SITE_ID"
-          netlify deploy --dir=dist/apt --prod --site="$NETLIFY_SITE_ID" --message="Milena ${{ steps.release.outputs.tag }}"
+          test -n "$NETLIFY_AUTH_TOKEN"; test -n "$NETLIFY_SITE_ID"
+          netlify deploy --dir=dist/apt --prod --site="$NETLIFY_SITE_ID" \
+            --message="Milena ${{ steps.release.outputs.tag }}"
 
+      - name: Upload repository evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: milena-termux-apt-evidence-${{ github.run_id }}
+          path: dist/apt/**
+          if-no-files-found: error
