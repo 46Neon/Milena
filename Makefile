@@ -180,7 +180,7 @@ test-termux-packaging: check-termux-packaging
 all: $(TARGET)
 
 # Reproducible compile/runtime measurements; see benchmarks/README.md.
-benchmark: all
+benchmark:
 	python3 benchmarks/benchmark.py
 
 # Build targets consumed by the Termux recipe. They never build tests or the
