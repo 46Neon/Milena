@@ -66,3 +66,33 @@ incluidos GCC, Clang, ASan/UBSan, Debian, Windows, enlaces de Markdown y
 Cloudflare Pages. El gate local equivalente es `make test`; por el entorno de
 trabajo de esta migración la compilación y la ejecución se delegan a GitHub
 Actions.
+
+## Auditoría de esta iteración (HEAD posterior)
+
+- [x] Se revisaron todos los usos del conector AST en `src/parser.c`: los
+  constructores de bloques, expresiones, funciones y transferencias de hijos
+  ahora comprueban `ast_add_child` mediante el helper fallible del parser y
+  abortan sin dejar un AST truncado.
+- [x] La conversión numérica SST comparte una única lectura segura para bool,
+  enteros con y sin signo y `float32/float64`; los dtypes complejos y valores
+  no finitos se rechazan, sin reinterpretar memoria. Las rutas de tasa,
+  Poisson, correlación, Wilcoxon, chi-cuadrado, riesgo, finanzas y modelo SST
+  propagan errores de extracción y no escriben reportes parciales.
+- [x] Se eliminó el escaper JSON duplicado de `sst_report_advanced.c`; las
+  cadenas dinámicas usan `milena_json_write_string`.
+- [x] Una fuente que declara la superficie canónica pero no puede parsearse ya
+  no cae silenciosamente al router textual: devuelve error de parseo. La ruta
+  textual restante sigue siendo solo compatibilidad histórica.
+
+## Pendientes verificados después de esta iteración
+
+- [ ] Ejecutar y documentar los 8 checks remotos de CI para el commit de esta
+  iteración; este entorno no dispone de compilador local.
+- [ ] Añadir casos automatizados específicos para cada dtype, escapes JSON,
+  fallos de extracción y preservación del destino en conversiones fallidas;
+  las rutas ya están endurecidas, pero esos casos aún deben entrar en la
+  matriz `make test`.
+- [ ] Completar la API de valores común y trasladar transformaciones restantes
+  al AST; no se inventan APIs nuevas en esta iteración.
+- [ ] Revisar contratos de propiedad de todas las APIs públicas antiguas y
+  eliminar duplicados únicamente junto con sustitución canónica probada.

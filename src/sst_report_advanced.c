@@ -1,17 +1,5 @@
 #include "sst_report.h"
 
-static void json_string_advanced(FILE *out, const char *text) {
-    fputc('"', out);
-    for (const unsigned char *p = (const unsigned char *)(text ? text : ""); *p; p++) {
-        if (*p == '"') fputs("\\\"", out);
-        else if (*p == '\\') fputs("\\\\", out);
-        else if (*p == '\n') fputs("\\n", out);
-        else if (*p == '\r') fputs("\\r", out);
-        else fputc(*p, out);
-    }
-    fputc('"', out);
-}
-
 MilenaStatus sst_report_write_advanced_json(
     const char *filename,
     const SstAdvancedStats *advanced,
@@ -79,9 +67,9 @@ MilenaStatus sst_report_write_advanced_json(
     }
     fputs("  \"advertencias\": [\n", out);
     fputs("    {\"tipo\": \"causalidad\", \"mensaje\": ", out);
-    json_string_advanced(out, "Asociación estadística no implica causalidad; pueden existir confusores, sesgo de selección o azar.");
+    milena_json_write_string(out, "Asociación estadística no implica causalidad; pueden existir confusores, sesgo de selección o azar.");
     fputs("},\n    {\"tipo\": \"metodo\", \"mensaje\": ", out);
-    json_string_advanced(out, "Los resultados aproximados deben interpretarse con sus supuestos y tamaño muestral.");
+    milena_json_write_string(out, "Los resultados aproximados deben interpretarse con sus supuestos y tamaño muestral.");
     fputs("}\n  ]\n}\n", out);
     bool io_error = ferror(out) != 0;
     if (fclose(out) != 0) io_error = true;
@@ -89,6 +77,5 @@ MilenaStatus sst_report_write_advanced_json(
         milena_error_set(error, MILENA_ERR_IO, 0, 0, 0, "Error escribiendo reporte avanzado SST");
         return MILENA_ERR_IO;
     }
-    (void)json_string_advanced;
     return MILENA_OK;
 }

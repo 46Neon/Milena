@@ -33,22 +33,45 @@ static char *runtime_trim(char *text) {
     return text;
 }
 
+static void runtime_error(MilenaError *error, MilenaStatus code,
+                          const char *message);
+
 static bool runtime_numeric_cell(const MilenaTableColumn *data,
                                  const void *raw, double *value) {
     if (!data || !raw || !value) return false;
     switch (data->values.dtype) {
-        case MILENA_DTYPE_INT8: *value = (double)*(const int8_t *)raw; return true;
-        case MILENA_DTYPE_INT16: *value = (double)*(const int16_t *)raw; return true;
-        case MILENA_DTYPE_INT32: *value = (double)*(const int32_t *)raw; return true;
-        case MILENA_DTYPE_INT64: *value = (double)*(const int64_t *)raw; return true;
-        case MILENA_DTYPE_UINT8: *value = (double)*(const uint8_t *)raw; return true;
-        case MILENA_DTYPE_UINT16: *value = (double)*(const uint16_t *)raw; return true;
-        case MILENA_DTYPE_UINT32: *value = (double)*(const uint32_t *)raw; return true;
-        case MILENA_DTYPE_UINT64: *value = (double)*(const uint64_t *)raw; return true;
-        case MILENA_DTYPE_FLOAT32: *value = (double)*(const float *)raw; return true;
-        case MILENA_DTYPE_FLOAT64: *value = *(const double *)raw; return true;
-        default: return false;
+        case MILENA_DTYPE_BOOL: *value = *(const bool *)raw ? 1.0 : 0.0; break;
+        case MILENA_DTYPE_INT8: *value = (double)*(const int8_t *)raw; break;
+        case MILENA_DTYPE_INT16: *value = (double)*(const int16_t *)raw; break;
+        case MILENA_DTYPE_INT32: *value = (double)*(const int32_t *)raw; break;
+        case MILENA_DTYPE_INT64: *value = (double)*(const int64_t *)raw; break;
+        case MILENA_DTYPE_UINT8: *value = (double)*(const uint8_t *)raw; break;
+        case MILENA_DTYPE_UINT16: *value = (double)*(const uint16_t *)raw; break;
+        case MILENA_DTYPE_UINT32: *value = (double)*(const uint32_t *)raw; break;
+        case MILENA_DTYPE_UINT64: *value = (double)*(const uint64_t *)raw; break;
+        case MILENA_DTYPE_FLOAT32: *value = (double)*(const float *)raw; break;
+        case MILENA_DTYPE_FLOAT64: *value = *(const double *)raw; break;
+        default: return false; /* complex storage is never reinterpreted */
     }
+    return isfinite(*value);
+}
+
+static MilenaStatus runtime_numeric_value(const MilenaTable *table, size_t column,
+                                          size_t row, double *value,
+                                          MilenaError *error) {
+    const MilenaTableColumn *data = milena_table_column(table, column);
+    const void *raw = NULL;
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "La columna no es numérica");
+        return MILENA_ERR_TYPE;
+    }
+    MilenaStatus status = milena_table_get_array_value(table, column, row, &raw, error);
+    if (status != MILENA_OK) return status;
+    if (!runtime_numeric_cell(data, raw, value)) {
+        runtime_error(error, MILENA_ERR_TYPE, "Dtype no numérico o no finito");
+        return MILENA_ERR_TYPE;
+    }
+    return MILENA_OK;
 }
 
 typedef struct {
@@ -740,45 +763,44 @@ static MilenaStatus runtime_write_sst_rate(const MilenaTable *table,
     }
     size_t incidents = 0;
     double exposure = 0.0;
-    for (size_t row = 0; row < table->row_count; row++) {
+    MilenaStatus status = MILENA_OK;
+    for (size_t row = 0; row < table->row_count && status == MILENA_OK; row++) {
         if (!milena_table_is_null(table, (size_t)event_column, row)) {
             const MilenaTableColumn *event_data = milena_table_column(table, (size_t)event_column);
             const char *event = NULL;
             bool incident = false;
             if (event_data->type == MILENA_COLUMN_STRING) {
-                if (milena_table_get_string(table, (size_t)event_column, row, &event, error) == MILENA_OK)
+                status = milena_table_get_string(table, (size_t)event_column, row, &event, error);
+                if (status == MILENA_OK)
                     incident = strcmp(event, "1") == 0 || strcmp(event, "true") == 0 ||
                                strcmp(event, "verdadero") == 0;
             } else if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
                 uint32_t code = 0;
-                if (milena_table_get_category(table, (size_t)event_column, row, &code, &event, error) == MILENA_OK)
+                status = milena_table_get_category(table, (size_t)event_column, row,
+                                                   &code, &event, error);
+                if (status == MILENA_OK)
                     incident = strcmp(event, "1") == 0 || strcmp(event, "true") == 0 ||
                                strcmp(event, "verdadero") == 0;
             } else {
-                const void *raw = NULL;
-                if (milena_table_get_array_value(table, (size_t)event_column, row, &raw, error) == MILENA_OK) {
-                    if (event_data->values.dtype == MILENA_DTYPE_FLOAT64) incident = *(const double *)raw > 0.0;
-                    else if (event_data->values.dtype == MILENA_DTYPE_FLOAT32) incident = *(const float *)raw > 0.0f;
-                    else if (event_data->values.dtype == MILENA_DTYPE_INT64) incident = *(const int64_t *)raw > 0;
-                    else if (event_data->values.dtype == MILENA_DTYPE_UINT64) incident = *(const uint64_t *)raw > 0;
-                }
+                double value = 0.0;
+                status = runtime_numeric_value(table, (size_t)event_column, row,
+                                               &value, error);
+                if (status == MILENA_OK) incident = value > 0.0;
             }
-            if (incident) incidents++;
+            if (status == MILENA_OK && incident) incidents++;
         }
+        if (status != MILENA_OK) break;
         if (!milena_table_is_null(table, (size_t)exposure_column, row)) {
-            const void *raw = NULL;
-            const MilenaTableColumn *data = milena_table_column(table, (size_t)exposure_column);
-            if (data->type == MILENA_COLUMN_ARRAY &&
-                milena_table_get_array_value(table, (size_t)exposure_column, row, &raw, error) == MILENA_OK) {
-                if (data->values.dtype == MILENA_DTYPE_FLOAT64) exposure += *(const double *)raw;
-                else if (data->values.dtype == MILENA_DTYPE_FLOAT32) exposure += (double)*(const float *)raw;
-                else if (data->values.dtype == MILENA_DTYPE_INT64) exposure += (double)*(const int64_t *)raw;
-                else if (data->values.dtype == MILENA_DTYPE_UINT64) exposure += (double)*(const uint64_t *)raw;
-            }
+            double value = 0.0;
+            status = runtime_numeric_value(table, (size_t)exposure_column, row,
+                                           &value, error);
+            if (status != MILENA_OK) break;
+            exposure += value;
         }
     }
+    if (status != MILENA_OK) return status;
     SstRateResult result;
-    MilenaStatus status = sst_rate_from_counts(incidents, exposure, factor, &result, error);
+    status = sst_rate_from_counts(incidents, exposure, factor, &result, error);
     if (status == MILENA_OK) {
         char path[2048];
         int written = snprintf(path, sizeof(path), "%s.tasa.json", output_path);
@@ -830,38 +852,45 @@ static MilenaStatus runtime_write_sst_poisson(const MilenaTable *table,
     }
     size_t incidents = 0;
     double exposure = 0.0;
-    for (size_t row = 0; row < table->row_count; row++) {
+    MilenaStatus status = MILENA_OK;
+    for (size_t row = 0; row < table->row_count && status == MILENA_OK; row++) {
         if (!milena_table_is_null(table, (size_t)event_column, row)) {
             const MilenaTableColumn *event_data = milena_table_column(table, (size_t)event_column);
-            const void *raw = NULL;
             bool incident = false;
-            if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
-                const char *label = NULL; uint32_t code = 0;
-                if (milena_table_get_category(table, (size_t)event_column, row, &code, &label, error) == MILENA_OK)
-                    incident = strcmp(label, "1") == 0 || strcmp(label, "true") == 0 || strcmp(label, "verdadero") == 0;
-            } else if (event_data->type == MILENA_COLUMN_ARRAY &&
-                       milena_table_get_array_value(table, (size_t)event_column, row, &raw, error) == MILENA_OK) {
-                if (event_data->values.dtype == MILENA_DTYPE_FLOAT64) incident = *(const double *)raw > 0.0;
-                else if (event_data->values.dtype == MILENA_DTYPE_FLOAT32) incident = *(const float *)raw > 0.0f;
-                else if (event_data->values.dtype == MILENA_DTYPE_INT64) incident = *(const int64_t *)raw > 0;
-                else if (event_data->values.dtype == MILENA_DTYPE_UINT64) incident = *(const uint64_t *)raw > 0;
+            if (event_data->type == MILENA_COLUMN_STRING ||
+                event_data->type == MILENA_COLUMN_CATEGORICAL) {
+                const char *label = NULL;
+                if (event_data->type == MILENA_COLUMN_STRING) {
+                    status = milena_table_get_string(table, (size_t)event_column, row,
+                                                     &label, error);
+                } else {
+                    uint32_t code = 0;
+                    status = milena_table_get_category(table, (size_t)event_column, row,
+                                                       &code, &label, error);
+                }
+                if (status == MILENA_OK)
+                    incident = strcmp(label, "1") == 0 || strcmp(label, "true") == 0 ||
+                               strcmp(label, "verdadero") == 0;
+            } else {
+                double value = 0.0;
+                status = runtime_numeric_value(table, (size_t)event_column, row,
+                                               &value, error);
+                if (status == MILENA_OK) incident = value > 0.0;
             }
-            if (incident) incidents++;
+            if (status == MILENA_OK && incident) incidents++;
         }
+        if (status != MILENA_OK) break;
         if (!milena_table_is_null(table, (size_t)exposure_column, row)) {
-            const MilenaTableColumn *data = milena_table_column(table, (size_t)exposure_column);
-            const void *raw = NULL;
-            if (data->type == MILENA_COLUMN_ARRAY &&
-                milena_table_get_array_value(table, (size_t)exposure_column, row, &raw, error) == MILENA_OK) {
-                if (data->values.dtype == MILENA_DTYPE_FLOAT64) exposure += *(const double *)raw;
-                else if (data->values.dtype == MILENA_DTYPE_FLOAT32) exposure += (double)*(const float *)raw;
-                else if (data->values.dtype == MILENA_DTYPE_INT64) exposure += (double)*(const int64_t *)raw;
-                else if (data->values.dtype == MILENA_DTYPE_UINT64) exposure += (double)*(const uint64_t *)raw;
-            }
+            double value = 0.0;
+            status = runtime_numeric_value(table, (size_t)exposure_column, row,
+                                           &value, error);
+            if (status != MILENA_OK) break;
+            exposure += value;
         }
     }
+    if (status != MILENA_OK) return status;
     SstPoissonInterval interval;
-    MilenaStatus status = sst_poisson_exact_interval(incidents, exposure, factor,
+    status = sst_poisson_exact_interval(incidents, exposure, factor,
                                                      0.95, &interval, error);
     if (status == MILENA_OK) {
         char path[2048];
@@ -911,24 +940,18 @@ static MilenaStatus runtime_write_sst_correlation(const MilenaTable *table,
         return MILENA_ERR_MEMORY;
     }
     size_t count = 0;
-    for (size_t row = 0; row < table->row_count; row++) {
+    MilenaStatus status = MILENA_OK;
+    for (size_t row = 0; row < table->row_count && status == MILENA_OK; row++) {
         if (milena_table_is_null(table, (size_t)x_column, row) ||
             milena_table_is_null(table, (size_t)y_column, row)) continue;
-        const void *xr = NULL, *yr = NULL;
-        if (milena_table_get_array_value(table, (size_t)x_column, row, &xr, error) != MILENA_OK ||
-            milena_table_get_array_value(table, (size_t)y_column, row, &yr, error) != MILENA_OK) break;
-        x[count] = x_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)xr :
-                   x_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)xr :
-                   x_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)xr :
-                   (double)*(const uint64_t *)xr;
-        y[count] = y_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)yr :
-                   y_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)yr :
-                   y_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)yr :
-                   (double)*(const uint64_t *)yr;
-        count++;
+        status = runtime_numeric_value(table, (size_t)x_column, row, &x[count], error);
+        if (status == MILENA_OK)
+            status = runtime_numeric_value(table, (size_t)y_column, row, &y[count], error);
+        if (status == MILENA_OK) count++;
     }
+    if (status != MILENA_OK) { free(x); free(y); return status; }
     SstCorrelationResult result;
-    MilenaStatus status = sst_pearson(x, y, count, &result, error);
+    status = sst_pearson(x, y, count, &result, error);
     if (status == MILENA_OK) {
         char path[2048];
         int written = snprintf(path, sizeof(path), "%s.correlacion.json", output_path);
@@ -978,21 +1001,20 @@ static MilenaStatus runtime_write_sst_wilcoxon(const MilenaTable *table,
         return MILENA_ERR_MEMORY;
     }
     size_t count = 0;
-    for (size_t row = 0; row < table->row_count; row++) {
+    MilenaStatus status = MILENA_OK;
+    for (size_t row = 0; row < table->row_count && status == MILENA_OK; row++) {
         if (milena_table_is_null(table, (size_t)before_column, row) ||
             milena_table_is_null(table, (size_t)after_column, row)) continue;
-        const void *br = NULL, *ar = NULL;
-        if (milena_table_get_array_value(table, (size_t)before_column, row, &br, error) != MILENA_OK ||
-            milena_table_get_array_value(table, (size_t)after_column, row, &ar, error) != MILENA_OK) break;
-        if (!runtime_numeric_cell(before_data, br, &before[count]) ||
-            !runtime_numeric_cell(after_data, ar, &after[count])) {
-            runtime_error(error, MILENA_ERR_TYPE, "Wilcoxon requiere datos numéricos válidos");
-            break;
-        }
-        count++;
+        status = runtime_numeric_value(table, (size_t)before_column, row,
+                                       &before[count], error);
+        if (status == MILENA_OK)
+            status = runtime_numeric_value(table, (size_t)after_column, row,
+                                           &after[count], error);
+        if (status == MILENA_OK) count++;
     }
+    if (status != MILENA_OK) { free(before); free(after); return status; }
     SstWilcoxonResult result;
-    MilenaStatus status = sst_wilcoxon_signed_rank(before, after, count, &result, error);
+    status = sst_wilcoxon_signed_rank(before, after, count, &result, error);
     if (status == MILENA_OK) {
         char path[2048];
         int written = snprintf(path, sizeof(path), "%s.wilcoxon.json", output_path);
@@ -1039,7 +1061,8 @@ static MilenaStatus runtime_write_sst_chi_square(const MilenaTable *table,
         return MILENA_ERR_MEMORY;
     }
     size_t count = 0;
-    for (size_t row = 0; row < table->row_count; row++) {
+    MilenaStatus status = MILENA_OK;
+    for (size_t row = 0; row < table->row_count && status == MILENA_OK; row++) {
         if (milena_table_is_null(table, (size_t)row_column, row) ||
             milena_table_is_null(table, (size_t)value_column, row)) continue;
         const char *row_label = NULL, *column_label = NULL;
@@ -1047,21 +1070,37 @@ static MilenaStatus runtime_write_sst_chi_square(const MilenaTable *table,
         const MilenaTableColumn *column_data = milena_table_column(table, (size_t)value_column);
         if (row_data->type == MILENA_COLUMN_CATEGORICAL) {
             uint32_t code = 0;
-            if (milena_table_get_category(table, (size_t)row_column, row, &code, &row_label, error) != MILENA_OK) break;
+            status = milena_table_get_category(table, (size_t)row_column, row,
+                                               &code, &row_label, error);
         } else if (row_data->type == MILENA_COLUMN_STRING) {
-            if (milena_table_get_string(table, (size_t)row_column, row, &row_label, error) != MILENA_OK) break;
-        } else break;
+            status = milena_table_get_string(table, (size_t)row_column, row,
+                                             &row_label, error);
+        } else {
+            runtime_error(error, MILENA_ERR_TYPE, "Las filas de chi cuadrado deben ser categóricas");
+            status = MILENA_ERR_TYPE;
+        }
+        if (status != MILENA_OK) break;
         if (column_data->type == MILENA_COLUMN_CATEGORICAL) {
             uint32_t code = 0;
-            if (milena_table_get_category(table, (size_t)value_column, row, &code, &column_label, error) != MILENA_OK) break;
+            status = milena_table_get_category(table, (size_t)value_column, row,
+                                               &code, &column_label, error);
         } else if (column_data->type == MILENA_COLUMN_STRING) {
-            if (milena_table_get_string(table, (size_t)value_column, row, &column_label, error) != MILENA_OK) break;
-        } else break;
-        rows[count] = row_label; columns[count] = column_label; count++;
+            status = milena_table_get_string(table, (size_t)value_column, row,
+                                             &column_label, error);
+        } else {
+            runtime_error(error, MILENA_ERR_TYPE, "Las columnas de chi cuadrado deben ser categóricas");
+            status = MILENA_ERR_TYPE;
+        }
+        if (status == MILENA_OK) {
+            rows[count] = row_label;
+            columns[count] = column_label;
+            count++;
+        }
     }
+    if (status != MILENA_OK) { free(rows); free(columns); return status; }
     SstContingency2D contingency;
     sst_contingency_init(&contingency);
-    MilenaStatus status = sst_contingency_build(rows, columns, count, &contingency, error);
+    status = sst_contingency_build(rows, columns, count, &contingency, error);
     SstChiSquareResult result;
     if (status == MILENA_OK) status = sst_contingency_chi_square(&contingency, &result, error);
     if (status == MILENA_OK) {
@@ -1116,18 +1155,21 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
     const char *exposure_labels[2] = {NULL, NULL};
     const char *event_labels[2] = {NULL, NULL};
     size_t counts[4] = {0, 0, 0, 0};
-    for (size_t row = 0; row < table->row_count; row++) {
+    MilenaStatus status = MILENA_OK;
+    for (size_t row = 0; row < table->row_count && status == MILENA_OK; row++) {
         if (milena_table_is_null(table, (size_t)exposure_column, row) ||
             milena_table_is_null(table, (size_t)event_column, row)) continue;
         const char *exposure = NULL, *event = NULL;
         if (exposure_data->type == MILENA_COLUMN_CATEGORICAL) {
             uint32_t code = 0;
-            if (milena_table_get_category(table, (size_t)exposure_column, row, &code, &exposure, error) != MILENA_OK) break;
-        } else if (milena_table_get_string(table, (size_t)exposure_column, row, &exposure, error) != MILENA_OK) break;
+            status = milena_table_get_category(table, (size_t)exposure_column, row, &code, &exposure, error);
+        } else status = milena_table_get_string(table, (size_t)exposure_column, row, &exposure, error);
+        if (status != MILENA_OK) break;
         if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
             uint32_t code = 0;
-            if (milena_table_get_category(table, (size_t)event_column, row, &code, &event, error) != MILENA_OK) break;
-        } else if (milena_table_get_string(table, (size_t)event_column, row, &event, error) != MILENA_OK) break;
+            status = milena_table_get_category(table, (size_t)event_column, row, &code, &event, error);
+        } else status = milena_table_get_string(table, (size_t)event_column, row, &event, error);
+        if (status != MILENA_OK) break;
         size_t ei = exposure_labels[0] && strcmp(exposure_labels[0], exposure) == 0 ? 0 :
                     exposure_labels[1] && strcmp(exposure_labels[1], exposure) == 0 ? 1 : 2;
         size_t vi = event_labels[0] && strcmp(event_labels[0], event) == 0 ? 0 :
@@ -1138,6 +1180,7 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
         else if (vi == 2 && !event_labels[1]) { event_labels[1] = event; vi = 1; }
         if (ei < 2 && vi < 2) counts[ei * 2 + vi]++;
     }
+    if (status != MILENA_OK) return status;
     if (!exposure_labels[0] || !exposure_labels[1] || !event_labels[0] || !event_labels[1]) {
         runtime_error(error, MILENA_ERR_DATA, "Riesgo requiere dos categorías por columna");
         return MILENA_ERR_DATA;
@@ -1159,7 +1202,7 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
     size_t control_events = counts[control_index * 2 + event_positive_index];
     size_t control_non_events = counts[control_index * 2 + non_event_index];
     SstRiskMeasure result;
-    MilenaStatus status = sst_risk_ratio_odds_ratio(exposed_events, exposed_non_events,
+    status = sst_risk_ratio_odds_ratio(exposed_events, exposed_non_events,
                                                      control_events, control_non_events,
                                                      &result, error);
     if (status == MILENA_OK) {
@@ -1178,21 +1221,6 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
         }
     }
     return status;
-}
-
-static bool runtime_numeric_value(const MilenaTable *table, size_t column,
-                                   size_t row, double *value,
-                                   MilenaError *error) {
-    const MilenaTableColumn *data = milena_table_column(table, column);
-    const void *raw = NULL;
-    if (!data || data->type != MILENA_COLUMN_ARRAY ||
-        milena_table_get_array_value(table, column, row, &raw, error) != MILENA_OK) return false;
-    if (data->values.dtype == MILENA_DTYPE_FLOAT64) *value = *(const double *)raw;
-    else if (data->values.dtype == MILENA_DTYPE_FLOAT32) *value = (double)*(const float *)raw;
-    else if (data->values.dtype == MILENA_DTYPE_INT64) *value = (double)*(const int64_t *)raw;
-    else if (data->values.dtype == MILENA_DTYPE_UINT64) *value = (double)*(const uint64_t *)raw;
-    else return false;
-    return isfinite(*value);
 }
 
 static double runtime_decimal_double(const MilenaDecimal *value) {
@@ -1235,8 +1263,12 @@ static MilenaStatus runtime_write_finance_simple_interest(const MilenaTable *tab
         if (milena_table_is_null(table, (size_t)principal_column, row) ||
             milena_table_is_null(table, (size_t)rate_column, row)) continue;
         double principal_value = 0.0, rate_value = 0.0;
-        if (!runtime_numeric_value(table, (size_t)principal_column, row, &principal_value, error) ||
-            !runtime_numeric_value(table, (size_t)rate_column, row, &rate_value, error)) continue;
+        MilenaStatus numeric_status = runtime_numeric_value(
+            table, (size_t)principal_column, row, &principal_value, error);
+        if (numeric_status == MILENA_OK)
+            numeric_status = runtime_numeric_value(
+                table, (size_t)rate_column, row, &rate_value, error);
+        if (numeric_status != MILENA_OK) return numeric_status;
         char principal_text[64], rate_text[64];
         snprintf(principal_text, sizeof(principal_text), "%.17g", principal_value);
         snprintf(rate_text, sizeof(rate_text), "%.17g", rate_value);
@@ -1289,7 +1321,8 @@ static MilenaStatus runtime_write_sst_model(const MilenaTable *table,
     }
     SstEventList events;
     sst_event_list_init(&events);
-    for (size_t row = 0; row < table->row_count; row++) {
+    MilenaStatus status = MILENA_OK;
+    for (size_t row = 0; row < table->row_count && status == MILENA_OK; row++) {
         if (milena_table_is_null(table, (size_t)area_column, row) ||
             milena_table_is_null(table, (size_t)severity_column, row) ||
             milena_table_is_null(table, (size_t)cargo_column, row)) continue;
@@ -1298,34 +1331,53 @@ static MilenaStatus runtime_write_sst_model(const MilenaTable *table,
         const MilenaTableColumn *cargo_data = milena_table_column(table, (size_t)cargo_column);
         if (area_data->type == MILENA_COLUMN_CATEGORICAL) {
             uint32_t code = 0;
-            if (milena_table_get_category(table, (size_t)area_column, row, &code, &area, error) != MILENA_OK) break;
+            status = milena_table_get_category(table, (size_t)area_column, row,
+                                               &code, &area, error);
         } else if (area_data->type == MILENA_COLUMN_STRING) {
-            if (milena_table_get_string(table, (size_t)area_column, row, &area, error) != MILENA_OK) break;
-        } else break;
+            status = milena_table_get_string(table, (size_t)area_column, row,
+                                             &area, error);
+        } else {
+            runtime_error(error, MILENA_ERR_TYPE, "El área del modelo SST debe ser textual");
+            status = MILENA_ERR_TYPE;
+        }
+        if (status != MILENA_OK) break;
         if (cargo_data->type == MILENA_COLUMN_CATEGORICAL) {
             uint32_t code = 0;
-            if (milena_table_get_category(table, (size_t)cargo_column, row, &code, &cargo, error) != MILENA_OK) break;
+            status = milena_table_get_category(table, (size_t)cargo_column, row,
+                                               &code, &cargo, error);
         } else if (cargo_data->type == MILENA_COLUMN_STRING) {
-            if (milena_table_get_string(table, (size_t)cargo_column, row, &cargo, error) != MILENA_OK) break;
-        } else break;
-        const void *value = NULL;
-        if (milena_table_get_array_value(table, (size_t)severity_column, row, &value, error) != MILENA_OK) break;
+            status = milena_table_get_string(table, (size_t)cargo_column, row,
+                                             &cargo, error);
+        } else {
+            runtime_error(error, MILENA_ERR_TYPE, "El cargo del modelo SST debe ser textual");
+            status = MILENA_ERR_TYPE;
+        }
+        if (status != MILENA_OK) break;
+        double severity = 0.0;
+        status = runtime_numeric_value(table, (size_t)severity_column, row,
+                                       &severity, error);
+        if (status != MILENA_OK) break;
         SstEvent event;
         sst_event_init(&event);
         event.area = milena_strdup(area);
         event.cargo = milena_strdup(cargo);
-        event.severidad = severity_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)value :
-                          severity_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)value :
-                          severity_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)value :
-                          (double)*(const uint64_t *)value;
+        if (!event.area || !event.cargo) {
+            sst_event_destroy(&event);
+            runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para evento SST");
+            status = MILENA_ERR_MEMORY;
+            break;
+        }
+        event.severidad = severity;
         event.has_severidad = true;
-        MilenaStatus append_status = sst_event_list_append(&events, &event, error);
+        status = sst_event_list_append(&events, &event, error);
         sst_event_destroy(&event);
-        if (append_status != MILENA_OK) { sst_event_list_destroy(&events); return append_status; }
+    }
+    if (status != MILENA_OK) {
+        sst_event_list_destroy(&events);
+        return status;
     }
     char path[2048];
     int written = snprintf(path, sizeof(path), "%s.modelo_sst.json", output_path);
-    MilenaStatus status = MILENA_OK;
     if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
     else {
         FILE *out = fopen(path, "wb");
