@@ -1827,7 +1827,11 @@ MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
         (slots == NULL || (right->row_count != 0 &&
                            (next == NULL || matched == NULL))))
         status = MILENA_ERR_MEMORY;
-    for (size_t row = 0; row < right->row_count; ++row) next[row] = SIZE_MAX;
+    /* next is optional for an empty right table, and may be NULL after an
+     * allocation failure. Never dereference it until the allocation gate has
+     * succeeded. */
+    if (status == MILENA_OK)
+        for (size_t row = 0; row < right->row_count; ++row) next[row] = SIZE_MAX;
     for (size_t row = 0; status == MILENA_OK && row < right->row_count; ++row) {
         if (row_has_null_key(right, rk, key_count, row)) continue;
         uint64_t hash = key_hash(right, rk, key_count, row);
@@ -2321,50 +2325,62 @@ MilenaStatus milena_dataset_from_table(Dataset *out,
     }
     MilenaStatus status = milena_table_validate(table, error);
     if (status != MILENA_OK) return status;
-    dataset_init(out);
-    out->column_count = table->column_count;
-    out->row_count = table->row_count;
-    out->row_capacity = table->row_count;
-    if (out->column_count > 0) {
-        out->headers = (char **)calloc(out->column_count, sizeof(*out->headers));
-        if (!out->headers) status = MILENA_ERR_MEMORY;
+
+    /* Build off to the side. The old implementation reset out before all
+     * allocations succeeded, leaking/reusing its previous contents and
+     * leaving a partial result visible to callers. The destination is
+     * replaced atomically after the complete conversion. Callers must pass
+     * an initialized Dataset (the same contract as dataset_destroy). */
+    Dataset temporary;
+    dataset_init(&temporary);
+    temporary.column_count = table->column_count;
+    temporary.row_count = table->row_count;
+    temporary.row_capacity = table->row_count;
+    if (temporary.column_count > 0) {
+        temporary.headers = (char **)calloc(temporary.column_count,
+                                             sizeof(*temporary.headers));
+        if (!temporary.headers) status = MILENA_ERR_MEMORY;
     }
-    if (status == MILENA_OK && out->row_count > 0) {
-        out->rows = (char ***)calloc(out->row_count, sizeof(*out->rows));
-        if (!out->rows) status = MILENA_ERR_MEMORY;
+    if (status == MILENA_OK && temporary.row_count > 0) {
+        temporary.rows = (char ***)calloc(temporary.row_count,
+                                           sizeof(*temporary.rows));
+        if (!temporary.rows) status = MILENA_ERR_MEMORY;
     }
-    for (size_t column = 0; status == MILENA_OK && column < out->column_count; column++) {
+    for (size_t column = 0; status == MILENA_OK &&
+         column < temporary.column_count; column++) {
         const MilenaTableColumn *column_data = milena_table_column(table, column);
-        out->headers[column] = milena_strdup(column_data->name);
-        if (!out->headers[column]) status = MILENA_ERR_MEMORY;
+        temporary.headers[column] = milena_strdup(column_data->name);
+        if (!temporary.headers[column]) status = MILENA_ERR_MEMORY;
     }
-    for (size_t row = 0; status == MILENA_OK && row < out->row_count; row++) {
-        out->rows[row] = (char **)calloc(out->column_count, sizeof(**out->rows));
-        if (!out->rows[row]) {
+    for (size_t row = 0; status == MILENA_OK && row < temporary.row_count; row++) {
+        temporary.rows[row] = (char **)calloc(temporary.column_count,
+                                               sizeof(**temporary.rows));
+        if (!temporary.rows[row]) {
             status = MILENA_ERR_MEMORY;
             break;
         }
-        for (size_t column = 0; column < out->column_count; column++) {
+        for (size_t column = 0; column < temporary.column_count; column++) {
             char buffer[128];
             const char *text = NULL;
             status = table_dataset_cell_text(table, column, row, buffer,
                                              sizeof(buffer), &text, error);
             if (status != MILENA_OK) break;
-            out->rows[row][column] = milena_strdup(text ? text : "");
-            if (!out->rows[row][column]) {
+            temporary.rows[row][column] = milena_strdup(text ? text : "");
+            if (!temporary.rows[row][column]) {
                 status = MILENA_ERR_MEMORY;
                 break;
             }
         }
     }
     if (status != MILENA_OK) {
-        dataset_destroy(out);
+        dataset_destroy(&temporary);
         table_error(error, status, "No se pudo reconstruir el dataset desde la tabla");
         return status;
     }
+    dataset_destroy(out);
+    *out = temporary;
     return MILENA_OK;
 }
-
 
 static MilenaStatus table_rows_equal(const MilenaTable *table,
                                      size_t left, size_t right,

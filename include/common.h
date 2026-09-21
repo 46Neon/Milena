@@ -67,4 +67,7 @@ bool milena_size_mul(size_t a, size_t b, size_t *out);
 MilenaStatus milena_parse_double(const char *text, double *value);
 void milena_error_print(const MilenaError *error, FILE *stream);
 
+/* Canonical JSON string writer used by every product serializer. */
+void milena_json_write_string(FILE *stream, const char *text);
+
 #endif
