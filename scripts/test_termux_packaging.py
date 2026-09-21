@@ -73,7 +73,7 @@ def main() -> int:
         base = RECIPE.read_text(encoding="utf-8")
         missing_sha = Path(raw_recipe) / "missing-sha.sh"
         missing_sha.write_text(base.replace(
-            "TERMUX_PKG_SHA256=21eb3cba83916e24198a68ed8f783442efbe4d01ca2236e36662d958b10d60de",
+            "TERMUX_PKG_SHA256=56e189bbd1e89aa25a7e8588e0606f0ea42d3bf5f1086fcfa3442d632d571153",
             "TERMUX_PKG_SHA256=",
         ), encoding="utf-8")
         run_recipe(missing_sha, expect_success=False)

@@ -6,7 +6,7 @@ Milena es un lenguaje de programación completo orientado al análisis de datos;
 
 El camino oficial candidato es `packaging/termux-packages/milena/build.sh`, que
 se instala temporalmente como `packages/milena/build.sh` dentro de un checkout
-de `termux/termux-packages`. La receta usa el tarball real `v0.1.1` y un SHA-256
+de `termux/termux-packages`. La receta usa el tarball real `v0.2.0` y un SHA-256
 verificado; todavía no existe aceptación ni repositorio APT oficial de Milena.
 
 El workflow manual de PR23 solo compila si existe un dispositivo Android/Termux

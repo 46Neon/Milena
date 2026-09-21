@@ -40,6 +40,12 @@ if recipe.is_file():
         errors.extend(line.removeprefix("ERROR: ") for line in result.stderr.splitlines() if line)
 
 makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+recipe_text = recipe.read_text(encoding="utf-8") if recipe.is_file() else ""
+common_text = (ROOT / "include/common.h").read_text(encoding="utf-8")
+recipe_version = re.search(r"(?m)^TERMUX_PKG_VERSION=([^\s#]+)", recipe_text)
+runtime_version = re.search(r"(?m)^#define MILENA_VERSION \"([^\"]+)\"", common_text)
+if not recipe_version or not runtime_version or recipe_version.group(1) != runtime_version.group(1):
+    errors.append("Termux package version must match MILENA_VERSION exactly")
 if "TERMUX=1" not in makefile or "TERMUX_PREFIX" not in makefile:
     errors.append("Makefile lacks explicit Termux build/install variables")
 for token in ("src/compiler.c", "src/ir.c", "src/vm.c"):

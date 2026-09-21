@@ -6,7 +6,7 @@ on:
       release_tag:
         description: 'Tag de la Release que contiene el paquete Termux aarch64'
         required: true
-        default: 'v0.1.1'
+        default: 'v0.2.0'
       confirm_publish:
         description: 'Confirmar publicación manual del repositorio APT'
         required: true
