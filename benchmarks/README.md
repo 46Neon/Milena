@@ -5,7 +5,8 @@ Estos benchmarks miden, sin prometer un umbral, dos operaciones observables:
 1. **Compilación:** `make clean && make -B all`, empezando cada muestra con el
    árbol limpio.
 2. **Ejecución:** `./milena run benchmarks/ejecucion.milena`, que recorre la
-   ruta canónica lexer → parser → AST → semántica → runtime → MilenaTable.
+   ruta canónica lexer → parser → AST → semántica → runtime. Esta fixture mide
+   el programa de arreglos; no sustituye una medición de tablas o datasets.
 
 La fixture es deliberadamente pequeña y determinista. No representa todos los
 volúmenes ni todas las operaciones de análisis; los resultados no permiten

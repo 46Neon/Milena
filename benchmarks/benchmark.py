@@ -92,7 +92,7 @@ def main() -> int:
         "notes": [
             "Wall-clock samples from time.perf_counter; no performance guarantee.",
             "Compile samples start from a clean tree and use the repository Makefile.",
-            "Execution uses the canonical lexer-parser-AST-semantic-runtime path.",
+            "Execution uses the canonical lexer-parser-AST-semantic-runtime path; this fixture is array-only.",
         ],
     }
     rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
