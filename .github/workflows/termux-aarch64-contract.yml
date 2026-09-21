@@ -30,6 +30,21 @@ concurrency:
 # already be a registered Termux device and must have a shallow/sparse official
 # termux-packages checkout in TERMUX_PACKAGES_DIR.
 jobs:
+  termux-host-contract:
+    # This is deliberately host-only: it proves the canonical C17 source and
+    # CLI contract, but does not claim Android/Bionic execution.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ejecutar contrato reproducible del binario canónico
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang
+          make termux-contract CC=clang
+
   termux-aarch64-contract:
     if: inputs.confirm_device == true
     runs-on: [self-hosted, termux, aarch64, milena]
