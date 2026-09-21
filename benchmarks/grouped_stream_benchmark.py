@@ -20,7 +20,7 @@ def run_case(label: str, rows: int, malformed_every: int, groups: int, large: bo
     with tempfile.TemporaryDirectory(prefix="milena-grouped-stream-") as td:
         root = Path(td); csv_path = root / "datos.csv"; output = root / "reporte.json"; expected_bad = make_csv(csv_path, rows, malformed_every, groups)
         script = root / "flujo.milena"
-        script.write_text(f'''dataset cargar flujo("{csv_path}", 4096)\n.agrupar {{ #por("grupo") #suma("importe") #media("importe") #conteo("importe") }}\n.exportar {{ ("{output}") }}\n''', encoding="utf-8")
+        script.write_text(f'''.analisis agrupado {{\n dataset cargar flujo("{csv_path}", 4096)\n .agrupar dataset {{ #por("grupo") #suma("importe") #media("importe") #conteo("importe") }}\n .exportar {{ ("{output}") }}\n}}\n''', encoding="utf-8")
         start = time.perf_counter(); p = subprocess.run([str(BINARY), "run", str(script)], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE); elapsed = time.perf_counter() - start
         if p.returncode: raise SystemExit(p.stderr or p.stdout)
         report = json.loads(output.read_text(encoding="utf-8")); assert report["grupos"] == groups and report["filas"] == rows and report["limite_grupos"] == 1000
