@@ -622,6 +622,10 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
             if (parser_match(parser, TOKEN_KW_MIB)) parser_advance(parser);
             else { parser_error(parser, "Se esperaba la unidad 'MiB'"); goto fail; }
             load->stream_record_limit = (size_t)(limit * 1024.0 * 1024.0);
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "grupos") == 0) {
+            parser_advance(parser); if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de grupos")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El límite de grupos debe ser numérico")) goto fail;
+            double groups=parser->previous.number_value; if (!isfinite(groups)||groups<1.0||groups>100000.0||floor(groups)!=groups){parser_error(parser,"El límite de grupos debe estar entre 1 y 100000");goto fail;} load->stream_group_limit=(size_t)groups;
         } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "columnas") == 0) {
             parser_advance(parser);
             if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de columnas")) goto fail;
