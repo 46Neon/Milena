@@ -25,3 +25,10 @@ Un `.deb` de Termux no es intercambiable con uno de Debian/Ubuntu. El workflow A
 El constructor Termux fija `SOURCE_DATE_EPOCH`, normaliza modos y timestamps y emite un checksum SHA-256. El generador APT crea únicamente `binary-aarch64`, valida el nombre, metadatos y rutas del paquete, y firma `Release` e `InRelease`. Las claves privadas y contraseñas solo se leen desde secretos de CI; nunca se guardan en el repositorio ni en el árbol publicado.
 
 La publicación a Netlify es un canal de hosting opcional del workflow único y no es una dependencia del lenguaje.
+
+## Plantilla para termux-packages
+
+`packaging/termux-packages/milena/build.sh` sigue la forma de una receta de
+`termux-packages`, pero contiene un placeholder de SHA-256 y no está aceptada
+oficialmente. Solo se puede proponer después de una Release y una validación
+real en Termux/aarch64; no se anuncia `pkg install milena` antes de ese proceso.

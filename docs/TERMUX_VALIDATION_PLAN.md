@@ -40,16 +40,19 @@ El equipo debe documentar antes de habilitarlo:
 4. commit exacto, `PREFIX`, `dpkg --print-architecture` y `clang --version`;
 5. limpieza del workspace entre ejecuciones y ausencia de secretos persistentes.
 
-La primera ejecución debe ser manual y no publicar nada: el workflow ejecuta
+La primera ejecución debe ser manual y no publicar nada (sin `release_tag`): el workflow ejecuta
 `scripts/termux-runner-preflight.sh`, exige `uname -m=aarch64` y
 `dpkg --print-architecture=aarch64`, luego ejecuta
 `packaging/termux/build-local-deb.sh`, valida el checksum y conserva logs del
 build. Después debe probarse en el mismo dispositivo la instalación local,
 `command -v milena`, `milena --help`, actualización, ejecución de un script y
-eliminación. La prueba APT requiere además un repositorio publicado, una sesión
-limpia, verificación de la clave y una instalación/actualización/eliminación
-real. Hasta entonces, el workflow Linux de publicación solo prepara y valida
-metadatos; no afirma `pkg install`.
+eliminación. `scripts/termux-real-smoke.sh` ejecuta esa prueba y, únicamente si
+el operador proporciona una URL HTTPS de APT ya configurada, prueba también
+`pkg update`, `pkg install -y milena` y `pkg uninstall -y milena`; sin esa URL
+queda no ejecutada y el informe lo marca como fail-closed. La prueba APT completa
+requiere además una sesión limpia y verificación de la clave. Hasta entonces, el
+workflow Linux de publicación solo prepara y valida metadatos; no afirma
+`pkg install`.
 
 ## Frontera compiler/IR/VM y tabla canónica
 
@@ -74,45 +77,3 @@ podría crear un runtime paralelo. La siguiente fase segura es especificar una
 IR que represente operaciones de `MilenaTable`, añadir pruebas AST→IR→ejecución
 con resultados comparados contra el runtime canónico y solo entonces evaluar
 cada módulo para inclusión.
-
-## Evidencia de release
-
-Cada build real debe conservar el SBOM CycloneDX, el checksum SHA-256 y la procedencia del commit. La ausencia de cualquiera de ellos detiene la publicación.
-
-## Guardrails industriales verificables en PR23
-
-El contrato no confunde etiquetas con hardware: exige preflight de arquitectura,
-PREFIX, Termux, libc/plataforma, toolchain, dependencias, workspace limpio y
-objetivo Clang. El workflow manual tiene timeout y concurrencia serializada,
-y conserva preflight, toolchain, hashes, SBOM, procedencia y paquete como
-artefactos; si falta un artefacto, la ejecución falla.
-
-El flujo APT es fail-closed: descarga únicamente el conjunto Termux/aarch64,
-comprueba sus metadatos y hashes, rechaza mezcla Debian/Ubuntu, genera solo el
-índice `binary-aarch64`, verifica las firmas con `gpgv` y compara la huella del
-keyring antes de cualquier publicación. La publicación requiere confirmación
-manual y no se ejecuta en este PR.
-
-La garantía industrial real **no está declarada**: no hay todavía hardware
-Termux/aarch64 registrado, ni resultados de instalación/actualización/
-eliminación en Android, ni una prueba de cliente contra un repositorio remoto.
-La CI de Linux y los fixtures sintéticos validan el contrato y los metadatos,
-pero no pueden demostrar compatibilidad con Android, bionic, almacenamiento,
-permisos o el gestor APT de un dispositivo.
-
-## Puerta adicional de portabilidad Android/bionic
-
-El build nativo no acepta solo una etiqueta del runner: `clang
--print-target-triple` debe contener `aarch64` y `android`, y el preflight registra
-la API de Android mediante `getprop`. El constructor compila la versión del
-paquete dentro del binario, ejecuta `milena --self-check`/`--version` y examina
-el ELF antes de copiarlo al staging. El validador extrae el `.deb` sin
-**ejecutarlo** para comprobar ELF64, AArch64, `/system/bin/linker64` y la
-ausencia de `libc6`, `libstdc++`, `libgcc_s`, `ld-linux` o `/lib64`.
-
-Estas comprobaciones son fail-closed: un Linux x86_64, un Clang host o un ELF
-Debian no se presentan como Termux. El único requisito que queda fuera de la
-CI hospedada es un dispositivo/emulador Android real aarch64 con Termux,
-`getprop`, Clang, dpkg y un `PREFIX` utilizable; sin ese runner no se afirma
-instalación, ejecución o compatibilidad bionic. El workflow manual falla
-explícitamente antes de construir si el dispositivo no puede demostrarlo.
