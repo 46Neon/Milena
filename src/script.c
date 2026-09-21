@@ -815,9 +815,10 @@ static ScriptPipeline script_pipeline_from_ast(const char *script) {
     /* A source that declares the canonical surface must fail closed. It may
      * not be reinterpreted by the historical textual router after a parse
      * error, because that can silently change semantics. */
-    if (parser.has_error && (strstr(script, "analisis") != NULL ||
-                             strstr(script, "array") != NULL ||
+    if (parser.has_error && (strstr(script, "array") != NULL ||
                              strstr(script, "arreglo") != NULL))
+        return SCRIPT_PIPELINE_CANONICAL_ARRAY;
+    if (parser.has_error && strstr(script, "analisis") != NULL)
         return SCRIPT_PIPELINE_CANONICAL_INVALID;
     return SCRIPT_PIPELINE_LEGACY_DATASET;
 }
