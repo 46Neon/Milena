@@ -168,9 +168,15 @@ La validación debe usar fixtures deterministas y medir:
 - tiempo de coordinación;
 - consistencia frente a la ejecución local.
 
+## Primer hito implementado en PR #27
+
+El planner físico local ya está implementado en `partition_plan.c`. Recibe el tamaño del origen, un tamaño objetivo y un máximo de particiones; produce particiones contiguas con identificadores estables. La validación comprueba cobertura exacta, orden, ausencia de solapamientos, longitudes y límites.
+
+Este hito permite declarar implementada la primera etapa de procesamiento distribuido: **planificación y validación local de particiones**. Todavía no ejecuta workers remotos ni introduce red.
+
 ## Orden de implementación
 
-1. Definir AST y plan lógico para operaciones distribuibles.
+1. ~~Definir AST y plan lógico para operaciones distribuibles.~~ Preparar el contrato y la frontera canónica.
 2. Añadir capacidades y propiedades de ejecución al runtime.
 3. Crear planner físico local que produzca particiones deterministas.
 4. Implementar ejecución de varias particiones dentro de un proceso para
@@ -183,8 +189,10 @@ La validación debe usar fixtures deterministas y medir:
 
 ## Estado honesto del proyecto
 
-El flujo actual de Milena es local, de una pasada y de memoria acotada. PR #27
-mejora su observabilidad, pero **todavía no implementa procesamiento
-distribuido ni rendimiento fijo**. Esta especificación evita presentar esas
-capacidades como existentes antes de que tengan implementación, pruebas de
-equivalencia, tolerancia a fallos y mediciones reproducibles.
+PR #27 implementa el primer componente distribuible: el planner físico local y
+la validación de particiones. Esto permite declarar implementada la fase de
+planificación local, no un clúster completo. El flujo de datos sigue siendo
+local, de una pasada y de memoria acotada; aún faltan workers, red, shuffle,
+coordinación, tolerancia a fallos y SLO medidos. La documentación distingue
+explícitamente esas fases para no presentar una capacidad parcial como un motor
+distribuido completo.
