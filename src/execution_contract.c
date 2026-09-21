@@ -40,7 +40,15 @@ MilenaStatus milena_stream_execute_plan(const MilenaExecutionPlan *p, const char
     for (size_t i = 0; i < p->aggregate_count; ++i) {
         metrics[i].column = p->aggregates[i].column;
         metrics[i].name = p->aggregates[i].output_name;
-        metrics[i].operation = (MilenaStreamOperation)p->aggregates[i].operation;
+        switch (p->aggregates[i].operation) {
+            case MILENA_AGG_COUNT: metrics[i].operation = MILENA_STREAM_COUNT; break;
+            case MILENA_AGG_SUM: metrics[i].operation = MILENA_STREAM_SUM; break;
+            case MILENA_AGG_MEAN: metrics[i].operation = MILENA_STREAM_MEAN; break;
+            case MILENA_AGG_MIN: metrics[i].operation = MILENA_STREAM_MIN; break;
+            case MILENA_AGG_MAX: metrics[i].operation = MILENA_STREAM_MAX; break;
+            default: st = MILENA_ERR_UNSUPPORTED; milena_error_set(e, st, 0, 0, 0, "Operación no soportada por flujo"); break;
+        }
+        if (st != MILENA_OK) break;
     }
     MilenaStreamReport sr;
     if (p->group_column) st = milena_stream_csv_grouped_with_options(in, out, p->group_column, metrics, p->aggregate_count, &p->options, &sr, e);
