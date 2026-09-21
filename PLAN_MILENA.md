@@ -84,3 +84,23 @@ La sintaxis se revisará después de estabilizar el modelo de datos y la lógica
 - Fijar timestamps mediante `SOURCE_DATE_EPOCH`, publicar SHA-256 y firmar `Release`, `InRelease` y `Release.gpg` sin exponer secretos.
 - Tratar el repositorio APT y cualquier hosting como preparación: no anunciar instalación desde un gestor hasta probar una instalación real desde el repositorio remoto.
 - Completar la checklist de construcción, instalación, actualización, eliminación, claves, hashes y revisión de Termux antes de enviar una nueva solicitud oficial.
+
+## PR #26 — Binario canónico de Milena
+
+Esta fase mejora las capacidades del binario canónico sin crear un runtime paralelo ni convertir Termux en una implementación separada. Toda capacidad nueva debe recorrer la arquitectura oficial:
+
+```text
+lexer → parser → AST → semántica → runtime → MilenaTable
+```
+
+Objetivos iniciales:
+
+- mejorar las capacidades de análisis de datos del ejecutable `milena`;
+- conservar la sintaxis española y hacerla progresivamente más humana;
+- mantener resultados reproducibles y mensajes en español;
+- medir compilación, arranque, memoria y ejecución antes de declarar mejoras de rendimiento;
+- conservar la compatibilidad con Termux/TUR mediante releases versionadas;
+- evitar rutas legacy, herramientas externas y módulos experimentales desconectados;
+- añadir pruebas end-to-end para cada capacidad integrada.
+
+El paquete Termux/TUR debe consumir únicamente releases estables producidas por este repositorio.
