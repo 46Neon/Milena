@@ -817,8 +817,7 @@ static ScriptPipeline script_pipeline_from_ast(const char *script) {
      * error, because that can silently change semantics. */
     if (parser.has_error && (strstr(script, "analisis") != NULL ||
                              strstr(script, "array") != NULL ||
-                             strstr(script, "arreglo") != NULL ||
-                             strstr(script, "funcion") != NULL))
+                             strstr(script, "arreglo") != NULL))
         return SCRIPT_PIPELINE_CANONICAL_INVALID;
     return SCRIPT_PIPELINE_LEGACY_DATASET;
 }
