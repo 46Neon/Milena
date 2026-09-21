@@ -124,6 +124,15 @@ if ./milena run "$tmp_dir/array-errors.milena" > "$tmp_dir/array-errors.out" 2>&
 fi
 grep -q 'vacío' "$tmp_dir/array-errors.out"
 
+cat > "$tmp_dir/canonical-parse-error.milena" <<'MILENA'
+array valores = [1
+MILENA
+if ./milena run "$tmp_dir/canonical-parse-error.milena" > "$tmp_dir/canonical-parse-error.out" 2>&1; then
+    echo 'Se hizo fallback silencioso para un error canónico' >&2
+    exit 1
+fi
+grep -Eq 'PARSE|Sintaxis|esperaba' "$tmp_dir/canonical-parse-error.out"
+
 cat > "$tmp_dir/unknown-array.milena" <<'MILENA'
 array valores = [1];
 shape(inexistente);

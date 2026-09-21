@@ -775,7 +775,8 @@ typedef enum {
     SCRIPT_PIPELINE_CANONICAL_FUNCTION,
     SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS,
     SCRIPT_PIPELINE_LEGACY_ARRAY,
-    SCRIPT_PIPELINE_LEGACY_DATASET
+    SCRIPT_PIPELINE_LEGACY_DATASET,
+    SCRIPT_PIPELINE_PARSE_ERROR
 } ScriptPipeline;
 
 /*
@@ -797,7 +798,16 @@ static void script_scan_canonical_ast(const ASTNode *node,
                                   has_function);
 }
 
-static ScriptPipeline script_pipeline_from_ast(const char *script) {
+static bool script_has_canonical_marker(const char *script) {
+    if (!script) return false;
+    return strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL ||
+           strstr(script, "dataset cargar") != NULL ||
+           strstr(script, ".limpiar") != NULL || strstr(script, ".transformar") != NULL ||
+           strstr(script, "funcion") != NULL;
+}
+
+static ScriptPipeline script_pipeline_from_ast(const char *script,
+                                               MilenaError *parse_error) {
     Lexer lexer;
     Parser parser;
     lexer_init(&lexer, script);
@@ -806,6 +816,7 @@ static ScriptPipeline script_pipeline_from_ast(const char *script) {
     bool has_dataset = false, has_array = false, has_function = false;
     if (program && !parser.has_error)
         script_scan_canonical_ast(program, &has_dataset, &has_array, &has_function);
+    if (parser.has_error && parse_error != NULL) *parse_error = parser.error;
     ast_destroy(program);
     parser_release(&parser);
     if (has_dataset) return SCRIPT_PIPELINE_CANONICAL_DATASET;
@@ -814,9 +825,16 @@ static ScriptPipeline script_pipeline_from_ast(const char *script) {
     return SCRIPT_PIPELINE_LEGACY_DATASET;
 }
 
-static ScriptPipeline script_pipeline_for_source(const char *script) {
+static ScriptPipeline script_pipeline_for_source(const char *script,
+                                                 MilenaError *parse_error) {
     if (!script) return SCRIPT_PIPELINE_LEGACY_DATASET;
-    ScriptPipeline parsed_pipeline = script_pipeline_from_ast(script);
+    ScriptPipeline parsed_pipeline = script_pipeline_from_ast(script, parse_error);
+    /* A source that declares canonical constructs must never be reinterpreted
+     * by the compatibility router after a parser error. Legacy fixtures that
+     * do not carry those markers continue through their explicit path. */
+    if (parse_error != NULL && parse_error->code != MILENA_OK &&
+        script_has_canonical_marker(script))
+        return SCRIPT_PIPELINE_PARSE_ERROR;
     if (parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
         parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) return parsed_pipeline;
     if (strstr(script, "funcion") != NULL) {
@@ -901,7 +919,14 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     if (!script) return error && error->code ? error->code : MILENA_ERR_IO;
     /* El AST decide toda ejecución oficial. El router textual que queda abajo
      * solo atiende sintaxis histórica explícita y no recibe capacidades nuevas. */
-    ScriptPipeline pipeline = script_pipeline_for_source(script);
+    MilenaError parser_error;
+    milena_error_clear(&parser_error);
+    ScriptPipeline pipeline = script_pipeline_for_source(script, &parser_error);
+    if (pipeline == SCRIPT_PIPELINE_PARSE_ERROR) {
+        if (error != NULL) *error = parser_error;
+        free(script);
+        return parser_error.code != MILENA_OK ? parser_error.code : MILENA_ERR_PARSE;
+    }
     if (pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) {
         MilenaStatus canonical_status = milena_run_array_program(script, stdout, error);
         free(script);
