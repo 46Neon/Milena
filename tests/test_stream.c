@@ -27,7 +27,8 @@ int main(void) {
                                      2, &report, &error) == MILENA_OK);
     assert(report.rows_read == 4);
     assert(report.rows_with_valid_values == 3);
-    assert(report.malformed_rows == 0);
+    assert(report.malformed_rows == 1);
+    assert(report.input_bytes > 0);
     FILE *json = fopen(output, "rb");
     assert(json != NULL);
     char buffer[2048] = {0};

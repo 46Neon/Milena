@@ -33,6 +33,7 @@ typedef struct {
     size_t rows_read;
     size_t rows_with_valid_values;
     size_t malformed_rows;
+    size_t input_bytes;
     size_t chunk_rows;
     double elapsed_milliseconds;
     size_t peak_record_bytes;

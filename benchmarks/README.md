@@ -8,10 +8,15 @@ Estos benchmarks miden, sin prometer un umbral, dos operaciones observables:
    ruta canónica lexer → parser → AST → semántica → runtime. Esta fixture mide
    el programa de arreglos; no sustituye una medición de tablas o datasets.
 
-La fixture es deliberadamente pequeña y determinista. No representa todos los
-volúmenes ni todas las operaciones de análisis; los resultados no permiten
-extrapolar rendimiento industrial, Termux, Android, aarch64 o cualquier otro
-entorno no medido.
+La fixture de arrays es deliberadamente pequeña. Para flujo CSV, PR25 añade
+`stream_benchmark.py`, que genera de forma determinista cargas `small` (100
+filas), `medium` (10.000) y una carga `large` configurable solo con
+`--large-rows N`. Cada ejecución pasa por `milena run` y por la sintaxis
+española del AST; no existe un ejecutable de datos paralelo. Se reportan filas,
+filas válidas/malformadas, bytes, tiempo de pared, filas/s, MB/s, lote, búfer
+observado, plataforma y commit. No hay umbrales ni tiempos fijos: los
+resultados no permiten extrapolar rendimiento industrial, Termux, Android,
+aarch64 o cualquier entorno no medido.
 
 ## Uso
 
@@ -22,6 +27,10 @@ python3 benchmarks/benchmark.py
 # Más muestras y un archivo JSON reproducible para adjuntar al informe:
 python3 benchmarks/benchmark.py --compile-repetitions 3 --run-repetitions 10 \
   --output benchmark-results.json
+# Flujo CSV (small + medium; CI usa este camino):
+make benchmark-stream
+# Carga grande explícita y opt-in:
+python3 benchmarks/stream_benchmark.py --large-rows 1000000 --output stream-results.json
 ```
 
 El resultado JSON incluye muestras, mínimo, mediana, media, máximo, fixture,
