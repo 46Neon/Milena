@@ -2,6 +2,8 @@
 #define MILENA_TABLE_H
 
 #include "array.h"
+#include "dataset.h"
+#include "schema.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,6 +54,12 @@ typedef enum {
 } MilenaAggregateOp;
 
 typedef enum {
+    MILENA_STAT_VARIANCE = 0,
+    MILENA_STAT_STDDEV,
+    MILENA_STAT_MEDIAN
+} MilenaTableStatistic;
+
+typedef enum {
     MILENA_JOIN_INNER = 0,
     MILENA_JOIN_LEFT,
     MILENA_JOIN_RIGHT,
@@ -90,6 +98,16 @@ MilenaStatus milena_table_validate(const MilenaTable *table,
                                    MilenaError *error);
 MilenaStatus milena_table_clone(MilenaTable *out, const MilenaTable *source,
                                 MilenaError *error);
+
+/* Materializa el Dataset heredado en la tabla tipada canónica. */
+MilenaStatus milena_table_from_dataset(MilenaTable *out,
+                                        const Dataset *dataset,
+                                        const MilenaSchema *schema,
+                                        MilenaError *error);
+/* Reconstruye el Dataset de compatibilidad desde la tabla canónica. */
+MilenaStatus milena_dataset_from_table(Dataset *out,
+                                        const MilenaTable *table,
+                                        MilenaError *error);
 
 /* Legacy numeric/bool/complex column copy. Strided arrays are materialized. */
 MilenaStatus milena_table_add_column_copy(MilenaTable *table,
@@ -160,6 +178,24 @@ MilenaStatus milena_table_fill_null_f64(MilenaTable *table,
 MilenaStatus milena_table_drop_null(MilenaTable *out,
                                     const MilenaTable *source,
                                     MilenaError *error);
+MilenaStatus milena_table_drop_duplicates(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         MilenaError *error);
+MilenaStatus milena_table_add_product(MilenaTable *table,
+                                     const char *left_column,
+                                     const char *right_column,
+                                     const char *output_column,
+                                     MilenaError *error);
+MilenaStatus milena_table_add_month(MilenaTable *table,
+                                   const char *date_column,
+                                   const char *output_column,
+                                   MilenaError *error);
+MilenaStatus milena_table_filter_numeric(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         const char *column_name,
+                                         const char *operator_text,
+                                         double threshold,
+                                         MilenaError *error);
 MilenaStatus milena_table_drop_null_columns(MilenaTable *out,
                                             const MilenaTable *source,
                                             const char *const *column_names,
@@ -181,6 +217,23 @@ MilenaStatus milena_table_group_by_aggregate(MilenaTable *out,
                                              const char *value_column,
                                              MilenaAggregateOp operation,
                                              MilenaError *error);
+MilenaStatus milena_table_summarize(MilenaTable *out,
+                                      const MilenaTable *source,
+                                      const MilenaAggregateSpec *aggregates,
+                                      size_t aggregate_count,
+                                      MilenaError *error);
+MilenaStatus milena_table_add_statistic(MilenaTable *out,
+                                        const MilenaTable *source,
+                                        const char *value_column,
+                                        const char *output_column,
+                                        MilenaTableStatistic statistic,
+                                        MilenaError *error);
+MilenaStatus milena_table_add_percentile(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         const char *value_column,
+                                         const char *output_column,
+                                         double percentile,
+                                         MilenaError *error);
 MilenaStatus milena_table_group_by(MilenaTable *out,
                                    const MilenaTable *source,
                                    const char *const *key_columns,

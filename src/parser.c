@@ -58,12 +58,8 @@ static ASTNode *parse_array_declaration(Parser *parser) {
     strncpy(name, parser->current.lexeme, sizeof(name) - 1);
     parser_advance(parser);
     name[sizeof(name) - 1] = '\0';
-    if (!parser_expect(parser, TOKEN_IGUAL, "Se esperaba '=' en la declaración del array") ||
-        !parser_expect(parser, TOKEN_CORCHETE_IZQ, "Se esperaba '[' en el literal del array")) {
-        return NULL;
-    }
-    if (parser_match(parser, TOKEN_CORCHETE_DER)) {
-        parser_error(parser, "Un literal de array no puede estar vacío");
+    if (!parser_expect(parser, TOKEN_IGUAL,
+                       "Se esperaba '=' en la declaración del array")) {
         return NULL;
     }
 
@@ -72,32 +68,99 @@ static ASTNode *parse_array_declaration(Parser *parser) {
         parser_error(parser, "No se pudo crear el literal del array");
         return NULL;
     }
-    while (true) {
-        if (!parser_expect(parser, TOKEN_NUMERO,
-                           "El literal de array solo admite números")) {
+
+    bool zeros_constructor = parser_is_identifier(parser) &&
+        (strcmp(parser->current.lexeme, "ceros") == 0 ||
+         strcmp(parser->current.lexeme, "zeros") == 0);
+    if (zeros_constructor) {
+        array->zeros_constructor = true;
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                           "Se esperaba '(' después de ceros")) {
             ast_destroy(array);
             return NULL;
         }
-        ASTNode *number = ast_create_number(parser->previous.number_value);
-        if (!number) {
+        if (parser_match(parser, TOKEN_PAR_DER)) {
             ast_destroy(array);
-            parser_error(parser, "No se pudo crear un elemento del array");
+            parser_error(parser, "ceros requiere al menos una dimensión");
             return NULL;
         }
-        ast_add_child(array, number);
-        if (parser_match(parser, TOKEN_CORCHETE_DER)) break;
-        if (!parser_expect(parser, TOKEN_COMA,
-                           "Se esperaba ',' entre elementos del array")) {
+        while (true) {
+            if (!parser_expect(parser, TOKEN_NUMERO,
+                               "La dimensión de ceros debe ser numérica")) {
+                ast_destroy(array);
+                return NULL;
+            }
+            double dimension = parser->previous.number_value;
+            if (!isfinite(dimension) || dimension <= 0.0 ||
+                dimension > (double)SIZE_MAX || floor(dimension) != dimension) {
+                ast_destroy(array);
+                parser_error(parser, "Las dimensiones de ceros deben ser enteros positivos");
+                return NULL;
+            }
+            ASTNode *number = ast_create_number(dimension);
+            if (!number || !ast_add_child(array, number)) {
+                ast_destroy(number);
+                ast_destroy(array);
+                parser_error(parser, "No se pudo crear una dimensión de ceros");
+                return NULL;
+            }
+            if (parser_match(parser, TOKEN_PAR_DER)) {
+                parser_advance(parser);
+                break;
+            }
+            if (!parser_expect(parser, TOKEN_COMA,
+                               "Se esperaba ',' entre dimensiones")) {
+                ast_destroy(array);
+                return NULL;
+            }
+            if (parser_match(parser, TOKEN_PAR_DER)) {
+                ast_destroy(array);
+                parser_error(parser, "No se admite una coma final en ceros");
+                return NULL;
+            }
+        }
+    } else {
+        if (!parser_expect(parser, TOKEN_CORCHETE_IZQ,
+                           "Se esperaba '[' en el literal del array")) {
             ast_destroy(array);
             return NULL;
         }
         if (parser_match(parser, TOKEN_CORCHETE_DER)) {
             ast_destroy(array);
-            parser_error(parser, "No se admite coma final en el array");
+            parser_error(parser, "Un literal de array no puede estar vacío");
             return NULL;
         }
+        while (true) {
+            if (!parser_expect(parser, TOKEN_NUMERO,
+                               "El literal de array solo admite números")) {
+                ast_destroy(array);
+                return NULL;
+            }
+            ASTNode *number = ast_create_number(parser->previous.number_value);
+            if (!number || !ast_add_child(array, number)) {
+                ast_destroy(number);
+                ast_destroy(array);
+                parser_error(parser, "No se pudo crear un elemento del array");
+                return NULL;
+            }
+            if (parser_match(parser, TOKEN_CORCHETE_DER)) {
+                parser_advance(parser);
+                break;
+            }
+            if (!parser_expect(parser, TOKEN_COMA,
+                               "Se esperaba ',' entre elementos del array")) {
+                ast_destroy(array);
+                return NULL;
+            }
+            if (parser_match(parser, TOKEN_CORCHETE_DER)) {
+                ast_destroy(array);
+                parser_error(parser, "No se admite coma final en el array");
+                return NULL;
+            }
+        }
     }
-    parser_advance(parser);
+
     if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
                        "Se esperaba ';' después del array")) {
         ast_destroy(array);
@@ -116,7 +179,12 @@ static ASTNode *parse_array_declaration(Parser *parser) {
         parser->has_error = true;
         return NULL;
     }
-    ast_add_child(declaration, array);
+    if (!ast_add_child(declaration, array)) {
+        ast_destroy(declaration);
+        ast_destroy(array);
+        parser_error(parser, "No se pudo conectar el literal al AST");
+        return NULL;
+    }
     return declaration;
 }
 
@@ -177,6 +245,14 @@ static ASTNode *parse_expression(Parser *parser) {
     return left;
 }
 
+static bool parser_is_schema_type(const char *text) {
+    return text && (strcmp(text, "numerica") == 0 ||
+                    strcmp(text, "categorica") == 0 ||
+                    strcmp(text, "binaria") == 0 ||
+                    strcmp(text, "texto") == 0 ||
+                    strcmp(text, "fecha") == 0);
+}
+
 static ASTNode *parse_variable_declaration(Parser *parser) {
     parser_advance(parser);
     if (!parser_is_identifier(parser)) {
@@ -187,7 +263,32 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
     strncpy(name, parser->current.lexeme, sizeof(name) - 1);
     name[sizeof(name) - 1] = '\0';
     parser_advance(parser);
-    if (!parser_expect(parser, TOKEN_IGUAL, "Se esperaba '=' en la declaración de variable")) return NULL;
+
+    /* Declaración de columna de un dataset: variable edad numerica */
+    if (parser_is_identifier(parser) &&
+        parser_is_schema_type(parser->current.lexeme)) {
+        char type_name[MAX_TOKEN_LEN];
+        strncpy(type_name, parser->current.lexeme, sizeof(type_name) - 1);
+        type_name[sizeof(type_name) - 1] = '\0';
+        parser_advance(parser);
+        if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+        ASTNode *node = ast_create_leaf(AST_DECLARACION_VARIABLE, name);
+        if (!node) {
+            parser_error(parser, "No se pudo crear la declaración de columna");
+            return NULL;
+        }
+        node->type_name = milena_strdup(type_name);
+        if (!node->type_name ||
+            milena_symbols_declare(&parser->symbols, name, &parser->error) != MILENA_OK) {
+            ast_destroy(node);
+            parser->has_error = true;
+            return NULL;
+        }
+        return node;
+    }
+
+    if (!parser_expect(parser, TOKEN_IGUAL,
+                       "Se esperaba '=' en la declaración de variable")) return NULL;
     ASTNode *value = parse_expression(parser);
     if (!value) return NULL;
     if (milena_symbols_declare(&parser->symbols, name, &parser->error) != MILENA_OK) {
@@ -201,8 +302,14 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
         parser_error(parser, "No se pudo crear la variable");
         return NULL;
     }
-    ast_add_child(node, value);
-    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de la variable")) {
+    if (!ast_add_child(node, value)) {
+        ast_destroy(node);
+        ast_destroy(value);
+        parser_error(parser, "No se pudo conectar la variable al AST");
+        return NULL;
+    }
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después de la variable")) {
         ast_destroy(node);
         return NULL;
     }
@@ -396,6 +503,47 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             ASTNode *declaration = parse_variable_declaration(parser);
             if (declaration) ast_add_child(node, declaration);
         } else if (parser_is_identifier(parser) &&
+                   (strcmp(parser->current.lexeme, "entrada") == 0 ||
+                    strcmp(parser->current.lexeme, "salida") == 0)) {
+            bool is_output = strcmp(parser->current.lexeme, "salida") == 0;
+            parser_advance(parser);
+            if (!parser_is_identifier(parser)) {
+                parser_error(parser, "Se esperaba tipo de rol de esquema");
+                continue;
+            }
+            char type_name[MAX_TOKEN_LEN];
+            strncpy(type_name, parser->current.lexeme, sizeof(type_name) - 1);
+            type_name[sizeof(type_name) - 1] = '\0';
+            if (is_output && strcmp(type_name, "binaria") != 0) {
+                parser_error(parser, "La salida del esquema debe ser binaria");
+                continue;
+            }
+            if (!is_output && strcmp(type_name, "categorica") != 0) {
+                parser_error(parser, "La entrada del esquema debe ser categorica");
+                continue;
+            }
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_CADENA,
+                               "Se esperaba nombre de columna entre comillas")) continue;
+            char column_name[MAX_TOKEN_LEN];
+            strncpy(column_name, parser->previous.lexeme, sizeof(column_name) - 1);
+            column_name[sizeof(column_name) - 1] = '\0';
+            ASTNode *role = ast_create_leaf(is_output ? AST_DECLARACION_SALIDA
+                                                       : AST_DECLARACION_ENTRADA,
+                                            column_name);
+            if (!role) {
+                parser_error(parser, "No se pudo crear el rol del esquema");
+                continue;
+            }
+            role->type_name = milena_strdup(type_name);
+            if (!role->type_name) {
+                ast_destroy(role);
+                parser_error(parser, "Sin memoria para el tipo del esquema");
+                continue;
+            }
+            if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+            ast_add_child(node, role);
+        } else if (parser_is_identifier(parser) &&
                    strcmp(parser->current.lexeme, "array") != 0 &&
                    strcmp(parser->current.lexeme, "arreglo") != 0) {
             ASTNode *assignment = parse_assignment(parser);
@@ -423,6 +571,31 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             } else if (parser_match(parser, TOKEN_KW_ESTADISTICA)) {
                 parser_advance(parser);
                 ast_add_child(node, ast_create(AST_DECLARACION_ESTADISTICA));
+            } else if (parser_is_identifier(parser) &&
+                       (strcmp(parser->current.lexeme, "perfil_avanzado") == 0 ||
+                        strcmp(parser->current.lexeme, "histograma") == 0 ||
+                        strcmp(parser->current.lexeme, "normalidad") == 0 ||
+                        strcmp(parser->current.lexeme, "tasa") == 0 ||
+                        strcmp(parser->current.lexeme, "poisson") == 0 ||
+                        strcmp(parser->current.lexeme, "correlacion") == 0 ||
+                        strcmp(parser->current.lexeme, "wilcoxon") == 0 ||
+                        strcmp(parser->current.lexeme, "chi_cuadrado") == 0 ||
+                        strcmp(parser->current.lexeme, "riesgo") == 0 ||
+                        strcmp(parser->current.lexeme, "modelo_sst") == 0 ||
+                        strcmp(parser->current.lexeme, "interes_simple") == 0)) {
+                char command_name[MAX_TOKEN_LEN];
+                strncpy(command_name, parser->current.lexeme, sizeof(command_name) - 1);
+                command_name[sizeof(command_name) - 1] = '\0';
+                parser_advance(parser);
+                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                    if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna SST")) {
+                        ASTNode *sst = ast_create_leaf(AST_COMANDO_SST,
+                                                       parser->previous.lexeme);
+                        if (sst) sst->type_name = milena_strdup(command_name);
+                        if (sst) ast_add_child(node, sst);
+                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de SST");
+                    }
+                }
             }
         } else if (parser_match(parser, TOKEN_KW_DATASET)) {
             parser_advance(parser);
@@ -466,6 +639,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                     }
                                 }
                             }
+                        } else {
+                            parser_advance(parser);
                         }
                     }
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
@@ -489,40 +664,235 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 }
                             } else if (parser_match(parser, TOKEN_KW_PERIODO)) {
                                 parser_advance(parser);
-                                if (parser_match(parser, TOKEN_KW_EXTRAER)) {
-                                    parser_advance(parser);
-                                    if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                                        if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
-                                            ast_add_child(transformar, ast_create_leaf(AST_COMANDO_PERIODO, parser->previous.lexeme));
-                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
-                                        }
+                                /* Accept both canonical forms: #periodo("...")
+                                 * and the older #periodo extraer("..."). */
+                                if (parser_match(parser, TOKEN_KW_EXTRAER)) parser_advance(parser);
+                                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") ) {
+                                    if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
+                                        ast_add_child(transformar, ast_create_leaf(AST_COMANDO_PERIODO, parser->previous.lexeme));
+                                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'" );
                                     }
                                 }
                             }
+                        } else {
+                            parser_advance(parser);
                         }
                     }
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
                     ast_add_child(node, transformar);
                 }
+            } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
+                parser_advance(parser);
+                if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
+                if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
+                    ASTNode *agrupar = ast_create(AST_BLOQUE_AGRUPAR);
+                    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                            parser_advance(parser);
+                            continue;
+                        }
+                        parser_advance(parser);
+                        if (parser_is_identifier(parser) &&
+                            strcmp(parser->current.lexeme, "por") == 0) {
+                            parser_advance(parser);
+                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de agrupación")) {
+                                    if (agrupar) ast_add_child(agrupar,
+                                        ast_create_leaf(AST_AGRUPACION_POR,
+                                                        parser->previous.lexeme));
+                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de por");
+                                }
+                            }
+                        } else if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
+                                   parser_match(parser, TOKEN_FUNCION_MEDIA) ||
+                                   parser_match(parser, TOKEN_FUNCION_MINIMO) ||
+                                   parser_match(parser, TOKEN_FUNCION_MAXIMO)) {
+                            char metric[MAX_TOKEN_LEN];
+                            strncpy(metric, parser->current.lexeme, sizeof(metric) - 1);
+                            metric[sizeof(metric) - 1] = '\0';
+                            parser_advance(parser);
+                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de resumen")) {
+                                    char specification[MAX_TOKEN_LEN * 2];
+                                    (void)snprintf(specification, sizeof(specification),
+                                                   "%s:%s", metric, parser->previous.lexeme);
+                                    if (agrupar) ast_add_child(agrupar,
+                                        ast_create_leaf(AST_RESUMEN_METRICA, specification));
+                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del resumen");
+                                }
+                            }
+                        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                                   strcmp(parser->current.lexeme, "conteo") == 0) {
+                            parser_advance(parser);
+                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de conteo")) {
+                                    char specification[MAX_TOKEN_LEN * 2];
+                                    (void)snprintf(specification, sizeof(specification),
+                                                   "conteo:%s", parser->previous.lexeme);
+                                    if (agrupar) ast_add_child(agrupar,
+                                        ast_create_leaf(AST_RESUMEN_METRICA, specification));
+                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del conteo");
+                                }
+                            }
+                        } else {
+                            parser_error(parser, "Comando desconocido en agrupar");
+                        }
+                    }
+                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                    if (agrupar && agrupar->child_count > 1) ast_add_child(node, agrupar);
+                    else ast_destroy(agrupar);
+                }
+            } else if (parser_match(parser, TOKEN_KW_RESUMIR)) {
+                parser_advance(parser);
+                if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
+                if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
+                    ASTNode *resumir = ast_create(AST_BLOQUE_RESUMIR);
+                    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                            parser_advance(parser);
+                            continue;
+                        }
+                        parser_advance(parser);
+                        char metric_buffer[MAX_TOKEN_LEN] = {0};
+                        const char *metric = NULL;
+                        if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
+                            parser_match(parser, TOKEN_FUNCION_MEDIA) ||
+                            parser_match(parser, TOKEN_FUNCION_MINIMO) ||
+                            parser_match(parser, TOKEN_FUNCION_MAXIMO) ||
+                            parser_match(parser, TOKEN_FUNCION_VARIANZA) ||
+                            parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
+                            parser_match(parser, TOKEN_FUNCION_MEDIANA) ||
+                            parser_match(parser, TOKEN_FUNCION_PERCENTIL)) {
+                            strncpy(metric_buffer, parser->current.lexeme, sizeof(metric_buffer) - 1);
+                            metric = metric_buffer;
+                        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                                   strcmp(parser->current.lexeme, "conteo") == 0) {
+                            metric = "conteo";
+                        }
+                        if (!metric) {
+                            parser_error(parser, "Métrica desconocida en resumir");
+                            break;
+                        }
+                        parser_advance(parser);
+                        if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                            if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de resumen")) {
+                                char specification[MAX_TOKEN_LEN * 2];
+                                (void)snprintf(specification, sizeof(specification),
+                                               "%s:%s", metric, parser->previous.lexeme);
+                                if (resumir) ast_add_child(resumir,
+                                    ast_create_leaf(AST_RESUMEN_METRICA, specification));
+                                parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del resumen");
+                            }
+                        }
+                    }
+                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                    if (resumir && resumir->child_count > 0) ast_add_child(node, resumir);
+                    else ast_destroy(resumir);
+                }
             } else if (parser_match(parser, TOKEN_KW_EXPORTAR)) {
                 parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
-                    // Saltar contenido
-                    while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
-                        parser_advance(parser);
+                    ASTNode *exportar = NULL;
+                    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                        if (parser_match(parser, TOKEN_PAR_IZQ)) {
+                            parser_advance(parser);
+                            if (!parser_expect(parser, TOKEN_CADENA,
+                                               "Se esperaba archivo de exportación")) break;
+                            exportar = ast_create_leaf(AST_BLOQUE_EXPORTAR,
+                                                       parser->previous.lexeme);
+                            if (!exportar) {
+                                parser_error(parser, "Sin memoria para exportar");
+                                break;
+                            }
+                            if (!parser_expect(parser, TOKEN_PAR_DER,
+                                               "Se esperaba ')' después del archivo")) {
+                                ast_destroy(exportar);
+                                exportar = NULL;
+                                break;
+                            }
+                        } else {
+                            parser_advance(parser);
+                        }
                     }
-                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
+                        ast_destroy(exportar);
+                    } else if (exportar) {
+                        ast_add_child(node, exportar);
+                    }
                 }
             } else {
-                // Otros bloques
+                /* Los bloques nombrados de análisis conservan la condición
+                 * en el AST; no se ejecutan mediante clasificación textual. */
                 if (parser_is_identifier(parser)) {
+                    char named_block[MAX_TOKEN_LEN];
+                    strncpy(named_block, parser->current.lexeme, sizeof(named_block) - 1);
+                    named_block[sizeof(named_block) - 1] = '\0';
+                    bool selecting = strcmp(named_block, "seleccionar") == 0;
+                    bool joining = strcmp(named_block, "unir") == 0;
                     parser_advance(parser);
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
-                        while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
-                            parser_advance(parser);
+                        ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
+                                                       (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
+                        while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                               !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                            if (parser_match(parser, TOKEN_KW_DATASET) ||
+                                parser_match(parser, TOKEN_COMA)) {
+                                parser_advance(parser);
+                            } else if (parser_match(parser, TOKEN_PAR_IZQ)) {
+                                parser_advance(parser);
+                                if (parser_match(parser, TOKEN_KW_FILTRAR)) parser_advance(parser);
+                                parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de filtrar");
+                            } else if (parser_match(parser, TOKEN_NUMERAL)) {
+                                parser_advance(parser);
+                                if (selecting && parser_is_identifier(parser) &&
+                                    strcmp(parser->current.lexeme, "columnas") == 0) {
+                                    parser_advance(parser);
+                                    if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                        if (parser_expect(parser, TOKEN_CADENA, "Se esperaba lista de columnas")) {
+                                            ASTNode *columns = ast_create_leaf(
+                                                AST_COMANDO_COLUMNAS,
+                                                parser->previous.lexeme);
+                                            if (columns && filtrar) ast_add_child(filtrar, columns);
+                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de columnas");
+                                        }
+                                    }
+                                } else if (joining && parser_is_identifier(parser) &&
+                                           (strcmp(parser->current.lexeme, "derecha") == 0 ||
+                                            strcmp(parser->current.lexeme, "clave") == 0)) {
+                                    ASTNodeType command_type = strcmp(parser->current.lexeme, "derecha") == 0
+                                        ? AST_COMANDO_DERECHA : AST_COMANDO_CLAVE;
+                                    parser_advance(parser);
+                                    if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                        if (parser_expect(parser, TOKEN_CADENA, "Se esperaba valor de unión")) {
+                                            ASTNode *command = ast_create_leaf(command_type,
+                                                                                parser->previous.lexeme);
+                                            if (command && filtrar) ast_add_child(filtrar, command);
+                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de unión");
+                                        }
+                                    }
+                                } else if (parser_match(parser, TOKEN_KW_CONDICION)) {
+                                    parser_advance(parser);
+                                    if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                        if (parser_expect(parser, TOKEN_CADENA, "Se esperaba condición")) {
+                                            ASTNode *condition = ast_create_leaf(
+                                                AST_COMANDO_CONDICION,
+                                                parser->previous.lexeme);
+                                            if (condition && filtrar) ast_add_child(filtrar, condition);
+                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de condición");
+                                        }
+                                    }
+                                }
+                            } else {
+                                parser_advance(parser);
+                            }
                         }
                         parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                        if (filtrar && filtrar->child_count > 0) ast_add_child(node, filtrar);
+                        else ast_destroy(filtrar);
                     }
                 }
             }

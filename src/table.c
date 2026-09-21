@@ -1,4 +1,8 @@
 #include "table.h"
+#include "dataset.h"
+#include "schema.h"
+
+#include <math.h>
 
 #define MILENA_TABLE_MAGIC UINT64_C(0x4d494c5441424c45)
 
@@ -754,7 +758,7 @@ static MilenaStatus table_take_rows(MilenaTable *out,
                                     const MilenaTable *source,
                                     const size_t *rows, size_t row_count,
                                     MilenaError *error) {
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = row_count;
@@ -847,7 +851,7 @@ MilenaStatus milena_table_select_columns(MilenaTable *out,
     }
     MilenaStatus status = milena_table_validate(source, error);
     if (status != MILENA_OK) return status;
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = source->row_count;
@@ -860,7 +864,10 @@ MilenaStatus milena_table_select_columns(MilenaTable *out,
     for (size_t i = 0; status == MILENA_OK && i < name_count; ++i) {
         int index = milena_table_column_index(source, names[i]);
         if (index < 0) {
-            table_error(error, MILENA_ERR_DATA, "Columna seleccionada no existe");
+            char message[256];
+            (void)snprintf(message, sizeof(message), "Columna seleccionada no existe: %s",
+                           names[i] ? names[i] : "(nula)");
+            table_error(error, MILENA_ERR_DATA, message);
             status = MILENA_ERR_DATA;
         } else {
             status = add_column_rows(&temporary, &source->columns[index],
@@ -1343,11 +1350,11 @@ static MilenaStatus hash_capacity(size_t rows, size_t *capacity,
 
 static const char *aggregate_suffix(MilenaAggregateOp operation) {
     switch (operation) {
-        case MILENA_AGG_COUNT: return "count";
-        case MILENA_AGG_SUM: return "sum";
-        case MILENA_AGG_MEAN: return "mean";
-        case MILENA_AGG_MIN: return "min";
-        case MILENA_AGG_MAX: return "max";
+        case MILENA_AGG_COUNT: return "conteo";
+        case MILENA_AGG_SUM: return "suma";
+        case MILENA_AGG_MEAN: return "media";
+        case MILENA_AGG_MIN: return "minimo";
+        case MILENA_AGG_MAX: return "maximo";
         default: return "invalid";
     }
 }
@@ -1603,15 +1610,17 @@ MilenaStatus milena_table_group_by(MilenaTable *out,
                                    const MilenaAggregateSpec *aggregates,
                                    size_t aggregate_count,
                                    MilenaError *error) {
-    if (out == NULL || source == NULL || out == source || key_count == 0 ||
-        key_columns == NULL || (aggregate_count != 0 && aggregates == NULL)) {
+    if (out == NULL || source == NULL || out == source ||
+        (key_count != 0 && key_columns == NULL) ||
+        (aggregate_count != 0 && aggregates == NULL)) {
         table_error(error, MILENA_ERR_ARGUMENT, "Group-by requiere claves y salida sin alias");
         return MILENA_ERR_ARGUMENT;
     }
     MilenaStatus status = milena_table_validate(source, error);
     if (status != MILENA_OK) return status;
-    size_t *keys = (size_t *)malloc(key_count * sizeof(size_t));
-    if (keys == NULL) return MILENA_ERR_MEMORY;
+    size_t *keys = key_count == 0 ? NULL :
+        (size_t *)malloc(key_count * sizeof(size_t));
+    if (key_count != 0 && keys == NULL) return MILENA_ERR_MEMORY;
     for (size_t i = 0; i < key_count; ++i) {
         int index = milena_table_column_index(source, key_columns[i]);
         if (index < 0) { status = MILENA_ERR_DATA; break; }
@@ -1660,7 +1669,7 @@ MilenaStatus milena_table_group_by(MilenaTable *out,
             group_of[row] = group_count++;
         } else group_of[row] = slots[slot].value_plus_one - 1;
     }
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = group_count;
@@ -1686,6 +1695,15 @@ MilenaStatus milena_table_group_by(MilenaTable *out,
     milena_table_destroy(&temporary);
     free(keys); free(slots); free(first_rows); free(group_of);
     return status;
+}
+
+MilenaStatus milena_table_summarize(MilenaTable *out,
+                                      const MilenaTable *source,
+                                      const MilenaAggregateSpec *aggregates,
+                                      size_t aggregate_count,
+                                      MilenaError *error) {
+    return milena_table_group_by(out, source, NULL, 0, aggregates,
+                                 aggregate_count, error);
 }
 
 MilenaStatus milena_table_group_by_aggregate(MilenaTable *out,
@@ -1891,7 +1909,7 @@ MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
             if (!matched[r]) {
                 left_rows[at] = SIZE_MAX; right_rows[at] = r; ++at;
             }
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = pair_count;
@@ -1975,7 +1993,7 @@ MilenaStatus milena_table_unpivot(MilenaTable *out,
     for (size_t row = 0; status == MILENA_OK && row < source->row_count; ++row)
         for (size_t v = 0; v < value_count; ++v)
             source_rows[row * value_count + v] = row;
-    MilenaTable temporary;
+    MilenaTable temporary = {0};
     memset(&temporary, 0, sizeof(temporary));
     milena_table_init(&temporary);
     temporary.row_count = output_rows;
@@ -2043,5 +2061,769 @@ MilenaStatus milena_table_unpivot(MilenaTable *out,
         table_error(error, status, "No se pudo construir unpivot");
     milena_table_destroy(&temporary);
     free(ids); free(vals); free(source_rows); free(variables); free(validity);
+    return status;
+}
+
+
+static const MilenaVariable *table_schema_variable(const MilenaSchema *schema,
+                                                    const char *name) {
+    if (!schema || !name) return NULL;
+    int index = schema_index(schema, name);
+    return index >= 0 ? &schema->variables[index] : NULL;
+}
+
+static MilenaStatus table_dataset_validity(const Dataset *dataset, size_t column,
+                                           bool **out, MilenaError *error) {
+    bool *validity = NULL;
+    if (dataset->row_count > 0) {
+        validity = (bool *)calloc(dataset->row_count, sizeof(*validity));
+        if (!validity) {
+            table_error(error, MILENA_ERR_MEMORY, "Sin memoria para validez del dataset");
+            return MILENA_ERR_MEMORY;
+        }
+        for (size_t row = 0; row < dataset->row_count; row++) {
+            const char *value = dataset->rows[row][column];
+            validity[row] = value != NULL && value[0] != '\0';
+        }
+    }
+    *out = validity;
+    return MILENA_OK;
+}
+
+static MilenaStatus table_dataset_numeric(const Dataset *dataset, size_t column,
+                                          MilenaArray *array, bool *validity,
+                                          MilenaError *error) {
+    double *values = NULL;
+    if (dataset->row_count > 0) {
+        values = (double *)calloc(dataset->row_count, sizeof(*values));
+        if (!values) {
+            table_error(error, MILENA_ERR_MEMORY, "Sin memoria para columna numérica");
+            return MILENA_ERR_MEMORY;
+        }
+    }
+    for (size_t row = 0; row < dataset->row_count; row++) {
+        if (!validity[row]) continue;
+        if (milena_parse_double(dataset->rows[row][column], &values[row]) != MILENA_OK) {
+            validity[row] = false;
+        }
+    }
+    size_t shape[1] = {dataset->row_count};
+    MilenaStatus status = milena_array_from_f64(array, 1, shape, values, error);
+    free(values);
+    return status;
+}
+
+static MilenaStatus table_dataset_categorical(const Dataset *dataset, size_t column,
+                                              MilenaArray *array,
+                                              bool *validity,
+                                              char ***dictionary,
+                                              size_t *dictionary_size,
+                                              MilenaError *error) {
+    int64_t *codes = NULL;
+    char **items = NULL;
+    size_t count = 0, capacity = 0;
+    if (dataset->row_count > 0) {
+        codes = (int64_t *)calloc(dataset->row_count, sizeof(*codes));
+        if (!codes) {
+            table_error(error, MILENA_ERR_MEMORY, "Sin memoria para códigos categóricos");
+            return MILENA_ERR_MEMORY;
+        }
+    }
+    for (size_t row = 0; row < dataset->row_count; row++) {
+        if (!validity[row]) continue;
+        const char *value = dataset->rows[row][column];
+        size_t index = 0;
+        while (index < count && strcmp(items[index], value) != 0) index++;
+        if (index == count) {
+            if (count == capacity) {
+                size_t next = capacity ? capacity * 2 : 8;
+                char **grown = (char **)realloc(items, next * sizeof(*grown));
+                if (!grown) {
+                    free(codes);
+                    free(items);
+                    table_error(error, MILENA_ERR_MEMORY, "Sin memoria para diccionario categórico");
+                    return MILENA_ERR_MEMORY;
+                }
+                items = grown;
+                capacity = next;
+            }
+            items[count] = (char *)value;
+            count++;
+        }
+        codes[row] = (int64_t)index;
+    }
+    size_t shape[1] = {dataset->row_count};
+    MilenaArray wide;
+    milena_array_init(&wide);
+    MilenaStatus status = milena_array_from_i64(&wide, 1, shape, codes, error);
+    free(codes);
+    if (status != MILENA_OK) {
+        free(items);
+        return status;
+    }
+    status = milena_array_cast(array, &wide, MILENA_DTYPE_UINT32, error);
+    milena_array_release(&wide);
+    if (status != MILENA_OK) {
+        free(items);
+        return status;
+    }
+    *dictionary = items;
+    *dictionary_size = count;
+    return MILENA_OK;
+}
+
+MilenaStatus milena_table_from_dataset(MilenaTable *out,
+                                        const Dataset *dataset,
+                                        const MilenaSchema *schema,
+                                        MilenaError *error) {
+    if (!out || !dataset || !schema) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Dataset o esquema inválido");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaTable temporary = {0};
+    milena_table_init(&temporary);
+    MilenaStatus status = MILENA_OK;
+    for (size_t column = 0; column < dataset->column_count; column++) {
+        const char *name = dataset->headers[column];
+        const MilenaVariable *variable = table_schema_variable(schema, name);
+        MilenaVariableType type = variable ? variable->type : MILENA_VAR_TEXT;
+        bool *validity = NULL;
+        status = table_dataset_validity(dataset, column, &validity, error);
+        if (status != MILENA_OK) break;
+
+        if (type == MILENA_VAR_NUMERIC) {
+            MilenaArray values;
+            milena_array_init(&values);
+            status = table_dataset_numeric(dataset, column, &values, validity, error);
+            if (status == MILENA_OK) {
+                status = milena_table_add_column_copy(&temporary, name, &values,
+                                                      validity, error);
+            }
+            milena_array_release(&values);
+        } else if (type == MILENA_VAR_CATEGORICAL || type == MILENA_VAR_BINARY) {
+            MilenaArray codes;
+            char **dictionary = NULL;
+            size_t dictionary_size = 0;
+            milena_array_init(&codes);
+            status = table_dataset_categorical(dataset, column, &codes, validity,
+                                               &dictionary, &dictionary_size, error);
+            if (status == MILENA_OK) {
+                const char *const *labels = (const char *const *)dictionary;
+                status = milena_table_add_categorical_column_copy(
+                    &temporary, name, &codes, labels, dictionary_size,
+                    validity, error);
+            }
+            milena_array_release(&codes);
+            free(dictionary);
+        } else {
+            {
+                /* rows are row-major; build a temporary column view without
+                 * touching rows[0] when an empty dataset is supplied. */
+                const char **column_values = dataset->row_count == 0 ? NULL :
+                    (const char **)calloc(dataset->row_count, sizeof(*column_values));
+                if (dataset->row_count != 0 && !column_values) {
+                    free(validity);
+                    table_error(error, MILENA_ERR_MEMORY, "Sin memoria para columna textual");
+                    status = MILENA_ERR_MEMORY;
+                    break;
+                }
+                for (size_t row = 0; row < dataset->row_count; row++)
+                    column_values[row] = dataset->rows[row][column];
+                status = milena_table_add_string_column_copy(
+                    &temporary, name, column_values, dataset->row_count,
+                    validity, error);
+                free(column_values);
+            }
+        }
+        free(validity);
+        if (status != MILENA_OK) break;
+        if (variable) {
+            status = milena_table_column_set_metadata(
+                &temporary, name, "rol", schema_role_name(variable->role), error);
+            if (status != MILENA_OK) break;
+        }
+    }
+    if (status == MILENA_OK) status = milena_table_validate(&temporary, error);
+    if (status != MILENA_OK) {
+        milena_table_destroy(&temporary);
+        return status;
+    }
+    milena_table_destroy(out);
+    *out = temporary;
+    memset(&temporary, 0, sizeof(temporary));
+    return MILENA_OK;
+}
+
+
+static MilenaStatus table_dataset_cell_text(const MilenaTable *table,
+                                            size_t column, size_t row,
+                                            char *buffer, size_t buffer_size,
+                                            const char **text,
+                                            MilenaError *error) {
+    if (milena_table_is_null(table, column, row)) {
+        *text = "";
+        return MILENA_OK;
+    }
+    const MilenaTableColumn *column_data = milena_table_column(table, column);
+    if (!column_data) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Columna de tabla inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (column_data->type == MILENA_COLUMN_STRING) {
+        return milena_table_get_string(table, column, row, text, error);
+    }
+    if (column_data->type == MILENA_COLUMN_CATEGORICAL) {
+        const char *label = NULL;
+        uint32_t code = 0;
+        MilenaStatus status = milena_table_get_category(table, column, row, &code,
+                                                        &label, error);
+        if (status == MILENA_OK) *text = label ? label : "";
+        return status;
+    }
+    const void *value = NULL;
+    MilenaStatus status = milena_table_get_array_value(table, column, row,
+                                                       &value, error);
+    if (status != MILENA_OK) return status;
+    int written = 0;
+    switch (column_data->values.dtype) {
+        case MILENA_DTYPE_BOOL:
+            written = snprintf(buffer, buffer_size, "%s",
+                               *(const bool *)value ? "verdadero" : "falso");
+            break;
+        case MILENA_DTYPE_INT8: written = snprintf(buffer, buffer_size, "%d", (int)*(const int8_t *)value); break;
+        case MILENA_DTYPE_INT16: written = snprintf(buffer, buffer_size, "%d", (int)*(const int16_t *)value); break;
+        case MILENA_DTYPE_INT32: written = snprintf(buffer, buffer_size, "%d", *(const int32_t *)value); break;
+        case MILENA_DTYPE_INT64: written = snprintf(buffer, buffer_size, "%lld", (long long)*(const int64_t *)value); break;
+        case MILENA_DTYPE_UINT8: written = snprintf(buffer, buffer_size, "%u", (unsigned)*(const uint8_t *)value); break;
+        case MILENA_DTYPE_UINT16: written = snprintf(buffer, buffer_size, "%u", (unsigned)*(const uint16_t *)value); break;
+        case MILENA_DTYPE_UINT32: written = snprintf(buffer, buffer_size, "%u", *(const uint32_t *)value); break;
+        case MILENA_DTYPE_UINT64: written = snprintf(buffer, buffer_size, "%llu", (unsigned long long)*(const uint64_t *)value); break;
+        case MILENA_DTYPE_FLOAT32: written = snprintf(buffer, buffer_size, "%.9g", (double)*(const float *)value); break;
+        case MILENA_DTYPE_FLOAT64: written = snprintf(buffer, buffer_size, "%.17g", *(const double *)value); break;
+        default:
+            table_error(error, MILENA_ERR_UNSUPPORTED, "Tipo numérico no convertible a dataset");
+            return MILENA_ERR_UNSUPPORTED;
+    }
+    if (written < 0 || (size_t)written >= buffer_size) {
+        table_error(error, MILENA_ERR_OVERFLOW, "Valor de tabla demasiado largo");
+        return MILENA_ERR_OVERFLOW;
+    }
+    *text = buffer;
+    return MILENA_OK;
+}
+
+MilenaStatus milena_dataset_from_table(Dataset *out,
+                                        const MilenaTable *table,
+                                        MilenaError *error) {
+    if (!out || !table) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Tabla de conversión inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(table, error);
+    if (status != MILENA_OK) return status;
+    dataset_init(out);
+    out->column_count = table->column_count;
+    out->row_count = table->row_count;
+    out->row_capacity = table->row_count;
+    if (out->column_count > 0) {
+        out->headers = (char **)calloc(out->column_count, sizeof(*out->headers));
+        if (!out->headers) status = MILENA_ERR_MEMORY;
+    }
+    if (status == MILENA_OK && out->row_count > 0) {
+        out->rows = (char ***)calloc(out->row_count, sizeof(*out->rows));
+        if (!out->rows) status = MILENA_ERR_MEMORY;
+    }
+    for (size_t column = 0; status == MILENA_OK && column < out->column_count; column++) {
+        const MilenaTableColumn *column_data = milena_table_column(table, column);
+        out->headers[column] = milena_strdup(column_data->name);
+        if (!out->headers[column]) status = MILENA_ERR_MEMORY;
+    }
+    for (size_t row = 0; status == MILENA_OK && row < out->row_count; row++) {
+        out->rows[row] = (char **)calloc(out->column_count, sizeof(**out->rows));
+        if (!out->rows[row]) {
+            status = MILENA_ERR_MEMORY;
+            break;
+        }
+        for (size_t column = 0; column < out->column_count; column++) {
+            char buffer[128];
+            const char *text = NULL;
+            status = table_dataset_cell_text(table, column, row, buffer,
+                                             sizeof(buffer), &text, error);
+            if (status != MILENA_OK) break;
+            out->rows[row][column] = milena_strdup(text ? text : "");
+            if (!out->rows[row][column]) {
+                status = MILENA_ERR_MEMORY;
+                break;
+            }
+        }
+    }
+    if (status != MILENA_OK) {
+        dataset_destroy(out);
+        table_error(error, status, "No se pudo reconstruir el dataset desde la tabla");
+        return status;
+    }
+    return MILENA_OK;
+}
+
+
+static MilenaStatus table_rows_equal(const MilenaTable *table,
+                                     size_t left, size_t right,
+                                     bool *equal, MilenaError *error) {
+    if (!table || !equal || left >= table->row_count || right >= table->row_count) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Fila inválida para duplicados");
+        return MILENA_ERR_ARGUMENT;
+    }
+    *equal = true;
+    for (size_t column = 0; column < table->column_count; column++) {
+        bool left_null = milena_table_is_null(table, column, left);
+        bool right_null = milena_table_is_null(table, column, right);
+        if (left_null != right_null) {
+            *equal = false;
+            return MILENA_OK;
+        }
+        if (left_null) continue;
+        const MilenaTableColumn *column_data = milena_table_column(table, column);
+        if (!column_data) {
+            table_error(error, MILENA_ERR_DATA, "Columna inválida al comparar duplicados");
+            return MILENA_ERR_DATA;
+        }
+        if (column_data->type == MILENA_COLUMN_STRING) {
+            const char *left_text = NULL, *right_text = NULL;
+            MilenaStatus status = milena_table_get_string(table, column, left,
+                                                          &left_text, error);
+            if (status != MILENA_OK) return status;
+            status = milena_table_get_string(table, column, right,
+                                             &right_text, error);
+            if (status != MILENA_OK) return status;
+            if (strcmp(left_text ? left_text : "", right_text ? right_text : "") != 0) {
+                *equal = false;
+                return MILENA_OK;
+            }
+        } else if (column_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t left_code = 0, right_code = 0;
+            const char *left_label = NULL, *right_label = NULL;
+            MilenaStatus status = milena_table_get_category(table, column, left,
+                                                             &left_code, &left_label, error);
+            if (status != MILENA_OK) return status;
+            status = milena_table_get_category(table, column, right,
+                                               &right_code, &right_label, error);
+            if (status != MILENA_OK) return status;
+            if (left_code != right_code) {
+                *equal = false;
+                return MILENA_OK;
+            }
+        } else {
+            const void *left_value = NULL, *right_value = NULL;
+            MilenaStatus status = milena_table_get_array_value(table, column, left,
+                                                               &left_value, error);
+            if (status != MILENA_OK) return status;
+            status = milena_table_get_array_value(table, column, right,
+                                                  &right_value, error);
+            if (status != MILENA_OK) return status;
+            if (memcmp(left_value, right_value, column_data->values.itemsize) != 0) {
+                *equal = false;
+                return MILENA_OK;
+            }
+        }
+    }
+    return MILENA_OK;
+}
+
+MilenaStatus milena_table_drop_duplicates(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         MilenaError *error) {
+    if (!out || !source) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Tabla inválida para eliminar duplicados");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(source, error);
+    if (status != MILENA_OK) return status;
+    size_t shape[1] = {source->row_count};
+    MilenaArray mask;
+    milena_array_init(&mask);
+    status = milena_array_zeros(&mask, MILENA_DTYPE_BOOL, 1, shape, error);
+    if (status != MILENA_OK) return status;
+    bool *keep = (bool *)milena_array_data(&mask);
+    if (source->row_count > 0 && !keep) {
+        milena_array_release(&mask);
+        table_error(error, MILENA_ERR_DATA, "Máscara de duplicados inválida");
+        return MILENA_ERR_DATA;
+    }
+    size_t kept_count = 0;
+    for (size_t row = 0; row < source->row_count; row++) {
+        bool duplicate = false;
+        for (size_t previous = 0; previous < row; previous++) {
+            if (!keep[previous]) continue;
+            status = table_rows_equal(source, row, previous, &duplicate, error);
+            if (status != MILENA_OK) break;
+            if (duplicate) break;
+        }
+        if (status != MILENA_OK) break;
+        keep[row] = !duplicate;
+        if (!duplicate) kept_count++;
+    }
+    if (status == MILENA_OK) {
+        status = milena_table_filter(out, source, &mask, error);
+    }
+    milena_array_release(&mask);
+    (void)kept_count;
+    return status;
+}
+
+
+static MilenaStatus table_numeric_cell(const MilenaTable *table, size_t column,
+                                       size_t row, double *value,
+                                       MilenaError *error) {
+    const MilenaTableColumn *data = milena_table_column(table, column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        table_error(error, MILENA_ERR_TYPE, "La transformación requiere columnas numéricas");
+        return MILENA_ERR_TYPE;
+    }
+    const void *raw = NULL;
+    MilenaStatus status = milena_table_get_array_value(table, column, row, &raw, error);
+    if (status != MILENA_OK) return status;
+    switch (data->values.dtype) {
+        case MILENA_DTYPE_BOOL: *value = *(const bool *)raw ? 1.0 : 0.0; break;
+        case MILENA_DTYPE_INT8: *value = (double)*(const int8_t *)raw; break;
+        case MILENA_DTYPE_INT16: *value = (double)*(const int16_t *)raw; break;
+        case MILENA_DTYPE_INT32: *value = (double)*(const int32_t *)raw; break;
+        case MILENA_DTYPE_INT64: *value = (double)*(const int64_t *)raw; break;
+        case MILENA_DTYPE_UINT8: *value = (double)*(const uint8_t *)raw; break;
+        case MILENA_DTYPE_UINT16: *value = (double)*(const uint16_t *)raw; break;
+        case MILENA_DTYPE_UINT32: *value = (double)*(const uint32_t *)raw; break;
+        case MILENA_DTYPE_UINT64: *value = (double)*(const uint64_t *)raw; break;
+        case MILENA_DTYPE_FLOAT32: *value = (double)*(const float *)raw; break;
+        case MILENA_DTYPE_FLOAT64: *value = *(const double *)raw; break;
+        default:
+            table_error(error, MILENA_ERR_TYPE, "Tipo numérico no soportado en producto");
+            return MILENA_ERR_TYPE;
+    }
+    return isfinite(*value) ? MILENA_OK : MILENA_ERR_DATA;
+}
+
+MilenaStatus milena_table_add_product(MilenaTable *table,
+                                     const char *left_column,
+                                     const char *right_column,
+                                     const char *output_column,
+                                     MilenaError *error) {
+    if (!table || !left_column || !right_column || !output_column) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Columnas inválidas para producto");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(table, error);
+    if (status != MILENA_OK) return status;
+    int left = milena_table_column_index(table, left_column);
+    int right = milena_table_column_index(table, right_column);
+    if (left < 0 || right < 0) {
+        table_error(error, MILENA_ERR_DATA, "Columna de producto inexistente");
+        return MILENA_ERR_DATA;
+    }
+    if (milena_table_column_index(table, output_column) >= 0) {
+        table_error(error, MILENA_ERR_DATA, "La columna de salida ya existe");
+        return MILENA_ERR_DATA;
+    }
+    double *values = NULL;
+    bool *validity = NULL;
+    if (table->row_count > 0) {
+        values = (double *)calloc(table->row_count, sizeof(*values));
+        validity = (bool *)calloc(table->row_count, sizeof(*validity));
+        if (!values || !validity) {
+            free(values); free(validity);
+            table_error(error, MILENA_ERR_MEMORY, "Sin memoria para producto de tabla");
+            return MILENA_ERR_MEMORY;
+        }
+    }
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)left, row) ||
+            milena_table_is_null(table, (size_t)right, row)) continue;
+        double left_value = 0.0, right_value = 0.0;
+        status = table_numeric_cell(table, (size_t)left, row, &left_value, error);
+        if (status == MILENA_OK)
+            status = table_numeric_cell(table, (size_t)right, row, &right_value, error);
+        if (status != MILENA_OK) break;
+        values[row] = left_value * right_value;
+        if (!isfinite(values[row])) {
+            table_error(error, MILENA_ERR_OVERFLOW, "Producto fuera de rango");
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
+        validity[row] = true;
+    }
+    if (status == MILENA_OK) {
+        MilenaArray result;
+        milena_array_init(&result);
+        size_t shape[1] = {table->row_count};
+        status = milena_array_from_f64(&result, 1, shape, values, error);
+        if (status == MILENA_OK) {
+            status = milena_table_add_column_copy(table, output_column, &result,
+                                                  validity, error);
+        }
+        milena_array_release(&result);
+    }
+    free(values);
+    free(validity);
+    return status;
+}
+
+
+MilenaStatus milena_table_add_month(MilenaTable *table,
+                                   const char *date_column,
+                                   const char *output_column,
+                                   MilenaError *error) {
+    if (!table || !date_column || !output_column) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Columnas inválidas para periodo");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(table, error);
+    if (status != MILENA_OK) return status;
+    int date_index = milena_table_column_index(table, date_column);
+    if (date_index < 0) {
+        table_error(error, MILENA_ERR_DATA, "Columna de fecha inexistente");
+        return MILENA_ERR_DATA;
+    }
+    const MilenaTableColumn *date_data = milena_table_column(table, (size_t)date_index);
+    if (!date_data || date_data->type != MILENA_COLUMN_STRING) {
+        table_error(error, MILENA_ERR_TYPE, "La extracción de periodo requiere texto de fecha");
+        return MILENA_ERR_TYPE;
+    }
+    if (milena_table_column_index(table, output_column) >= 0) {
+        table_error(error, MILENA_ERR_DATA, "La columna de periodo ya existe");
+        return MILENA_ERR_DATA;
+    }
+    char **values = NULL;
+    bool *validity = NULL;
+    if (table->row_count > 0) {
+        values = (char **)calloc(table->row_count, sizeof(*values));
+        validity = (bool *)calloc(table->row_count, sizeof(*validity));
+        if (!values || !validity) {
+            free(values); free(validity);
+            table_error(error, MILENA_ERR_MEMORY, "Sin memoria para periodo");
+            return MILENA_ERR_MEMORY;
+        }
+    }
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)date_index, row)) continue;
+        const char *date = NULL;
+        status = milena_table_get_string(table, (size_t)date_index, row, &date, error);
+        if (status != MILENA_OK) break;
+        int year = 0, month = 0, day = 0;
+        if (!date || sscanf(date, "%d-%d-%d", &year, &month, &day) != 3 ||
+            year < 1 || month < 1 || month > 12 || day < 1 || day > 31) {
+            table_error(error, MILENA_ERR_TYPE, "Fecha inválida para extraer periodo");
+            status = MILENA_ERR_TYPE;
+            break;
+        }
+        char buffer[32];
+        int written = snprintf(buffer, sizeof(buffer), "%04d-%02d", year, month);
+        if (written < 0 || (size_t)written >= sizeof(buffer)) {
+            table_error(error, MILENA_ERR_OVERFLOW, "Periodo demasiado largo");
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
+        values[row] = milena_strdup(buffer);
+        if (!values[row]) {
+            status = MILENA_ERR_MEMORY;
+            break;
+        }
+        validity[row] = true;
+    }
+    if (status == MILENA_OK) {
+        const char *const *column_values = (const char *const *)values;
+        status = milena_table_add_string_column_copy(table, output_column,
+                                                     column_values, table->row_count,
+                                                     validity, error);
+    }
+    for (size_t row = 0; row < table->row_count; row++) free(values ? values[row] : NULL);
+    free(values);
+    free(validity);
+    return status;
+}
+
+
+MilenaStatus milena_table_filter_numeric(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         const char *column_name,
+                                         const char *operator_text,
+                                         double threshold,
+                                         MilenaError *error) {
+    if (!out || !source || !column_name || !operator_text) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Condición de filtro inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(source, error);
+    if (status != MILENA_OK) return status;
+    int column = milena_table_column_index(source, column_name);
+    if (column < 0) {
+        table_error(error, MILENA_ERR_DATA, "Columna inexistente en condición");
+        return MILENA_ERR_DATA;
+    }
+    if (strcmp(operator_text, ">") != 0 && strcmp(operator_text, ">=") != 0 &&
+        strcmp(operator_text, "<") != 0 && strcmp(operator_text, "<=") != 0 &&
+        strcmp(operator_text, "==") != 0 && strcmp(operator_text, "!=") != 0) {
+        table_error(error, MILENA_ERR_UNSUPPORTED, "Operador de filtro no soportado");
+        return MILENA_ERR_UNSUPPORTED;
+    }
+    size_t shape[1] = {source->row_count};
+    MilenaArray mask;
+    milena_array_init(&mask);
+    status = milena_array_zeros(&mask, MILENA_DTYPE_BOOL, 1, shape, error);
+    if (status != MILENA_OK) return status;
+    bool *keep = (bool *)milena_array_data(&mask);
+    for (size_t row = 0; status == MILENA_OK && row < source->row_count; row++) {
+        if (milena_table_is_null(source, (size_t)column, row)) continue;
+        double value = 0.0;
+        status = table_numeric_cell(source, (size_t)column, row, &value, error);
+        if (status != MILENA_OK) break;
+        if (strcmp(operator_text, ">") == 0) keep[row] = value > threshold;
+        else if (strcmp(operator_text, ">=") == 0) keep[row] = value >= threshold;
+        else if (strcmp(operator_text, "<") == 0) keep[row] = value < threshold;
+        else if (strcmp(operator_text, "<=") == 0) keep[row] = value <= threshold;
+        else if (strcmp(operator_text, "==") == 0) keep[row] = value == threshold;
+        else keep[row] = value != threshold;
+    }
+    if (status == MILENA_OK) status = milena_table_filter(out, source, &mask, error);
+    milena_array_release(&mask);
+    return status;
+}
+
+
+static int compare_table_doubles(const void *left, const void *right) {
+    const double a = *(const double *)left;
+    const double b = *(const double *)right;
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+MilenaStatus milena_table_add_statistic(MilenaTable *out,
+                                        const MilenaTable *source,
+                                        const char *value_column,
+                                        const char *output_column,
+                                        MilenaTableStatistic statistic,
+                                        MilenaError *error) {
+    if (!out || !source || !value_column || !output_column || out == source ||
+        statistic < MILENA_STAT_VARIANCE || statistic > MILENA_STAT_MEDIAN) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Estadística de tabla inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(source, error);
+    if (status != MILENA_OK) return status;
+    status = milena_table_validate(out, error);
+    if (status != MILENA_OK) return status;
+    if (out->row_count != 1) {
+        table_error(error, MILENA_ERR_ARGUMENT,
+                    "La estadística global requiere una tabla de una fila");
+        return MILENA_ERR_ARGUMENT;
+    }
+    int column = milena_table_column_index(source, value_column);
+    if (column < 0 || milena_table_column(source, (size_t)column)->type != MILENA_COLUMN_ARRAY) {
+        table_error(error, MILENA_ERR_TYPE, "La estadística requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = source->row_count == 0 ? NULL :
+        (double *)malloc(source->row_count * sizeof(*values));
+    if (source->row_count != 0 && !values) {
+        table_error(error, MILENA_ERR_MEMORY, "Sin memoria para estadística");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    double mean = 0.0, m2 = 0.0;
+    for (size_t row = 0; row < source->row_count; row++) {
+        if (milena_table_is_null(source, (size_t)column, row)) continue;
+        double value = 0.0;
+        status = table_numeric_cell(source, (size_t)column, row, &value, error);
+        if (status != MILENA_OK) break;
+        values[count++] = value;
+        double delta = value - mean;
+        mean += delta / (double)count;
+        m2 += delta * (value - mean);
+    }
+    double result = 0.0;
+    if (status == MILENA_OK && count > 0) {
+        if (statistic == MILENA_STAT_VARIANCE) result = m2 / (double)count;
+        else if (statistic == MILENA_STAT_STDDEV) result = sqrt(m2 / (double)count);
+        else {
+            qsort(values, count, sizeof(*values), compare_table_doubles);
+            size_t middle = count / 2;
+            result = count % 2 ? values[middle] :
+                (values[middle - 1] + values[middle]) / 2.0;
+        }
+    }
+    bool valid = status == MILENA_OK && count > 0;
+    MilenaArray array;
+    milena_array_init(&array);
+    size_t shape[1] = {1};
+    if (status == MILENA_OK) {
+        status = milena_array_from_f64(&array, 1, shape, &result, error);
+        if (status == MILENA_OK) status = milena_table_add_column_copy(
+            out, output_column, &array, &valid, error);
+    }
+    milena_array_release(&array);
+    free(values);
+    return status;
+}
+
+
+MilenaStatus milena_table_add_percentile(MilenaTable *out,
+                                         const MilenaTable *source,
+                                         const char *value_column,
+                                         const char *output_column,
+                                         double percentile,
+                                         MilenaError *error) {
+    if (percentile < 0.0 || percentile > 100.0 || !isfinite(percentile)) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Percentil fuera del rango 0..100");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (!out || !source || out == source || !value_column || !output_column) {
+        table_error(error, MILENA_ERR_ARGUMENT, "Percentil de tabla inválido");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaStatus status = milena_table_validate(source, error);
+    if (status == MILENA_OK) status = milena_table_validate(out, error);
+    if (status != MILENA_OK) return status;
+    if (out->row_count != 1) {
+        table_error(error, MILENA_ERR_ARGUMENT,
+                    "El percentil global requiere una tabla de una fila");
+        return MILENA_ERR_ARGUMENT;
+    }
+    int column = milena_table_column_index(source, value_column);
+    const MilenaTableColumn *data = column < 0 ? NULL :
+        milena_table_column(source, (size_t)column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        table_error(error, MILENA_ERR_TYPE, "El percentil requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = source->row_count == 0 ? NULL :
+        (double *)malloc(source->row_count * sizeof(*values));
+    if (source->row_count != 0 && !values) {
+        table_error(error, MILENA_ERR_MEMORY, "Sin memoria para percentil");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < source->row_count; row++) {
+        if (milena_table_is_null(source, (size_t)column, row)) continue;
+        double value = 0.0;
+        status = table_numeric_cell(source, (size_t)column, row, &value, error);
+        if (status != MILENA_OK) break;
+        values[count++] = value;
+    }
+    double result = 0.0;
+    if (status == MILENA_OK && count > 0) {
+        qsort(values, count, sizeof(*values), compare_table_doubles);
+        double position = percentile * (double)(count - 1) / 100.0;
+        size_t lower = (size_t)position;
+        size_t upper = lower < count - 1 ? lower + 1 : lower;
+        double fraction = position - (double)lower;
+        result = values[lower] + fraction * (values[upper] - values[lower]);
+    }
+    bool valid = status == MILENA_OK && count > 0;
+    MilenaArray array;
+    milena_array_init(&array);
+    size_t shape[1] = {1};
+    if (status == MILENA_OK) {
+        status = milena_array_from_f64(&array, 1, shape, &result, error);
+        if (status == MILENA_OK) status = milena_table_add_column_copy(
+            out, output_column, &array, &valid, error);
+    }
+    milena_array_release(&array);
+    free(values);
     return status;
 }

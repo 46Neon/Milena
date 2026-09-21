@@ -12,6 +12,12 @@ extern "C" {
 MilenaStatus milena_run_array_program(const char *source, FILE *output,
                                       MilenaError *error);
 
+/* Ejecuta el subconjunto canónico de datasets mediante el mismo AST/runtime. */
+MilenaStatus milena_run_dataset_program(const char *source,
+                                        const char *script_filename,
+                                        FILE *output,
+                                        MilenaError *error);
+
 #ifdef __cplusplus
 }
 #endif

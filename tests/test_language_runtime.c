@@ -11,15 +11,28 @@
         } \
     } while (0)
 
-static bool read_stream(FILE *stream, char *buffer, size_t size) {
-    if (!stream || !buffer || size == 0) return false;
-    if (fflush(stream) != 0 || fseek(stream, 0, SEEK_SET) != 0) return false;
-    size_t count = fread(buffer, 1, size - 1, stream);
+static bool read_file(const char *path, char *buffer, size_t size) {
+    if (!path || !buffer || size < 2) return false;
+    FILE *file = fopen(path, "rb");
+    if (!file) return false;
+    size_t count = fread(buffer, 1, size - 1, file);
     buffer[count] = '\0';
-    return true;
+    bool ok = !ferror(file);
+    fclose(file);
+    return ok;
 }
 
-int main(void) {
+static bool write_file(const char *path, const char *content) {
+    FILE *file = fopen(path, "wb");
+    if (!file) return false;
+    size_t length = strlen(content);
+    bool ok = fwrite(content, 1, length, file) == length && fclose(file) == 0;
+    if (!ok) fclose(file);
+    return ok;
+}
+
+static int run_arrays(void) {
+    MilenaError error;
     const char *source =
         ".analisis prueba {\n"
         "  arreglo valores = [1, 2, 3, 4];\n"
@@ -28,33 +41,219 @@ int main(void) {
         "  mediana(valores);\n"
         "  percentil(valores, 75, eje 0, conservar dimensiones);\n"
         "}\n";
-
     FILE *output = tmpfile();
-    CHECK(output != NULL, "No se pudo crear la salida temporal");
-    MilenaError error;
+    CHECK(output != NULL, "arrays: no se pudo crear la salida temporal");
     milena_error_clear(&error);
     CHECK(milena_run_array_program(source, output, &error) == MILENA_OK,
           error.message);
-
     char text[4096];
-    CHECK(read_stream(output, text, sizeof(text)),
-          "No se pudo leer la salida del runtime");
+    CHECK(fseek(output, 0, SEEK_SET) == 0, "arrays: no se pudo rebobinar la salida");
+    size_t count = fread(text, 1, sizeof(text) - 1, output);
+    text[count] = '\0';
     fclose(output);
-    CHECK(strstr(text, "SUMA(valores) = 10") != NULL, "Suma incorrecta");
-    CHECK(strstr(text, "MEDIA(valores) = 2.5") != NULL, "Media incorrecta");
-    CHECK(strstr(text, "MEDIANA(valores) = 2.5") != NULL, "Mediana incorrecta");
+    CHECK(strstr(text, "SUMA(valores) = 10") != NULL, "arrays: suma incorrecta");
+    CHECK(strstr(text, "MEDIA(valores) = 2.5") != NULL, "arrays: media incorrecta");
+    CHECK(strstr(text, "MEDIANA(valores) = 2.5") != NULL, "arrays: mediana incorrecta");
     CHECK(strstr(text, "PERCENTIL(valores) = 3.25") != NULL,
-          "Percentil incorrecto");
-    CHECK(strstr(text, "shape=(1)") != NULL, "keepdims no se conservó");
+          "arrays: percentil incorrecto");
+    CHECK(strstr(text, "shape=(1)") != NULL, "arrays: keepdims no se conservó");
 
-    const char *invalid =
-        ".analisis error { media(variable_no_declarada); }";
+    const char *zeros =
+        ".analisis matriz {\n"
+        "  arreglo matriz = ceros(2, 3);\n"
+        "  media(matriz, eje 0);\n"
+        "}\n";
+    output = tmpfile();
+    CHECK(output != NULL, "arrays: no se pudo crear la salida de ceros");
+    milena_error_clear(&error);
+    CHECK(milena_run_array_program(zeros, output, &error) == MILENA_OK,
+          error.message);
+    CHECK(fseek(output, 0, SEEK_SET) == 0, "arrays: no se pudo leer ceros");
+    count = fread(text, 1, sizeof(text) - 1, output);
+    text[count] = '\0';
+    fclose(output);
+    CHECK(strstr(text, "MEDIA(matriz) = [0, 0, 0]") != NULL,
+          "arrays: ceros o reducción por eje incorrectos");
+    CHECK(strstr(text, "shape=(3)") != NULL,
+          "arrays: forma de reducción incorrecta");
+
+    const char *invalid = ".analisis error { media(variable_no_declarada); }";
     milena_error_clear(&error);
     CHECK(milena_run_array_program(invalid, NULL, &error) == MILENA_ERR_PARSE,
-          "El programa inválido no produjo error de parseo");
+          "arrays: programa inválido sin error");
     CHECK(strstr(error.message, "no ha sido declarado") != NULL,
-          "El primer diagnóstico fue sobrescrito");
+          "arrays: diagnóstico de declaración perdido");
+    return 0;
+}
 
-    puts("language runtime: parser + AST + arrays OK");
+static int run_dataset_pipeline(void) {
+    const char *csv = "test-language-runtime-data.csv";
+    const char *right = "test-language-runtime-right.csv";
+    const char *output = "test-language-runtime-data.json";
+    const char *csv_content =
+        "precio,cantidad,ciudad,compro,fecha\n"
+        "10,2,Caracas,1,2026-01-10\n"
+        "5,3,Maracaibo,0,2026-02-11\n"
+        "9,4,,1,2026-03-12\n"
+        "5,3,Maracaibo,0,2026-02-11\n"
+        "-1,2,Maracaibo,0,2026-04-01\n";
+    const char *right_content =
+        "ciudad,region\n"
+        "Caracas,Centro\n"
+        "Maracaibo,Occidente\n";
+    CHECK(write_file(csv, csv_content), "dataset: no se pudo crear el CSV izquierdo");
+    CHECK(write_file(right, right_content), "dataset: no se pudo crear el CSV derecho");
+
+    const char *source =
+        ".analisis ventas {\n"
+        "  dataset cargar datos(\"test-language-runtime-data.csv\")\n"
+        "  variable precio numerica\n"
+        "  variable cantidad numerica\n"
+        "  variable fecha texto\n"
+        "  entrada categorica \"ciudad\"\n"
+        "  salida binaria \"compro\"\n"
+        "  .limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") }\n"
+        "  .transformar dataset { #total(\"precio * cantidad\") #periodo(\"mes de fecha\") }\n"
+        "  .agrupar dataset { #por(\"ciudad\") #suma(\"total\") #media(\"total\") #conteo(\"total\") }\n"
+        "  .unir { #derecha(\"test-language-runtime-right.csv\") #clave(\"ciudad\") }\n"
+        "  .seleccionar { #columnas(\"ciudad,total_suma,total_media,total_conteo,region\") }\n"
+        "  #perfil_avanzado(\"total_suma\")\n"
+        "  #histograma(\"total_suma\")\n"
+        "  #tasa(\"total_suma,total_suma,200000\")\n"
+        "  #poisson(\"total_suma,total_suma,200000\")\n"
+        "  #chi_cuadrado(\"ciudad,region\")\n"
+        "  #riesgo(\"ciudad,region,Caracas,Centro\")\n"
+        "  #modelo_sst(\"ciudad,total_suma,region\")\n"
+        "  #interes_simple(\"total_suma,total_suma,2\")\n"
+        "  .exportar { (\"test-language-runtime-data.json\") }\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(source, "test-language-runtime-data.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    char text[8192];
+    CHECK(read_file(output, text, sizeof(text)), "dataset: no se creó el JSON");
+    CHECK(strstr(text, "\"filas\": 2") != NULL,
+          "dataset: limpieza no llegó a la tabla");
+    CHECK(strstr(text, "\"columnas\": 5") != NULL &&
+          strstr(text, "region") != NULL &&
+          strstr(text, "total_suma") != NULL &&
+          strstr(text, "total_media") != NULL &&
+          strstr(text, "total_conteo") != NULL,
+          "dataset: agregaciones o unión incompletas");
+    CHECK(strstr(text, "entradas_categoricas") != NULL &&
+          strstr(text, "salidas_binarias") != NULL,
+          "dataset: roles del esquema ausentes");
+    CHECK(read_file("test-language-runtime-data.json.sst.json", text, sizeof(text)),
+          "dataset: no se creó el perfil SST");
+    CHECK(strstr(text, "perfil_avanzado") != NULL, "dataset: perfil SST incompleto");
+    CHECK(read_file("test-language-runtime-data.json.histograma.json", text, sizeof(text)),
+          "dataset: no se creó el histograma SST");
+    CHECK(read_file("test-language-runtime-data.json.tasa.json", text, sizeof(text)),
+          "dataset: no se creó la tasa SST");
+    CHECK(read_file("test-language-runtime-data.json.poisson.json", text, sizeof(text)),
+          "dataset: no se creó Poisson SST");
+    CHECK(read_file("test-language-runtime-data.json.chi_cuadrado.json", text, sizeof(text)),
+          "dataset: no se creó chi cuadrado SST");
+    CHECK(read_file("test-language-runtime-data.json.riesgo.json", text, sizeof(text)),
+          "dataset: no se creó riesgo SST");
+    CHECK(read_file("test-language-runtime-data.json.modelo_sst.json", text, sizeof(text)),
+          "dataset: no se creó modelo SST");
+    CHECK(read_file("test-language-runtime-data.json.interes_simple.json", text, sizeof(text)),
+          "dataset: no se creó interés simple");
+
+    remove(csv); remove(right); remove(output);
+    remove("test-language-runtime-data.json.sst.json");
+    remove("test-language-runtime-data.json.histograma.json");
+    remove("test-language-runtime-data.json.tasa.json");
+    remove("test-language-runtime-data.json.poisson.json");
+    remove("test-language-runtime-data.json.chi_cuadrado.json");
+    remove("test-language-runtime-data.json.riesgo.json");
+    remove("test-language-runtime-data.json.modelo_sst.json");
+    remove("test-language-runtime-data.json.interes_simple.json");
+    return 0;
+}
+
+static int run_inference_pipeline(void) {
+    const char *csv = "test-language-runtime-inference-data.csv";
+    const char *output = "test-language-runtime-inference-data.json";
+    const char *content =
+        "antes,despues\n"
+        "1,2\n2,4\n3,6\n4,8\n5,10\n6,12\n7,14\n8,16\n"
+        "9,18\n10,20\n11,22\n12,24\n";
+    CHECK(write_file(csv, content), "inferencia: no se pudo crear el CSV");
+    const char *source =
+        ".analisis inferencia {\n"
+        "  dataset cargar datos(\"test-language-runtime-inference-data.csv\")\n"
+        "  variable antes numerica\n"
+        "  variable despues numerica\n"
+        "  #normalidad(\"antes\")\n"
+        "  #correlacion(\"antes,despues\")\n"
+        "  #wilcoxon(\"antes,despues\")\n"
+        "  .exportar { (\"test-language-runtime-inference-data.json\") }\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(source,
+                                     "test-language-runtime-inference-data.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    char text[4096];
+    CHECK(read_file("test-language-runtime-inference-data.json.normalidad.json",
+                    text, sizeof(text)) && strstr(text, "normalidad") != NULL,
+          "inferencia: normalidad no llegó a la tabla");
+    CHECK(read_file("test-language-runtime-inference-data.json.correlacion.json",
+                    text, sizeof(text)) && strstr(text, "correlacion") != NULL,
+          "inferencia: correlación no llegó a la tabla");
+    CHECK(read_file("test-language-runtime-inference-data.json.wilcoxon.json",
+                    text, sizeof(text)) && strstr(text, "wilcoxon") != NULL,
+          "inferencia: Wilcoxon no llegó a la tabla");
+    remove(csv); remove(output);
+    remove("test-language-runtime-inference-data.json.normalidad.json");
+    remove("test-language-runtime-inference-data.json.correlacion.json");
+    remove("test-language-runtime-inference-data.json.wilcoxon.json");
+    return 0;
+}
+
+static int run_summary_pipeline(void) {
+    const char *csv = "test-language-runtime-summary-data.csv";
+    const char *output = "test-language-runtime-summary-data.json";
+    const char *content =
+        "precio,cantidad\n10,2\n5,3\n9,4\n5,3\n-1,2\n";
+    CHECK(write_file(csv, content), "resumen: no se pudo crear el CSV");
+    const char *source =
+        ".analisis resumen {\n"
+        "  dataset cargar datos(\"test-language-runtime-summary-data.csv\")\n"
+        "  variable precio numerica\n"
+        "  variable cantidad numerica\n"
+        "  .transformar dataset { #total(\"precio * cantidad\") }\n"
+        "  .resumir dataset { #suma(\"total\") #media(\"total\") #conteo(\"total\") #varianza(\"total\") #desviacion_estandar(\"total\") #mediana(\"total\") #percentil(\"total,50\") }\n"
+        "  .exportar { (\"test-language-runtime-summary-data.json\") }\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(source,
+                                     "test-language-runtime-summary-data.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    char text[4096];
+    CHECK(read_file(output, text, sizeof(text)), "resumen: no se creó el JSON");
+    CHECK(strstr(text, "\"filas\": 1") != NULL &&
+          strstr(text, "total_media") != NULL &&
+          strstr(text, "total_varianza") != NULL &&
+          strstr(text, "total_mediana") != NULL &&
+          strstr(text, "total_percentil") != NULL,
+          "resumen: métricas incompletas");
+    remove(csv); remove(output);
+    return 0;
+}
+
+int main(void) {
+    CHECK(run_arrays() == 0, "falló la fase de arrays");
+    CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
+    CHECK(run_inference_pipeline() == 0, "falló la fase de inferencia");
+    CHECK(run_summary_pipeline() == 0, "falló la fase de resumen");
+    puts("language runtime: parser + AST + arrays + datasets + SST + finanzas OK");
     return 0;
 }

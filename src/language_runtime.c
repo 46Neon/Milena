@@ -1,13 +1,55 @@
 #include "language_runtime.h"
 
 #include "array.h"
+#include "dataset.h"
+#include "analysis.h"
+#include "schema.h"
+#include "table.h"
+#include "sst_advanced.h"
+#include "sst_histogram.h"
+#include "sst_normality.h"
+#include "sst_rates.h"
+#include "sst_inference.h"
+#include "sst_correlation.h"
+#include "sst_contingency.h"
+#include "sst_model.h"
+#include "language_semantic.h"
+#include "finance.h"
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
 
 #include <float.h>
+#include <ctype.h>
 
 #define MILENA_RUNTIME_MAX_ARRAYS 128u
+
+static char *runtime_trim(char *text) {
+    if (!text) return NULL;
+    while (isspace((unsigned char)*text)) text++;
+    char *end = text + strlen(text);
+    while (end > text && isspace((unsigned char)end[-1])) --end;
+    *end = '\0';
+    return text;
+}
+
+static bool runtime_numeric_cell(const MilenaTableColumn *data,
+                                 const void *raw, double *value) {
+    if (!data || !raw || !value) return false;
+    switch (data->values.dtype) {
+        case MILENA_DTYPE_INT8: *value = (double)*(const int8_t *)raw; return true;
+        case MILENA_DTYPE_INT16: *value = (double)*(const int16_t *)raw; return true;
+        case MILENA_DTYPE_INT32: *value = (double)*(const int32_t *)raw; return true;
+        case MILENA_DTYPE_INT64: *value = (double)*(const int64_t *)raw; return true;
+        case MILENA_DTYPE_UINT8: *value = (double)*(const uint8_t *)raw; return true;
+        case MILENA_DTYPE_UINT16: *value = (double)*(const uint16_t *)raw; return true;
+        case MILENA_DTYPE_UINT32: *value = (double)*(const uint32_t *)raw; return true;
+        case MILENA_DTYPE_UINT64: *value = (double)*(const uint64_t *)raw; return true;
+        case MILENA_DTYPE_FLOAT32: *value = (double)*(const float *)raw; return true;
+        case MILENA_DTYPE_FLOAT64: *value = *(const double *)raw; return true;
+        default: return false;
+    }
+}
 
 typedef struct {
     const char *name;
@@ -73,46 +115,73 @@ static MilenaStatus runtime_declare_array(MilenaArrayRuntime *runtime,
         return MILENA_ERR_DATA;
     }
 
-    size_t shape[] = {literal->child_count};
-    double *reals = calloc(literal->child_count, sizeof(*reals));
-    int64_t *integers = calloc(literal->child_count, sizeof(*integers));
-    if (!reals || !integers) {
-        free(reals);
-        free(integers);
-        runtime_error(error, MILENA_ERR_MEMORY,
-                      "Sin memoria para materializar el arreglo");
-        return MILENA_ERR_MEMORY;
-    }
-
-    bool all_integers = true;
-    for (size_t i = 0; i < literal->child_count; i++) {
-        const ASTNode *element = literal->children[i];
-        if (!element || element->type != AST_EXPRESION_LITERAL ||
-            !isfinite(element->number_value)) {
+    MilenaArray value = {0};
+    MilenaStatus status;
+    if (literal->zeros_constructor) {
+        size_t *shape = calloc(literal->child_count, sizeof(*shape));
+        if (!shape) {
+            runtime_error(error, MILENA_ERR_MEMORY,
+                          "Sin memoria para las dimensiones de ceros");
+            return MILENA_ERR_MEMORY;
+        }
+        for (size_t i = 0; i < literal->child_count; i++) {
+            const ASTNode *dimension = literal->children[i];
+            if (!dimension || dimension->type != AST_EXPRESION_LITERAL ||
+                !isfinite(dimension->number_value) ||
+                dimension->number_value <= 0.0 ||
+                dimension->number_value > (double)SIZE_MAX ||
+                floor(dimension->number_value) != dimension->number_value) {
+                free(shape);
+                runtime_error(error, MILENA_ERR_TYPE,
+                              "Las dimensiones de ceros deben ser enteros positivos");
+                return MILENA_ERR_TYPE;
+            }
+            shape[i] = (size_t)dimension->number_value;
+        }
+        status = milena_array_zeros(&value, MILENA_DTYPE_FLOAT64,
+                                    literal->child_count, shape, error);
+        free(shape);
+    } else {
+        size_t shape[] = {literal->child_count};
+        double *reals = calloc(literal->child_count, sizeof(*reals));
+        int64_t *integers = calloc(literal->child_count, sizeof(*integers));
+        if (!reals || !integers) {
             free(reals);
             free(integers);
-            runtime_error(error, MILENA_ERR_TYPE,
-                          "El literal de arreglo solo admite números finitos");
-            return MILENA_ERR_TYPE;
+            runtime_error(error, MILENA_ERR_MEMORY,
+                          "Sin memoria para materializar el arreglo");
+            return MILENA_ERR_MEMORY;
         }
-        double value = element->number_value;
-        reals[i] = value;
-        /* INT64_MAX rounds to 2^63 in double; use an exclusive upper
-         * boundary to avoid an out-of-range floating-to-integer cast. */
-        if (value < (double)INT64_MIN || value >= -(double)INT64_MIN ||
-            trunc(value) != value) {
-            all_integers = false;
-        } else {
-            integers[i] = (int64_t)value;
-        }
-    }
 
-    MilenaArray value = {0};
-    MilenaStatus status = all_integers
-        ? milena_array_from_i64(&value, 1, shape, integers, error)
-        : milena_array_from_f64(&value, 1, shape, reals, error);
-    free(reals);
-    free(integers);
+        bool all_integers = true;
+        for (size_t i = 0; i < literal->child_count; i++) {
+            const ASTNode *element = literal->children[i];
+            if (!element || element->type != AST_EXPRESION_LITERAL ||
+                !isfinite(element->number_value)) {
+                free(reals);
+                free(integers);
+                runtime_error(error, MILENA_ERR_TYPE,
+                              "El literal de arreglo solo admite números finitos");
+                return MILENA_ERR_TYPE;
+            }
+            double number = element->number_value;
+            reals[i] = number;
+            /* INT64_MAX rounds to 2^63 in double; use an exclusive upper
+             * boundary to avoid an out-of-range floating-to-integer cast. */
+            if (number < (double)INT64_MIN || number >= -(double)INT64_MIN ||
+                trunc(number) != number) {
+                all_integers = false;
+            } else {
+                integers[i] = (int64_t)number;
+            }
+        }
+
+        status = all_integers
+            ? milena_array_from_i64(&value, 1, shape, integers, error)
+            : milena_array_from_f64(&value, 1, shape, reals, error);
+        free(reals);
+        free(integers);
+    }
     if (status != MILENA_OK) return status;
 
     runtime->arrays[runtime->count].name = node->value;
@@ -299,6 +368,13 @@ MilenaStatus milena_run_array_program(const char *source, FILE *output,
         return error && error->code != MILENA_OK ? error->code : MILENA_ERR_PARSE;
     }
 
+    MilenaStatus semantic_status = milena_validate_ast(program, error);
+    if (semantic_status != MILENA_OK) {
+        ast_destroy(program);
+        parser_release(&parser);
+        return semantic_status;
+    }
+
     MilenaArrayRuntime runtime = {0};
     runtime.output = output ? output : stdout;
     MilenaStatus status = MILENA_ERR_UNSUPPORTED;
@@ -310,6 +386,1491 @@ MilenaStatus milena_run_array_program(const char *source, FILE *output,
     }
 
     runtime_release(&runtime);
+    ast_destroy(program);
+    parser_release(&parser);
+    return status;
+}
+
+typedef struct {
+    Dataset dataset;
+    bool loaded;
+} MilenaDatasetRuntime;
+
+static bool dataset_runtime_file_exists(const char *path) {
+    FILE *file = path ? fopen(path, "rb") : NULL;
+    if (!file) return false;
+    fclose(file);
+    return true;
+}
+
+static bool dataset_runtime_absolute(const char *path) {
+    return path && (path[0] == '/' ||
+                    (isalpha((unsigned char)path[0]) && path[1] == ':' &&
+                     (path[2] == '\\' || path[2] == '/')));
+}
+
+static MilenaStatus dataset_runtime_path(const char *requested,
+                                         const char *script_filename,
+                                         bool output,
+                                         char *resolved, size_t resolved_size,
+                                         MilenaError *error) {
+    if (!requested || !resolved || resolved_size == 0) {
+        runtime_error(error, MILENA_ERR_ARGUMENT, "Ruta de dataset inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (dataset_runtime_absolute(requested)) {
+        if (strlen(requested) + 1 > resolved_size) {
+            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        strcpy(resolved, requested);
+        if (!output && !dataset_runtime_file_exists(resolved)) {
+            runtime_error(error, MILENA_ERR_IO, "No se pudo abrir el dataset");
+            return MILENA_ERR_IO;
+        }
+        return MILENA_OK;
+    }
+    if (!output && dataset_runtime_file_exists(requested)) {
+        if (strlen(requested) + 1 > resolved_size) {
+            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        strcpy(resolved, requested);
+        return MILENA_OK;
+    }
+
+    char base[1024] = ".";
+    if (script_filename && script_filename[0]) {
+        size_t length = strlen(script_filename);
+        if (length >= sizeof(base)) {
+            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta del script demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        memcpy(base, script_filename, length + 1);
+        char *slash = strrchr(base, '/');
+        char *backslash = strrchr(base, '\\');
+        if (backslash && (!slash || backslash > slash)) slash = backslash;
+        if (slash) {
+            if (slash == base) base[1] = '\0';
+            else *slash = '\0';
+        } else {
+            strcpy(base, ".");
+        }
+    }
+    int written = snprintf(resolved, resolved_size, "%s/%s", base, requested);
+    if (written < 0 || (size_t)written >= resolved_size) {
+        runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (!output && !dataset_runtime_file_exists(resolved)) {
+        runtime_error(error, MILENA_ERR_IO, "No se pudo abrir el dataset indicado");
+        return MILENA_ERR_IO;
+    }
+    return MILENA_OK;
+}
+
+static const ASTNode *dataset_runtime_find_child(const ASTNode *block,
+                                                 ASTNodeType type) {
+    if (!block) return NULL;
+    for (size_t i = 0; i < block->child_count; i++) {
+        if (block->children[i] && block->children[i]->type == type) {
+            return block->children[i];
+        }
+    }
+    return NULL;
+}
+
+static MilenaStatus dataset_runtime_transform(const ASTNode *block,
+                                              Dataset *dataset,
+                                              MilenaError *error) {
+    if (!block || !dataset) return MILENA_ERR_ARGUMENT;
+    for (size_t i = 0; i < block->child_count; i++) {
+        const ASTNode *command = block->children[i];
+        if (!command) continue;
+        if (command->type == AST_COMANDO_TOTAL) {
+            /* El producto se ejecuta sobre MilenaTable después de materializar
+             * el esquema; aquí solo se conserva el comando AST. */
+            (void)dataset;
+        } else if (command->type == AST_COMANDO_PERIODO) {
+            /* La extracción se ejecuta sobre MilenaTable después de cargar
+             * el esquema tipado. */
+            (void)dataset;
+        }
+    }
+    return MILENA_OK;
+}
+
+static MilenaStatus dataset_runtime_clean(const ASTNode *block,
+                                          Dataset *dataset,
+                                          MilenaError *error) {
+    if (!block || !dataset) return MILENA_ERR_ARGUMENT;
+    for (size_t i = 0; i < block->child_count; i++) {
+        const ASTNode *command = block->children[i];
+        if (!command || !command->value) continue;
+        if (command->type == AST_COMANDO_NULOS &&
+            strcmp(command->value, "eliminar") == 0) {
+            /* La eliminación de nulos pertenece ahora a MilenaTable; se
+             * ejecuta después de materializar el esquema tipado. */
+            (void)dataset;
+        } else if (command->type == AST_COMANDO_DUPLICADOS &&
+                   strcmp(command->value, "eliminar") == 0) {
+            /* Los duplicados se eliminan sobre MilenaTable junto con los
+             * demás comandos de limpieza del pipeline canónico. */
+            (void)dataset;
+        } else if (command->type == AST_COMANDO_NULOS ||
+                   command->type == AST_COMANDO_DUPLICADOS) {
+            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                          "La acción de limpieza todavía no está integrada");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+    }
+    return MILENA_OK;
+}
+
+static MilenaStatus runtime_write_sst_profile(const MilenaTable *table,
+                                                 const char *column_name,
+                                                 const char *output_path,
+                                                 MilenaError *error) {
+    int column = milena_table_column_index(table, column_name);
+    const MilenaTableColumn *data = column < 0 ? NULL :
+        milena_table_column(table, (size_t)column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "El perfil SST requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = table->row_count == 0 ? NULL :
+        (double *)malloc(table->row_count * sizeof(*values));
+    if (table->row_count && !values) {
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para perfil SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)column, row)) continue;
+        const void *raw = NULL;
+        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
+        switch (data->values.dtype) {
+            case MILENA_DTYPE_INT64: values[count++] = (double)*(const int64_t *)raw; break;
+            case MILENA_DTYPE_UINT64: values[count++] = (double)*(const uint64_t *)raw; break;
+            case MILENA_DTYPE_FLOAT32: values[count++] = (double)*(const float *)raw; break;
+            case MILENA_DTYPE_FLOAT64: values[count++] = *(const double *)raw; break;
+            default: values[count++] = 0.0; break;
+        }
+    }
+    SstAdvancedStats stats;
+    MilenaStatus status = sst_advanced_compute(values, NULL, count, &stats, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.sst.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"perfil_avanzado\",\"variable\":\"");
+                for (const char *p = column_name; *p; p++) fputc(*p == '"' ? '\\' : *p, out);
+                fprintf(out, "\",\"n\":%zu,\"media\":%.10g,\"desviacion\":%.10g,\"p90\":%.10g,\"p95\":%.10g}\n",
+                        stats.count, stats.mean, stats.standard_deviation, stats.p90, stats.p95);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    free(values);
+    return status;
+}
+
+static MilenaStatus runtime_write_sst_histogram(const MilenaTable *table,
+                                                    const char *column_name,
+                                                    const char *output_path,
+                                                    MilenaError *error) {
+    int column = milena_table_column_index(table, column_name);
+    const MilenaTableColumn *data = column < 0 ? NULL :
+        milena_table_column(table, (size_t)column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "El histograma SST requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = table->row_count == 0 ? NULL :
+        (double *)malloc(table->row_count * sizeof(*values));
+    if (table->row_count && !values) {
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para histograma SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    double minimum = DBL_MAX, maximum = -DBL_MAX;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)column, row)) continue;
+        const void *raw = NULL;
+        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
+        double value;
+        switch (data->values.dtype) {
+            case MILENA_DTYPE_INT64: value = (double)*(const int64_t *)raw; break;
+            case MILENA_DTYPE_UINT64: value = (double)*(const uint64_t *)raw; break;
+            case MILENA_DTYPE_FLOAT32: value = (double)*(const float *)raw; break;
+            case MILENA_DTYPE_FLOAT64: value = *(const double *)raw; break;
+            default: value = 0.0; break;
+        }
+        values[count++] = value;
+        if (value < minimum) minimum = value;
+        if (value > maximum) maximum = value;
+    }
+    MilenaStatus status = count == 0 ? MILENA_ERR_DATA : MILENA_OK;
+    SstHistogram histogram;
+    if (status == MILENA_OK) status = sst_histogram_init(&histogram, 5, minimum, maximum, error);
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < count; i++) {
+            status = sst_histogram_add(&histogram, values[i], error);
+            if (status != MILENA_OK) break;
+        }
+    }
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.histograma.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"histograma\",\"variable\":\"");
+                fputs(column_name, out);
+                fputs("\",\"bins\":[", out);
+                for (size_t i = 0; i < histogram.bin_count; i++) {
+                    if (i) fputs(",", out);
+                    fprintf(out, "%zu", histogram.counts[i]);
+                }
+                fprintf(out, "],\"bajo_minimo\":%zu,\"sobre_maximo\":%zu}\n",
+                        histogram.underflow, histogram.overflow);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    if (status == MILENA_OK) sst_histogram_destroy(&histogram);
+    free(values);
+    return status;
+}
+
+static MilenaStatus runtime_write_sst_normality(const MilenaTable *table,
+                                                    const char *column_name,
+                                                    const char *output_path,
+                                                    MilenaError *error) {
+    int column = milena_table_column_index(table, column_name);
+    const MilenaTableColumn *data = column < 0 ? NULL :
+        milena_table_column(table, (size_t)column);
+    if (!data || data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "La normalidad SST requiere una columna numérica");
+        return MILENA_ERR_TYPE;
+    }
+    double *values = table->row_count == 0 ? NULL :
+        (double *)malloc(table->row_count * sizeof(*values));
+    if (table->row_count && !values) {
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para normalidad SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)column, row)) continue;
+        const void *raw = NULL;
+        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
+        switch (data->values.dtype) {
+            case MILENA_DTYPE_INT64: values[count++] = (double)*(const int64_t *)raw; break;
+            case MILENA_DTYPE_UINT64: values[count++] = (double)*(const uint64_t *)raw; break;
+            case MILENA_DTYPE_FLOAT32: values[count++] = (double)*(const float *)raw; break;
+            case MILENA_DTYPE_FLOAT64: values[count++] = *(const double *)raw; break;
+            default: values[count++] = 0.0; break;
+        }
+    }
+    SstNormalityResult result;
+    MilenaStatus status = sst_normality_test(values, count, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.normalidad.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"normalidad\",\"variable\":\"");
+                fputs(column_name, out);
+                fprintf(out, "\",\"metodo\":\""); fputs(result.method, out);
+                fprintf(out, "\",\"estadistico\":%.10g,\"p\":%.10g,\"normal\":%s,\"aproximado\":%s}\n",
+                        result.statistic, result.p_value,
+                        result.normal ? "true" : "false",
+                        result.approximate ? "true" : "false");
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    free(values);
+    return status;
+}
+
+static MilenaStatus runtime_write_sst_rate(const MilenaTable *table,
+                                               const char *specification,
+                                               const char *output_path,
+                                               MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *event_name = runtime_trim(strtok(spec, ","));
+    char *exposure_name = runtime_trim(strtok(NULL, ","));
+    char *factor_text = runtime_trim(strtok(NULL, ","));
+    if (!event_name || !exposure_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "La tasa requiere evento, exposición y factor");
+        return MILENA_ERR_PARSE;
+    }
+    char *factor_end = NULL;
+    double factor = factor_text ? strtod(factor_text, &factor_end) : 200000.0;
+    if ((factor_text && (!factor_end || factor_end == factor_text || *factor_end != '\0')) ||
+        !isfinite(factor) || factor <= 0.0) {
+        runtime_error(error, MILENA_ERR_PARSE, "Factor de tasa inválido");
+        return MILENA_ERR_PARSE;
+    }
+    int event_column = milena_table_column_index(table, event_name);
+    int exposure_column = milena_table_column_index(table, exposure_name);
+    if (event_column < 0 || exposure_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna inexistente para tasa SST");
+        return MILENA_ERR_DATA;
+    }
+    size_t incidents = 0;
+    double exposure = 0.0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (!milena_table_is_null(table, (size_t)event_column, row)) {
+            const MilenaTableColumn *event_data = milena_table_column(table, (size_t)event_column);
+            const char *event = NULL;
+            bool incident = false;
+            if (event_data->type == MILENA_COLUMN_STRING) {
+                if (milena_table_get_string(table, (size_t)event_column, row, &event, error) == MILENA_OK)
+                    incident = strcmp(event, "1") == 0 || strcmp(event, "true") == 0 ||
+                               strcmp(event, "verdadero") == 0;
+            } else if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
+                uint32_t code = 0;
+                if (milena_table_get_category(table, (size_t)event_column, row, &code, &event, error) == MILENA_OK)
+                    incident = strcmp(event, "1") == 0 || strcmp(event, "true") == 0 ||
+                               strcmp(event, "verdadero") == 0;
+            } else {
+                const void *raw = NULL;
+                if (milena_table_get_array_value(table, (size_t)event_column, row, &raw, error) == MILENA_OK) {
+                    if (event_data->values.dtype == MILENA_DTYPE_FLOAT64) incident = *(const double *)raw > 0.0;
+                    else if (event_data->values.dtype == MILENA_DTYPE_FLOAT32) incident = *(const float *)raw > 0.0f;
+                    else if (event_data->values.dtype == MILENA_DTYPE_INT64) incident = *(const int64_t *)raw > 0;
+                    else if (event_data->values.dtype == MILENA_DTYPE_UINT64) incident = *(const uint64_t *)raw > 0;
+                }
+            }
+            if (incident) incidents++;
+        }
+        if (!milena_table_is_null(table, (size_t)exposure_column, row)) {
+            const void *raw = NULL;
+            const MilenaTableColumn *data = milena_table_column(table, (size_t)exposure_column);
+            if (data->type == MILENA_COLUMN_ARRAY &&
+                milena_table_get_array_value(table, (size_t)exposure_column, row, &raw, error) == MILENA_OK) {
+                if (data->values.dtype == MILENA_DTYPE_FLOAT64) exposure += *(const double *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_FLOAT32) exposure += (double)*(const float *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_INT64) exposure += (double)*(const int64_t *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_UINT64) exposure += (double)*(const uint64_t *)raw;
+            }
+        }
+    }
+    SstRateResult result;
+    MilenaStatus status = sst_rate_from_counts(incidents, exposure, factor, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.tasa.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"tasa\",\"evento\":\"%s\",\"exposicion\":\"%s\",\"incidentes\":%zu,\"tasa\":%.10g}\n",
+                        event_name, exposure_name, result.incident_count, result.rate);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    return status;
+}
+
+static MilenaStatus runtime_write_sst_poisson(const MilenaTable *table,
+                                                  const char *specification,
+                                                  const char *output_path,
+                                                  MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *event_name = runtime_trim(strtok(spec, ","));
+    char *exposure_name = runtime_trim(strtok(NULL, ","));
+    char *factor_text = runtime_trim(strtok(NULL, ","));
+    if (!event_name || !exposure_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "Poisson requiere evento, exposición y factor");
+        return MILENA_ERR_PARSE;
+    }
+    char *factor_end = NULL;
+    double factor = factor_text ? strtod(factor_text, &factor_end) : 200000.0;
+    if ((factor_text && (!factor_end || factor_end == factor_text || *factor_end != '\0')) ||
+        !isfinite(factor) || factor <= 0.0) {
+        runtime_error(error, MILENA_ERR_PARSE, "Factor de Poisson inválido");
+        return MILENA_ERR_PARSE;
+    }
+    int event_column = milena_table_column_index(table, event_name);
+    int exposure_column = milena_table_column_index(table, exposure_name);
+    if (event_column < 0 || exposure_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna inexistente para Poisson SST");
+        return MILENA_ERR_DATA;
+    }
+    size_t incidents = 0;
+    double exposure = 0.0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (!milena_table_is_null(table, (size_t)event_column, row)) {
+            const MilenaTableColumn *event_data = milena_table_column(table, (size_t)event_column);
+            const void *raw = NULL;
+            bool incident = false;
+            if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
+                const char *label = NULL; uint32_t code = 0;
+                if (milena_table_get_category(table, (size_t)event_column, row, &code, &label, error) == MILENA_OK)
+                    incident = strcmp(label, "1") == 0 || strcmp(label, "true") == 0 || strcmp(label, "verdadero") == 0;
+            } else if (event_data->type == MILENA_COLUMN_ARRAY &&
+                       milena_table_get_array_value(table, (size_t)event_column, row, &raw, error) == MILENA_OK) {
+                if (event_data->values.dtype == MILENA_DTYPE_FLOAT64) incident = *(const double *)raw > 0.0;
+                else if (event_data->values.dtype == MILENA_DTYPE_FLOAT32) incident = *(const float *)raw > 0.0f;
+                else if (event_data->values.dtype == MILENA_DTYPE_INT64) incident = *(const int64_t *)raw > 0;
+                else if (event_data->values.dtype == MILENA_DTYPE_UINT64) incident = *(const uint64_t *)raw > 0;
+            }
+            if (incident) incidents++;
+        }
+        if (!milena_table_is_null(table, (size_t)exposure_column, row)) {
+            const MilenaTableColumn *data = milena_table_column(table, (size_t)exposure_column);
+            const void *raw = NULL;
+            if (data->type == MILENA_COLUMN_ARRAY &&
+                milena_table_get_array_value(table, (size_t)exposure_column, row, &raw, error) == MILENA_OK) {
+                if (data->values.dtype == MILENA_DTYPE_FLOAT64) exposure += *(const double *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_FLOAT32) exposure += (double)*(const float *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_INT64) exposure += (double)*(const int64_t *)raw;
+                else if (data->values.dtype == MILENA_DTYPE_UINT64) exposure += (double)*(const uint64_t *)raw;
+            }
+        }
+    }
+    SstPoissonInterval interval;
+    MilenaStatus status = sst_poisson_exact_interval(incidents, exposure, factor,
+                                                     0.95, &interval, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.poisson.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"poisson\",\"eventos\":%zu,\"tasa\":%.10g,\"ic_inferior\":%.10g,\"ic_superior\":%.10g}\n",
+                        incidents, interval.rate, interval.lower, interval.upper);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    return status;
+}
+
+static MilenaStatus runtime_write_sst_correlation(const MilenaTable *table,
+                                                       const char *specification,
+                                                       const char *output_path,
+                                                       MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *x_name = runtime_trim(strtok(spec, ","));
+    char *y_name = runtime_trim(strtok(NULL, ","));
+    if (!x_name || !y_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "La correlación requiere dos columnas");
+        return MILENA_ERR_PARSE;
+    }
+    int x_column = milena_table_column_index(table, x_name);
+    int y_column = milena_table_column_index(table, y_name);
+    const MilenaTableColumn *x_data = x_column < 0 ? NULL : milena_table_column(table, (size_t)x_column);
+    const MilenaTableColumn *y_data = y_column < 0 ? NULL : milena_table_column(table, (size_t)y_column);
+    if (!x_data || !y_data || x_data->type != MILENA_COLUMN_ARRAY ||
+        y_data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "La correlación requiere columnas numéricas");
+        return MILENA_ERR_TYPE;
+    }
+    double *x = table->row_count ? (double *)malloc(table->row_count * sizeof(*x)) : NULL;
+    double *y = table->row_count ? (double *)malloc(table->row_count * sizeof(*y)) : NULL;
+    if (table->row_count && (!x || !y)) {
+        free(x); free(y);
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para correlación SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)x_column, row) ||
+            milena_table_is_null(table, (size_t)y_column, row)) continue;
+        const void *xr = NULL, *yr = NULL;
+        if (milena_table_get_array_value(table, (size_t)x_column, row, &xr, error) != MILENA_OK ||
+            milena_table_get_array_value(table, (size_t)y_column, row, &yr, error) != MILENA_OK) break;
+        x[count] = x_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)xr :
+                   x_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)xr :
+                   x_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)xr :
+                   (double)*(const uint64_t *)xr;
+        y[count] = y_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)yr :
+                   y_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)yr :
+                   y_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)yr :
+                   (double)*(const uint64_t *)yr;
+        count++;
+    }
+    SstCorrelationResult result;
+    MilenaStatus status = sst_pearson(x, y, count, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.correlacion.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"correlacion\",\"pares\":%zu,\"coeficiente\":%.10g,\"muestra_pequena\":%s}\n",
+                        result.pairs, result.coefficient, result.warning_small_sample ? "true" : "false");
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    free(x); free(y);
+    return status;
+}
+
+static MilenaStatus runtime_write_sst_wilcoxon(const MilenaTable *table,
+                                                    const char *specification,
+                                                    const char *output_path,
+                                                    MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *before_name = runtime_trim(strtok(spec, ","));
+    char *after_name = runtime_trim(strtok(NULL, ","));
+    if (!before_name || !after_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "Wilcoxon requiere dos columnas");
+        return MILENA_ERR_PARSE;
+    }
+    int before_column = milena_table_column_index(table, before_name);
+    int after_column = milena_table_column_index(table, after_name);
+    const MilenaTableColumn *before_data = before_column < 0 ? NULL : milena_table_column(table, (size_t)before_column);
+    const MilenaTableColumn *after_data = after_column < 0 ? NULL : milena_table_column(table, (size_t)after_column);
+    if (!before_data || !after_data || before_data->type != MILENA_COLUMN_ARRAY ||
+        after_data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "Wilcoxon requiere columnas numéricas");
+        return MILENA_ERR_TYPE;
+    }
+    double *before = table->row_count ? (double *)malloc(table->row_count * sizeof(*before)) : NULL;
+    double *after = table->row_count ? (double *)malloc(table->row_count * sizeof(*after)) : NULL;
+    if (table->row_count && (!before || !after)) {
+        free(before); free(after);
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para Wilcoxon SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)before_column, row) ||
+            milena_table_is_null(table, (size_t)after_column, row)) continue;
+        const void *br = NULL, *ar = NULL;
+        if (milena_table_get_array_value(table, (size_t)before_column, row, &br, error) != MILENA_OK ||
+            milena_table_get_array_value(table, (size_t)after_column, row, &ar, error) != MILENA_OK) break;
+        if (!runtime_numeric_cell(before_data, br, &before[count]) ||
+            !runtime_numeric_cell(after_data, ar, &after[count])) {
+            runtime_error(error, MILENA_ERR_TYPE, "Wilcoxon requiere datos numéricos válidos");
+            break;
+        }
+        count++;
+    }
+    SstWilcoxonResult result;
+    MilenaStatus status = sst_wilcoxon_signed_rank(before, after, count, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.wilcoxon.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"wilcoxon\",\"pares\":%zu,\"estadistico\":%.10g,\"p\":%.10g}\n",
+                        result.pairs, result.statistic, result.p_value);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    free(before); free(after);
+    return status;
+}
+
+static MilenaStatus runtime_write_sst_chi_square(const MilenaTable *table,
+                                                      const char *specification,
+                                                      const char *output_path,
+                                                      MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *row_name = runtime_trim(strtok(spec, ","));
+    char *column_name = runtime_trim(strtok(NULL, ","));
+    if (!row_name || !column_name) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "Chi cuadrado requiere dos columnas categóricas");
+        return MILENA_ERR_PARSE;
+    }
+    int row_column = milena_table_column_index(table, row_name);
+    int value_column = milena_table_column_index(table, column_name);
+    if (row_column < 0 || value_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna inexistente para chi cuadrado SST");
+        return MILENA_ERR_DATA;
+    }
+    const char **rows = table->row_count ? (const char **)calloc(table->row_count, sizeof(*rows)) : NULL;
+    const char **columns = table->row_count ? (const char **)calloc(table->row_count, sizeof(*columns)) : NULL;
+    if (table->row_count && (!rows || !columns)) {
+        free(rows); free(columns);
+        runtime_error(error, MILENA_ERR_MEMORY, "Sin memoria para contingencia SST");
+        return MILENA_ERR_MEMORY;
+    }
+    size_t count = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)row_column, row) ||
+            milena_table_is_null(table, (size_t)value_column, row)) continue;
+        const char *row_label = NULL, *column_label = NULL;
+        const MilenaTableColumn *row_data = milena_table_column(table, (size_t)row_column);
+        const MilenaTableColumn *column_data = milena_table_column(table, (size_t)value_column);
+        if (row_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)row_column, row, &code, &row_label, error) != MILENA_OK) break;
+        } else if (row_data->type == MILENA_COLUMN_STRING) {
+            if (milena_table_get_string(table, (size_t)row_column, row, &row_label, error) != MILENA_OK) break;
+        } else break;
+        if (column_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)value_column, row, &code, &column_label, error) != MILENA_OK) break;
+        } else if (column_data->type == MILENA_COLUMN_STRING) {
+            if (milena_table_get_string(table, (size_t)value_column, row, &column_label, error) != MILENA_OK) break;
+        } else break;
+        rows[count] = row_label; columns[count] = column_label; count++;
+    }
+    SstContingency2D contingency;
+    sst_contingency_init(&contingency);
+    MilenaStatus status = sst_contingency_build(rows, columns, count, &contingency, error);
+    SstChiSquareResult result;
+    if (status == MILENA_OK) status = sst_contingency_chi_square(&contingency, &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.chi_cuadrado.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"chi_cuadrado\",\"filas\":%zu,\"columnas\":%zu,\"estadistico\":%.10g,\"gl\":%zu,\"celdas_bajas\":%zu}\n",
+                        result.valid ? contingency.row_count : 0, result.valid ? contingency.column_count : 0,
+                        result.statistic, result.degrees_of_freedom, result.low_expected_cells);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    sst_contingency_destroy(&contingency);
+    free(rows); free(columns);
+    return status;
+}
+
+static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
+                                                const char *specification,
+                                                const char *output_path,
+                                                MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *exposure_name = runtime_trim(strtok(spec, ","));
+    char *event_name = runtime_trim(strtok(NULL, ","));
+    char *exposure_positive = runtime_trim(strtok(NULL, ","));
+    char *event_positive = runtime_trim(strtok(NULL, ","));
+    if (!exposure_name || !event_name || !exposure_positive || !event_positive) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "Riesgo requiere columnas y categorías positivas explícitas");
+        return MILENA_ERR_PARSE;
+    }
+    int exposure_column = milena_table_column_index(table, exposure_name);
+    int event_column = milena_table_column_index(table, event_name);
+    if (exposure_column < 0 || event_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna inexistente para riesgo SST");
+        return MILENA_ERR_DATA;
+    }
+    const MilenaTableColumn *exposure_data = milena_table_column(table, (size_t)exposure_column);
+    const MilenaTableColumn *event_data = milena_table_column(table, (size_t)event_column);
+    if ((exposure_data->type != MILENA_COLUMN_CATEGORICAL && exposure_data->type != MILENA_COLUMN_STRING) ||
+        (event_data->type != MILENA_COLUMN_CATEGORICAL && event_data->type != MILENA_COLUMN_STRING)) {
+        runtime_error(error, MILENA_ERR_TYPE, "Riesgo requiere columnas categóricas");
+        return MILENA_ERR_TYPE;
+    }
+    const char *exposure_labels[2] = {NULL, NULL};
+    const char *event_labels[2] = {NULL, NULL};
+    size_t counts[4] = {0, 0, 0, 0};
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)exposure_column, row) ||
+            milena_table_is_null(table, (size_t)event_column, row)) continue;
+        const char *exposure = NULL, *event = NULL;
+        if (exposure_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)exposure_column, row, &code, &exposure, error) != MILENA_OK) break;
+        } else if (milena_table_get_string(table, (size_t)exposure_column, row, &exposure, error) != MILENA_OK) break;
+        if (event_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)event_column, row, &code, &event, error) != MILENA_OK) break;
+        } else if (milena_table_get_string(table, (size_t)event_column, row, &event, error) != MILENA_OK) break;
+        size_t ei = exposure_labels[0] && strcmp(exposure_labels[0], exposure) == 0 ? 0 :
+                    exposure_labels[1] && strcmp(exposure_labels[1], exposure) == 0 ? 1 : 2;
+        size_t vi = event_labels[0] && strcmp(event_labels[0], event) == 0 ? 0 :
+                    event_labels[1] && strcmp(event_labels[1], event) == 0 ? 1 : 2;
+        if (ei == 2 && !exposure_labels[0]) { exposure_labels[0] = exposure; ei = 0; }
+        else if (ei == 2 && !exposure_labels[1]) { exposure_labels[1] = exposure; ei = 1; }
+        if (vi == 2 && !event_labels[0]) { event_labels[0] = event; vi = 0; }
+        else if (vi == 2 && !event_labels[1]) { event_labels[1] = event; vi = 1; }
+        if (ei < 2 && vi < 2) counts[ei * 2 + vi]++;
+    }
+    if (!exposure_labels[0] || !exposure_labels[1] || !event_labels[0] || !event_labels[1]) {
+        runtime_error(error, MILENA_ERR_DATA, "Riesgo requiere dos categorías por columna");
+        return MILENA_ERR_DATA;
+    }
+    size_t exposure_positive_index = SIZE_MAX;
+    size_t event_positive_index = SIZE_MAX;
+    for (size_t i = 0; i < 2; i++) {
+        if (strcmp(exposure_labels[i], exposure_positive) == 0) exposure_positive_index = i;
+        if (strcmp(event_labels[i], event_positive) == 0) event_positive_index = i;
+    }
+    if (exposure_positive_index == SIZE_MAX || event_positive_index == SIZE_MAX) {
+        runtime_error(error, MILENA_ERR_DATA, "Las categorías positivas no existen en la tabla");
+        return MILENA_ERR_DATA;
+    }
+    size_t control_index = 1 - exposure_positive_index;
+    size_t non_event_index = 1 - event_positive_index;
+    size_t exposed_events = counts[exposure_positive_index * 2 + event_positive_index];
+    size_t exposed_non_events = counts[exposure_positive_index * 2 + non_event_index];
+    size_t control_events = counts[control_index * 2 + event_positive_index];
+    size_t control_non_events = counts[control_index * 2 + non_event_index];
+    SstRiskMeasure result;
+    MilenaStatus status = sst_risk_ratio_odds_ratio(exposed_events, exposed_non_events,
+                                                     control_events, control_non_events,
+                                                     &result, error);
+    if (status == MILENA_OK) {
+        char path[2048];
+        int written = snprintf(path, sizeof(path), "%s.riesgo.json", output_path);
+        if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+        else {
+            FILE *out = fopen(path, "wb");
+            if (!out) status = MILENA_ERR_IO;
+            else {
+                fprintf(out, "{\"operacion\":\"riesgo\",\"eventos_expuestos\":%zu,\"no_eventos_expuestos\":%zu,\"eventos_control\":%zu,\"no_eventos_control\":%zu,\"riesgo_relativo\":%.10g,\"odds_ratio\":%.10g}\n",
+                        exposed_events, exposed_non_events, control_events, control_non_events,
+                        result.relative_risk, result.odds_ratio);
+                if (fclose(out) != 0) status = MILENA_ERR_IO;
+            }
+        }
+    }
+    return status;
+}
+
+static bool runtime_numeric_value(const MilenaTable *table, size_t column,
+                                   size_t row, double *value,
+                                   MilenaError *error) {
+    const MilenaTableColumn *data = milena_table_column(table, column);
+    const void *raw = NULL;
+    if (!data || data->type != MILENA_COLUMN_ARRAY ||
+        milena_table_get_array_value(table, column, row, &raw, error) != MILENA_OK) return false;
+    if (data->values.dtype == MILENA_DTYPE_FLOAT64) *value = *(const double *)raw;
+    else if (data->values.dtype == MILENA_DTYPE_FLOAT32) *value = (double)*(const float *)raw;
+    else if (data->values.dtype == MILENA_DTYPE_INT64) *value = (double)*(const int64_t *)raw;
+    else if (data->values.dtype == MILENA_DTYPE_UINT64) *value = (double)*(const uint64_t *)raw;
+    else return false;
+    return isfinite(*value);
+}
+
+static double runtime_decimal_double(const MilenaDecimal *value) {
+    double scale = 1.0;
+    for (int32_t i = 0; i < value->scale; i++) scale *= 10.0;
+    return (double)value->coefficient / scale;
+}
+
+static MilenaStatus runtime_write_finance_simple_interest(const MilenaTable *table,
+                                                           const char *specification,
+                                                           const char *output_path,
+                                                           MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *principal_name = runtime_trim(strtok(spec, ","));
+    char *rate_name = runtime_trim(strtok(NULL, ","));
+    char *period_text = runtime_trim(strtok(NULL, ","));
+    if (!principal_name || !rate_name || !period_text) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "interes_simple requiere principal,tasa,periodos");
+        return MILENA_ERR_PARSE;
+    }
+    char *end = NULL;
+    unsigned long periods_value = strtoul(period_text, &end, 10);
+    if (!end || *end != '\0' || periods_value > UINT32_MAX) {
+        runtime_error(error, MILENA_ERR_PARSE, "Periodos financieros inválidos");
+        return MILENA_ERR_PARSE;
+    }
+    int principal_column = milena_table_column_index(table, principal_name);
+    int rate_column = milena_table_column_index(table, rate_name);
+    if (principal_column < 0 || rate_column < 0) {
+        runtime_error(error, MILENA_ERR_DATA, "Columna financiera inexistente");
+        return MILENA_ERR_DATA;
+    }
+    MilenaDecimal total;
+    if (milena_decimal_from_i64(&total, 0, error) != MILENA_OK) return MILENA_ERR_INTERNAL;
+    size_t rows = 0;
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)principal_column, row) ||
+            milena_table_is_null(table, (size_t)rate_column, row)) continue;
+        double principal_value = 0.0, rate_value = 0.0;
+        if (!runtime_numeric_value(table, (size_t)principal_column, row, &principal_value, error) ||
+            !runtime_numeric_value(table, (size_t)rate_column, row, &rate_value, error)) continue;
+        char principal_text[64], rate_text[64];
+        snprintf(principal_text, sizeof(principal_text), "%.17g", principal_value);
+        snprintf(rate_text, sizeof(rate_text), "%.17g", rate_value);
+        MilenaDecimal principal, rate_decimal, interest;
+        MilenaRate rate;
+        MilenaStatus status = milena_decimal_from_string(&principal, principal_text, error);
+        if (status == MILENA_OK) status = milena_decimal_from_string(&rate_decimal, rate_text, error);
+        if (status == MILENA_OK) status = milena_rate_init(&rate, rate_decimal,
+                                                            MILENA_RATE_PERIODIC, 1, error);
+        if (status == MILENA_OK) status = milena_simple_interest(&interest, &principal,
+                                                                   &rate, (uint32_t)periods_value, error);
+        if (status != MILENA_OK) return status;
+        status = milena_decimal_add(&total, &total, &interest, error);
+        if (status != MILENA_OK) return status;
+        rows++;
+    }
+    char path[2048];
+    int written = snprintf(path, sizeof(path), "%s.interes_simple.json", output_path);
+    if (written < 0 || (size_t)written >= sizeof(path)) return MILENA_ERR_OVERFLOW;
+    FILE *out = fopen(path, "wb");
+    if (!out) return MILENA_ERR_IO;
+    fprintf(out, "{\"operacion\":\"interes_simple\",\"filas\":%zu,\"interes_total\":%.17g,\"fuente\":\"MilenaTable+finance\"}\n",
+            rows, runtime_decimal_double(&total));
+    if (fclose(out) != 0) return MILENA_ERR_IO;
+    return MILENA_OK;
+}
+
+static MilenaStatus runtime_write_sst_model(const MilenaTable *table,
+                                                 const char *specification,
+                                                 const char *output_path,
+                                                 MilenaError *error) {
+    char spec[512];
+    strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
+    spec[sizeof(spec) - 1] = '\0';
+    char *area_name = runtime_trim(strtok(spec, ","));
+    char *severity_name = runtime_trim(strtok(NULL, ","));
+    char *cargo_name = runtime_trim(strtok(NULL, ","));
+    if (!area_name || !severity_name || !cargo_name) {
+        runtime_error(error, MILENA_ERR_PARSE, "modelo_sst requiere area,severidad,cargo");
+        return MILENA_ERR_PARSE;
+    }
+    int area_column = milena_table_column_index(table, area_name);
+    int severity_column = milena_table_column_index(table, severity_name);
+    int cargo_column = milena_table_column_index(table, cargo_name);
+    const MilenaTableColumn *severity_data = severity_column < 0 ? NULL : milena_table_column(table, (size_t)severity_column);
+    if (area_column < 0 || cargo_column < 0 || !severity_data ||
+        severity_data->type != MILENA_COLUMN_ARRAY) {
+        runtime_error(error, MILENA_ERR_TYPE, "modelo_sst requiere area, severidad numérica y cargo");
+        return MILENA_ERR_TYPE;
+    }
+    SstEventList events;
+    sst_event_list_init(&events);
+    for (size_t row = 0; row < table->row_count; row++) {
+        if (milena_table_is_null(table, (size_t)area_column, row) ||
+            milena_table_is_null(table, (size_t)severity_column, row) ||
+            milena_table_is_null(table, (size_t)cargo_column, row)) continue;
+        const char *area = NULL, *cargo = NULL;
+        const MilenaTableColumn *area_data = milena_table_column(table, (size_t)area_column);
+        const MilenaTableColumn *cargo_data = milena_table_column(table, (size_t)cargo_column);
+        if (area_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)area_column, row, &code, &area, error) != MILENA_OK) break;
+        } else if (area_data->type == MILENA_COLUMN_STRING) {
+            if (milena_table_get_string(table, (size_t)area_column, row, &area, error) != MILENA_OK) break;
+        } else break;
+        if (cargo_data->type == MILENA_COLUMN_CATEGORICAL) {
+            uint32_t code = 0;
+            if (milena_table_get_category(table, (size_t)cargo_column, row, &code, &cargo, error) != MILENA_OK) break;
+        } else if (cargo_data->type == MILENA_COLUMN_STRING) {
+            if (milena_table_get_string(table, (size_t)cargo_column, row, &cargo, error) != MILENA_OK) break;
+        } else break;
+        const void *value = NULL;
+        if (milena_table_get_array_value(table, (size_t)severity_column, row, &value, error) != MILENA_OK) break;
+        SstEvent event;
+        sst_event_init(&event);
+        event.area = milena_strdup(area);
+        event.cargo = milena_strdup(cargo);
+        event.severidad = severity_data->values.dtype == MILENA_DTYPE_FLOAT64 ? *(const double *)value :
+                          severity_data->values.dtype == MILENA_DTYPE_FLOAT32 ? (double)*(const float *)value :
+                          severity_data->values.dtype == MILENA_DTYPE_INT64 ? (double)*(const int64_t *)value :
+                          (double)*(const uint64_t *)value;
+        event.has_severidad = true;
+        MilenaStatus append_status = sst_event_list_append(&events, &event, error);
+        sst_event_destroy(&event);
+        if (append_status != MILENA_OK) { sst_event_list_destroy(&events); return append_status; }
+    }
+    char path[2048];
+    int written = snprintf(path, sizeof(path), "%s.modelo_sst.json", output_path);
+    MilenaStatus status = MILENA_OK;
+    if (written < 0 || (size_t)written >= sizeof(path)) status = MILENA_ERR_OVERFLOW;
+    else {
+        FILE *out = fopen(path, "wb");
+        if (!out) status = MILENA_ERR_IO;
+        else {
+            fprintf(out, "{\"operacion\":\"modelo_sst\",\"eventos\":%zu,\"fuente\":\"MilenaTable\"}\n", events.count);
+            if (fclose(out) != 0) status = MILENA_ERR_IO;
+        }
+    }
+    sst_event_list_destroy(&events);
+    return status;
+}
+
+MilenaStatus milena_run_dataset_program(const char *source,
+                                        const char *script_filename,
+                                        FILE *output,
+                                        MilenaError *error) {
+    if (!source) {
+        runtime_error(error, MILENA_ERR_ARGUMENT,
+                      "El programa Milena no puede ser nulo");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (error) milena_error_clear(error);
+
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, source);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    if (!program || parser.has_error) {
+        if (error) *error = parser.error;
+        ast_destroy(program);
+        parser_release(&parser);
+        return error && error->code != MILENA_OK ? error->code : MILENA_ERR_PARSE;
+    }
+
+    MilenaStatus semantic_status = milena_validate_ast(program, error);
+    if (semantic_status != MILENA_OK) {
+        ast_destroy(program);
+        parser_release(&parser);
+        return semantic_status;
+    }
+
+    const ASTNode *analysis = NULL;
+    for (size_t i = 0; i < program->child_count; i++) {
+        if (program->children[i]->type == AST_BLOQUE_ANALISIS) {
+            analysis = program->children[i];
+            break;
+        }
+    }
+    const ASTNode *load = dataset_runtime_find_child(analysis, AST_LLAMADA_CARGAR);
+    if (!analysis || !load || !load->value) {
+        ast_destroy(program);
+        parser_release(&parser);
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "El análisis necesita dataset cargar datos(\"...\")");
+        return MILENA_ERR_PARSE;
+    }
+
+    char input[2048];
+    MilenaStatus status = dataset_runtime_path(load->value, script_filename, false,
+                                               input, sizeof(input), error);
+    if (status != MILENA_OK) {
+        ast_destroy(program);
+        parser_release(&parser);
+        return status;
+    }
+
+    MilenaDatasetRuntime runtime = {0};
+    dataset_init(&runtime.dataset);
+    status = dataset_load_csv(&runtime.dataset, input, ',', error);
+    if (status == MILENA_OK) runtime.loaded = true;
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < analysis->child_count; i++) {
+            const ASTNode *node = analysis->children[i];
+            if (!node) continue;
+            if (node->type == AST_BLOQUE_LIMPIAR) {
+                status = dataset_runtime_clean(node, &runtime.dataset, error);
+            } else if (node->type == AST_BLOQUE_TRANSFORMAR) {
+                status = dataset_runtime_transform(node, &runtime.dataset, error);
+            }
+            if (status != MILENA_OK) break;
+        }
+    }
+
+    char output_path[2048];
+    const ASTNode *export_node = dataset_runtime_find_child(analysis,
+                                                              AST_BLOQUE_EXPORTAR);
+    const char *requested_output = export_node && export_node->value
+        ? export_node->value : "reporte_dataset.json";
+    if (status == MILENA_OK) {
+        status = dataset_runtime_path(requested_output, script_filename, true,
+                                      output_path, sizeof(output_path), error);
+    }
+    MilenaSchema schema;
+    schema_init(&schema);
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < analysis->child_count; i++) {
+            const ASTNode *node = analysis->children[i];
+            if (!node || !node->value) continue;
+            if (node->type != AST_DECLARACION_VARIABLE &&
+                node->type != AST_DECLARACION_ENTRADA &&
+                node->type != AST_DECLARACION_SALIDA) continue;
+            MilenaVariableType type = MILENA_VAR_TEXT;
+            if (node->type_name) {
+                if (strcmp(node->type_name, "numerica") == 0) type = MILENA_VAR_NUMERIC;
+                else if (strcmp(node->type_name, "categorica") == 0) type = MILENA_VAR_CATEGORICAL;
+                else if (strcmp(node->type_name, "binaria") == 0) type = MILENA_VAR_BINARY;
+                else if (strcmp(node->type_name, "fecha") == 0 ||
+                         strcmp(node->type_name, "texto") == 0) type = MILENA_VAR_TEXT;
+            }
+            MilenaVariableRole role = MILENA_ROLE_FEATURE;
+            if (node->type == AST_DECLARACION_ENTRADA) {
+                role = MILENA_ROLE_CATEGORICAL_INPUT;
+                type = MILENA_VAR_CATEGORICAL;
+            } else if (node->type == AST_DECLARACION_SALIDA) {
+                role = MILENA_ROLE_BINARY_OUTPUT;
+                type = MILENA_VAR_BINARY;
+            }
+            status = schema_add(&schema, node->value, type, role, error);
+            if (status != MILENA_OK) break;
+        }
+        if (status == MILENA_OK) {
+            /* Las columnas derivadas por transformar también son parte del
+             * esquema canónico; no se dejan fuera del reporte. */
+            for (size_t i = 0; i < runtime.dataset.column_count; i++) {
+                const char *name = runtime.dataset.headers[i];
+                if (schema_index(&schema, name) >= 0) continue;
+                MilenaVariableType type = strcmp(name, "total") == 0
+                    ? MILENA_VAR_NUMERIC : MILENA_VAR_TEXT;
+                status = schema_add(&schema, name, type,
+                                    MILENA_ROLE_FEATURE, error);
+                if (status != MILENA_OK) break;
+            }
+        }
+    }
+    MilenaTable canonical_table = {0};
+    milena_table_init(&canonical_table);
+    if (status == MILENA_OK) {
+        /* El Dataset deja de ser el valor final: se valida y materializa en
+         * la tabla tipada común antes de producir el reporte. */
+        status = milena_table_from_dataset(&canonical_table, &runtime.dataset,
+                                           &schema, error);
+    }
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < analysis->child_count; i++) {
+            const ASTNode *block = analysis->children[i];
+            if (!block) continue;
+            if (block->type == AST_BLOQUE_LIMPIAR) {
+                for (size_t j = 0; j < block->child_count; j++) {
+                    const ASTNode *command = block->children[j];
+                    if (!command || !command->value ||
+                        strcmp(command->value, "eliminar") != 0) continue;
+                    MilenaTable cleaned = {0};
+                    milena_table_init(&cleaned);
+                    if (command->type == AST_COMANDO_NULOS) {
+                        status = milena_table_drop_null(&cleaned, &canonical_table, error);
+                    } else if (command->type == AST_COMANDO_DUPLICADOS) {
+                        status = milena_table_drop_duplicates(&cleaned, &canonical_table, error);
+                    } else {
+                        milena_table_destroy(&cleaned);
+                        continue;
+                    }
+                    if (status == MILENA_OK) {
+                        milena_table_swap(&canonical_table, &cleaned);
+                    }
+                    milena_table_destroy(&cleaned);
+                    if (status != MILENA_OK) break;
+                }
+            } else if (block->type == AST_BLOQUE_TRANSFORMAR) {
+                for (size_t j = 0; j < block->child_count; j++) {
+                    const ASTNode *command = block->children[j];
+                    if (!command || !command->value) continue;
+                    if (command->type == AST_COMANDO_TOTAL) {
+                        char left[128] = {0}, right[128] = {0};
+                        if (sscanf(command->value, " %127s * %127s", left, right) != 2) {
+                            runtime_error(error, MILENA_ERR_PARSE,
+                                          "La transformación total debe tener la forma columna * columna");
+                            status = MILENA_ERR_PARSE;
+                            break;
+                        }
+                        status = milena_table_add_product(&canonical_table, left, right,
+                                                          "total", error);
+                        if (status == MILENA_OK) {
+                            status = schema_add(&schema, "total", MILENA_VAR_NUMERIC,
+                                                MILENA_ROLE_FEATURE, error);
+                        }
+                    } else if (command->type == AST_COMANDO_PERIODO) {
+                        if (strcmp(command->value, "mes de fecha") != 0) {
+                            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                          "Solo se admite extraer el mes de fecha");
+                            status = MILENA_ERR_UNSUPPORTED;
+                            break;
+                        }
+                        status = milena_table_add_month(&canonical_table, "fecha",
+                                                        "periodo", error);
+                        if (status == MILENA_OK) {
+                            status = schema_add(&schema, "periodo", MILENA_VAR_TEXT,
+                                                MILENA_ROLE_FEATURE, error);
+                        }
+                    }
+                    if (status != MILENA_OK) break;
+                }
+            } else if (block->type == AST_BLOQUE_AGRUPAR) {
+                const ASTNode *group_key = NULL;
+                const ASTNode *summaries[16];
+                size_t summary_count = 0;
+                for (size_t j = 0; j < block->child_count; j++) {
+                    if (block->children[j]->type == AST_AGRUPACION_POR) {
+                        group_key = block->children[j];
+                    } else if (block->children[j]->type == AST_RESUMEN_METRICA &&
+                               summary_count < 16) {
+                        summaries[summary_count++] = block->children[j];
+                    }
+                }
+                MilenaAggregateSpec specifications[16];
+                MilenaAggregateOp operations[16];
+                char value_columns[16][128];
+                char metrics[16][32];
+                bool valid_specifications = group_key != NULL && summary_count > 0;
+                for (size_t j = 0; valid_specifications && j < summary_count; j++) {
+                    if (!summaries[j]->value ||
+                        sscanf(summaries[j]->value, "%31[^:]:%127s", metrics[j],
+                               value_columns[j]) != 2) {
+                        valid_specifications = false;
+                        break;
+                    }
+                    if (strcmp(metrics[j], "suma") == 0) operations[j] = MILENA_AGG_SUM;
+                    else if (strcmp(metrics[j], "media") == 0) operations[j] = MILENA_AGG_MEAN;
+                    else if (strcmp(metrics[j], "minimo") == 0) operations[j] = MILENA_AGG_MIN;
+                    else if (strcmp(metrics[j], "maximo") == 0) operations[j] = MILENA_AGG_MAX;
+                    else if (strcmp(metrics[j], "conteo") == 0) operations[j] = MILENA_AGG_COUNT;
+                    else {
+                        runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                      "Métrica de agrupación no soportada");
+                        status = MILENA_ERR_UNSUPPORTED;
+                        valid_specifications = false;
+                        break;
+                    }
+                    specifications[j].value_column = value_columns[j];
+                    specifications[j].operation = operations[j];
+                    specifications[j].output_name = NULL;
+                }
+                if (!valid_specifications && status == MILENA_OK) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La agrupación requiere #por y una o más métricas");
+                    status = MILENA_ERR_PARSE;
+                }
+                if (status == MILENA_OK) {
+                    const char *key_names[1] = {group_key->value};
+                    MilenaTable grouped = {0};
+                    milena_table_init(&grouped);
+                    status = milena_table_group_by(&grouped, &canonical_table,
+                                                   key_names, 1,
+                                                   specifications, summary_count,
+                                                   error);
+                    if (status == MILENA_OK) {
+                        milena_table_swap(&canonical_table, &grouped);
+                        for (size_t j = 0; j < summary_count; j++) {
+                            char aggregate_name[160];
+                            const char *suffix = metrics[j];
+                            (void)snprintf(aggregate_name, sizeof(aggregate_name),
+                                           "%s_%s", value_columns[j], suffix);
+                            status = schema_add(&schema, aggregate_name,
+                                                MILENA_VAR_NUMERIC,
+                                                MILENA_ROLE_FEATURE, error);
+                            if (status != MILENA_OK) break;
+                        }
+                    }
+                    milena_table_destroy(&grouped);
+                }
+            } else if (block->type == AST_BLOQUE_RESUMIR) {
+                MilenaAggregateSpec specifications[16];
+                MilenaAggregateOp operations[16];
+                MilenaTableStatistic statistic_operations[16];
+                double percentiles[16] = {0.0};
+                bool percentile_metric[16] = {false};
+                bool advanced[16] = {false};
+                char value_columns[16][128];
+                char metrics[16][32];
+                size_t summary_count = block->child_count > 16 ? 16 : block->child_count;
+                size_t aggregate_count = 0;
+                bool valid_specifications = summary_count > 0;
+                for (size_t j = 0; valid_specifications && j < summary_count; j++) {
+                    const ASTNode *summary = block->children[j];
+                    if (!summary || summary->type != AST_RESUMEN_METRICA ||
+                        !summary->value ||
+                        sscanf(summary->value, "%31[^:]:%127s", metrics[j],
+                               value_columns[j]) != 2) {
+                        valid_specifications = false;
+                        break;
+                    }
+                    if (strcmp(metrics[j], "suma") == 0) operations[aggregate_count] = MILENA_AGG_SUM;
+                    else if (strcmp(metrics[j], "media") == 0) operations[aggregate_count] = MILENA_AGG_MEAN;
+                    else if (strcmp(metrics[j], "minimo") == 0) operations[aggregate_count] = MILENA_AGG_MIN;
+                    else if (strcmp(metrics[j], "maximo") == 0) operations[aggregate_count] = MILENA_AGG_MAX;
+                    else if (strcmp(metrics[j], "conteo") == 0) operations[aggregate_count] = MILENA_AGG_COUNT;
+                    else if (strcmp(metrics[j], "varianza") == 0) {
+                        advanced[j] = true; statistic_operations[j] = MILENA_STAT_VARIANCE;
+                        continue;
+                    } else if (strcmp(metrics[j], "desviacion_estandar") == 0) {
+                        advanced[j] = true; statistic_operations[j] = MILENA_STAT_STDDEV;
+                        continue;
+                    } else if (strcmp(metrics[j], "mediana") == 0) {
+                        advanced[j] = true; statistic_operations[j] = MILENA_STAT_MEDIAN;
+                        continue;
+                    } else if (strcmp(metrics[j], "percentil") == 0) {
+                        char *comma = strchr(value_columns[j], ',');
+                        if (!comma) {
+                            valid_specifications = false;
+                            break;
+                        }
+                        *comma = '\0';
+                        char *end = NULL;
+                        percentiles[j] = strtod(comma + 1, &end);
+                        if (end == comma + 1 || *end != '\0' ||
+                            percentiles[j] < 0.0 || percentiles[j] > 100.0) {
+                            valid_specifications = false;
+                            break;
+                        }
+                        advanced[j] = true; percentile_metric[j] = true;
+                        continue;
+                    } else {
+                        runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                      "Métrica de resumen no soportada");
+                        status = MILENA_ERR_UNSUPPORTED;
+                        valid_specifications = false;
+                        break;
+                    }
+                    specifications[aggregate_count].value_column = value_columns[j];
+                    specifications[aggregate_count].operation = operations[aggregate_count];
+                    specifications[aggregate_count].output_name = NULL;
+                    aggregate_count++;
+                }
+                if (!valid_specifications && status == MILENA_OK) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "El resumen requiere una o más métricas");
+                    status = MILENA_ERR_PARSE;
+                }
+                MilenaTable source_snapshot = {0};
+                milena_table_init(&source_snapshot);
+                bool has_advanced = false;
+                for (size_t j = 0; j < summary_count; j++) has_advanced |= advanced[j];
+                if (status == MILENA_OK && has_advanced) {
+                    status = milena_table_clone(&source_snapshot, &canonical_table, error);
+                }
+                if (status == MILENA_OK) {
+                    MilenaTable summarized = {0};
+                    milena_table_init(&summarized);
+                    status = milena_table_summarize(&summarized, &canonical_table,
+                                                   specifications, aggregate_count,
+                                                   error);
+                    for (size_t j = 0; status == MILENA_OK && j < summary_count; j++) {
+                        if (!advanced[j]) continue;
+                        char statistic_name[160];
+                        (void)snprintf(statistic_name, sizeof(statistic_name),
+                                       "%s_%s", value_columns[j], metrics[j]);
+                        if (percentile_metric[j]) {
+                            status = milena_table_add_percentile(
+                                &summarized, &source_snapshot, value_columns[j],
+                                statistic_name, percentiles[j], error);
+                        } else {
+                            status = milena_table_add_statistic(
+                                &summarized, &source_snapshot, value_columns[j],
+                                statistic_name, statistic_operations[j], error);
+                        }
+                    }
+                    if (status == MILENA_OK) {
+                        milena_table_swap(&canonical_table, &summarized);
+                        for (size_t j = 0; j < summary_count; j++) {
+                            char aggregate_name[160];
+                            (void)snprintf(aggregate_name, sizeof(aggregate_name),
+                                           "%s_%s", value_columns[j], metrics[j]);
+                            status = schema_add(&schema, aggregate_name,
+                                                MILENA_VAR_NUMERIC,
+                                                MILENA_ROLE_FEATURE, error);
+                            if (status != MILENA_OK) break;
+                        }
+                    }
+                    milena_table_destroy(&summarized);
+                }
+                milena_table_destroy(&source_snapshot);
+            } else if (block->type == AST_BLOQUE_UNIR) {
+                const ASTNode *right_node = NULL;
+                const ASTNode *key_node = NULL;
+                for (size_t j = 0; j < block->child_count; j++) {
+                    if (block->children[j]->type == AST_COMANDO_DERECHA) right_node = block->children[j];
+                    else if (block->children[j]->type == AST_COMANDO_CLAVE) key_node = block->children[j];
+                }
+                if (!right_node || !key_node || !right_node->value || !key_node->value) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La unión requiere #derecha y #clave");
+                    status = MILENA_ERR_PARSE;
+                } else {
+                    char right_path[2048];
+                    status = dataset_runtime_path(right_node->value, script_filename,
+                                                  false, right_path, sizeof(right_path), error);
+                    Dataset right_dataset;
+                    dataset_init(&right_dataset);
+                    MilenaTable right_table = {0};
+                    milena_table_init(&right_table);
+                    if (status == MILENA_OK)
+                        status = dataset_load_csv(&right_dataset, right_path, ',', error);
+                    if (status == MILENA_OK)
+                        status = milena_table_from_dataset(&right_table, &right_dataset,
+                                                           &schema, error);
+                    if (status == MILENA_OK) {
+                        const char *left_keys[1] = {key_node->value};
+                        const char *right_keys[1] = {key_node->value};
+                        MilenaTable joined = {0};
+                        milena_table_init(&joined);
+                        status = milena_table_join(&joined, &canonical_table,
+                                                   &right_table, left_keys, right_keys,
+                                                   1, MILENA_JOIN_INNER, error);
+                        if (status == MILENA_OK) {
+                            milena_table_swap(&canonical_table, &joined);
+                            for (size_t j = 0; j < canonical_table.column_count; j++) {
+                                const char *name = canonical_table.columns[j].name;
+                                if (schema_index(&schema, name) < 0) {
+                                    status = schema_add(&schema, name, MILENA_VAR_TEXT,
+                                                        MILENA_ROLE_FEATURE, error);
+                                    if (status != MILENA_OK) break;
+                                }
+                            }
+                        }
+                        milena_table_destroy(&joined);
+                    }
+                    milena_table_destroy(&right_table);
+                    dataset_destroy(&right_dataset);
+                }
+            } else if (block->type == AST_BLOQUE_SELECCIONAR) {
+                const ASTNode *columns_node = block->child_count > 0 ? block->children[0] : NULL;
+                if (!columns_node || !columns_node->value) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "Seleccionar requiere #columnas(\"...\")");
+                    status = MILENA_ERR_PARSE;
+                } else {
+                    char *list = milena_strdup(columns_node->value);
+                    const char *names[32];
+                    size_t name_count = 0;
+                    if (!list) status = MILENA_ERR_MEMORY;
+                    else {
+                        char *item = strtok(list, ",");
+                        while (item && name_count < 32) {
+                            while (*item == ' ') item++;
+                            names[name_count++] = item;
+                            item = strtok(NULL, ",");
+                        }
+                        if (name_count == 0 || item != NULL) {
+                            runtime_error(error, MILENA_ERR_PARSE,
+                                          "Lista de columnas inválida");
+                            status = MILENA_ERR_PARSE;
+                        } else {
+                            MilenaTable selected = {0};
+                            milena_table_init(&selected);
+                            status = milena_table_select_columns(
+                                &selected, &canonical_table, names, name_count, error);
+                            if (status == MILENA_OK) milena_table_swap(&canonical_table, &selected);
+                            milena_table_destroy(&selected);
+                        }
+                        free(list);
+                    }
+                }
+            } else if (block->type == AST_BLOQUE_FILTRAR) {
+                const ASTNode *condition = block->child_count > 0 ? block->children[0] : NULL;
+                char column[128] = {0}, operator_text[3] = {0};
+                double threshold = 0.0;
+                if (!condition || !condition->value ||
+                    sscanf(condition->value, " %127s %2s %lf", column,
+                           operator_text, &threshold) != 3) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La condición debe tener la forma columna operador número");
+                    status = MILENA_ERR_PARSE;
+                } else {
+                    MilenaTable filtered = {0};
+                    milena_table_init(&filtered);
+                    status = milena_table_filter_numeric(&filtered, &canonical_table,
+                                                         column, operator_text,
+                                                         threshold, error);
+                    if (status == MILENA_OK) milena_table_swap(&canonical_table, &filtered);
+                    milena_table_destroy(&filtered);
+                }
+            }
+            if (status != MILENA_OK) break;
+        }
+    }
+    if (status == MILENA_OK) {
+        status = milena_validate_sst_table(analysis, &canonical_table, error);
+    }
+    if (status == MILENA_OK) {
+        /* La exportación final consume directamente la tabla tipada. */
+        status = analysis_table_report(&canonical_table, &schema,
+                                       output_path, error);
+    }
+    if (status == MILENA_OK) {
+        for (size_t i = 0; i < analysis->child_count; i++) {
+            const ASTNode *node = analysis->children[i];
+            if (!node || node->type != AST_COMANDO_SST || !node->value) continue;
+            if (!node->type_name) {
+                runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
+                status = MILENA_ERR_UNSUPPORTED;
+                break;
+            }
+            if (strcmp(node->type_name, "perfil_avanzado") == 0) {
+                status = runtime_write_sst_profile(&canonical_table, node->value,
+                                                   output_path, error);
+            } else if (strcmp(node->type_name, "histograma") == 0) {
+                status = runtime_write_sst_histogram(&canonical_table, node->value,
+                                                     output_path, error);
+            } else if (strcmp(node->type_name, "normalidad") == 0) {
+                status = runtime_write_sst_normality(&canonical_table, node->value,
+                                                     output_path, error);
+            } else if (strcmp(node->type_name, "tasa") == 0) {
+                status = runtime_write_sst_rate(&canonical_table, node->value,
+                                                output_path, error);
+            } else if (strcmp(node->type_name, "poisson") == 0) {
+                status = runtime_write_sst_poisson(&canonical_table, node->value,
+                                                   output_path, error);
+            } else if (strcmp(node->type_name, "correlacion") == 0) {
+                status = runtime_write_sst_correlation(&canonical_table, node->value,
+                                                       output_path, error);
+            } else if (strcmp(node->type_name, "wilcoxon") == 0) {
+                status = runtime_write_sst_wilcoxon(&canonical_table, node->value,
+                                                    output_path, error);
+            } else if (strcmp(node->type_name, "chi_cuadrado") == 0) {
+                status = runtime_write_sst_chi_square(&canonical_table, node->value,
+                                                      output_path, error);
+            } else if (strcmp(node->type_name, "riesgo") == 0) {
+                status = runtime_write_sst_risk(&canonical_table, node->value,
+                                                output_path, error);
+            } else if (strcmp(node->type_name, "modelo_sst") == 0) {
+                status = runtime_write_sst_model(&canonical_table, node->value,
+                                                 output_path, error);
+            } else if (strcmp(node->type_name, "interes_simple") == 0) {
+                status = runtime_write_finance_simple_interest(&canonical_table, node->value,
+                                                               output_path, error);
+            } else {
+                runtime_error(error, MILENA_ERR_UNSUPPORTED, "Comando SST no soportado");
+                status = MILENA_ERR_UNSUPPORTED;
+            }
+            if (status != MILENA_OK) break;
+        }
+    }
+    size_t final_rows = canonical_table.row_count;
+    size_t final_columns = canonical_table.column_count;
+    milena_table_destroy(&canonical_table);
+    if (status == MILENA_OK) {
+        FILE *stream = output ? output : stdout;
+        fprintf(stream, "Programa canónico ejecutado: %s\n", script_filename ? script_filename : "<memoria>");
+        fprintf(stream, "Filas: %zu | Columnas: %zu | Salida: %s\n",
+                final_rows, final_columns, output_path);
+    }
+
+    schema_destroy(&schema);
+    if (runtime.loaded) dataset_destroy(&runtime.dataset);
     ast_destroy(program);
     parser_release(&parser);
     return status;

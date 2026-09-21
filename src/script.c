@@ -1,15 +1,11 @@
 #include "script.h"
 #include "analysis.h"
-#include "sst_advanced.h"
-#include "sst_contingency.h"
-#include "sst_correlation.h"
-#include "sst_histogram.h"
-#include "sst_inference.h"
-#include "sst_model.h"
-#include "sst_normality.h"
-#include "sst_rates.h"
 #include "array.h"
 #include "language_runtime.h"
+#include "ast.h"
+#include "lexer.h"
+#include "parser.h"
+#include "interpreter.h"
 #include "user_functions.h"
 #include <ctype.h>
 
@@ -246,9 +242,7 @@ static MilenaStatus parse_schema(const char *script, MilenaSchema *schema, Milen
 static bool command_known(const char *text) {
     static const char *known[] = {
         "#datos", "#estadistica", "#nulos", "#duplicados", "#total",
-        "#periodo", "#condicion", "#perfil_numerico", "#perfil_avanzado",
-        "#histograma", "#normalidad", "#balance", "#tasa", "#poisson", "#correlacion",
-        "#chi_cuadrado"
+        "#periodo", "#condicion", "#perfil_numerico"
     };
     for (size_t i = 0; i < sizeof(known) / sizeof(known[0]); i++) {
         if (strncmp(text, known[i], strlen(known[i])) == 0) return true;
@@ -277,263 +271,6 @@ static MilenaStatus validate_commands(const char *script, MilenaError *error) {
     free(copy);
     return MILENA_OK;
 }
-
-static MilenaStatus numeric_column(const Dataset *dataset, const char *name,
-                                 double **values, size_t *count, MilenaError *error) {
-    int index = dataset_column_index(dataset, name);
-    if (index < 0) {
-        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0, "Columna numérica inexistente");
-        return MILENA_ERR_DATA;
-    }
-    double *result = (double *)calloc(dataset->row_count, sizeof(*result));
-    if (dataset->row_count && !result) return MILENA_ERR_MEMORY;
-    size_t used = 0;
-    for (size_t r = 0; r < dataset->row_count; r++) {
-        double value;
-        if (milena_parse_double(dataset->rows[r][index], &value) == MILENA_OK) {
-            result[used++] = value;
-        }
-    }
-    if (used == 0) {
-        free(result);
-        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0, "Columna sin valores numéricos válidos");
-        return MILENA_ERR_DATA;
-    }
-    *values = result;
-    *count = used;
-    return MILENA_OK;
-}
-
-static MilenaStatus paired_columns(const Dataset *dataset, const char *left,
-                                 const char *right, double **x, double **y,
-                                 size_t *count, MilenaError *error) {
-    int li = dataset_column_index(dataset, left);
-    int ri = dataset_column_index(dataset, right);
-    if (li < 0 || ri < 0) return MILENA_ERR_DATA;
-    double *xx = (double *)calloc(dataset->row_count, sizeof(*xx));
-    double *yy = (double *)calloc(dataset->row_count, sizeof(*yy));
-    if ((dataset->row_count && !xx) || (dataset->row_count && !yy)) {
-        free(xx); free(yy); return MILENA_ERR_MEMORY;
-    }
-    size_t used = 0;
-    for (size_t r = 0; r < dataset->row_count; r++) {
-        double a, b;
-        if (milena_parse_double(dataset->rows[r][li], &a) == MILENA_OK &&
-            milena_parse_double(dataset->rows[r][ri], &b) == MILENA_OK) {
-            xx[used] = a; yy[used] = b; used++;
-        }
-    }
-    if (used < 3) {
-        free(xx); free(yy);
-        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0, "Pocos pares numéricos válidos");
-        return MILENA_ERR_DATA;
-    }
-    *x = xx; *y = yy; *count = used;
-    return MILENA_OK;
-}
-
-static void json_text(FILE *out, const char *text) {
-    fputc('"', out);
-    for (const unsigned char *p = (const unsigned char *)(text ? text : ""); *p; p++) {
-        if (*p == '"') fputs("\\\"", out);
-        else if (*p == '\\') fputs("\\\\", out);
-        else if (*p == '\n') fputs("\\n", out);
-        else fputc(*p, out);
-    }
-    fputc('"', out);
-}
-
-static MilenaStatus run_sst_commands(const char *script, const Dataset *dataset,
-                                   const char *output, MilenaError *error) {
-    char path[1200];
-    int written = snprintf(path, sizeof(path), "%s.sst.json", output);
-    if (written < 0 || (size_t)written >= sizeof(path)) return MILENA_ERR_OVERFLOW;
-    FILE *report = fopen(path, "wb");
-    if (!report) return MILENA_ERR_IO;
-    fprintf(report, "{\n  \"analisis\": \"sst_comandos\",\n  \"proposito\": \"apoyo_preventivo_sst\",\n  \"determina_causalidad\": false,\n  \"requiere_revision_profesional\": true,\n  \"operaciones\": [\n");
-    bool first = true;
-    char *copy = milena_strdup(script);
-    if (!copy) { fclose(report); return MILENA_ERR_MEMORY; }
-    char *line = strtok(copy, "\n\r");
-    while (line) {
-        char *text = trim_left(line);
-        MilenaStatus status = MILENA_OK;
-        if (strncmp(text, "#perfil_avanzado", 16) == 0 ||
-            strncmp(text, "#perfil_numerico", 16) == 0) {
-            char column[256];
-            if (!get_quoted(text, 0, column, sizeof(column))) status = MILENA_ERR_PARSE;
-            double *values = NULL; size_t count = 0;
-            if (status == MILENA_OK) status = numeric_column(dataset, column, &values, &count, error);
-            SstAdvancedStats stats;
-            if (status == MILENA_OK) status = sst_advanced_compute(values, NULL, count, &stats, error);
-            if (status == MILENA_OK) {
-                if (!first) fputs(",\n", report); first = false;
-                fputs("    {\"operacion\": \"perfil_avanzado\", \"variable\": ", report);
-                json_text(report, column);
-                fprintf(report, ", \"n\": %zu, \"invalidos\": %zu, \"media\": %.10g, \"desviacion\": %.10g, \"cv\": %.10g, \"asimetria\": %.10g, \"kurtosis_exceso\": %.10g, \"p90\": %.10g, \"p95\": %.10g}",
-                        stats.count, stats.invalid, stats.mean, stats.standard_deviation,
-                        stats.coefficient_variation, stats.skewness, stats.excess_kurtosis,
-                        stats.p90, stats.p95);
-            }
-            free(values);
-        } else if (strncmp(text, "#histograma", 11) == 0) {
-            char column[256];
-            if (!get_quoted(text, 0, column, sizeof(column))) status = MILENA_ERR_PARSE;
-            size_t bins = 5;
-            const char *bp = strstr(text, "bins");
-            if (bp) { const char *eq = strchr(bp, '='); if (eq) bins = (size_t)strtoul(eq + 1, NULL, 10); }
-            double *values = NULL; size_t count = 0;
-            if (status == MILENA_OK) status = numeric_column(dataset, column, &values, &count, error);
-            SstAdvancedStats stats;
-            SstHistogram histogram;
-            if (status == MILENA_OK) status = sst_advanced_compute(values, NULL, count, &stats, error);
-            if (status == MILENA_OK) status = sst_histogram_init(&histogram, bins, stats.minimum, stats.maximum, error);
-            if (status == MILENA_OK) for (size_t i = 0; i < count; i++) (void)sst_histogram_add(&histogram, values[i], error);
-            if (status == MILENA_OK) {
-                if (!first) fputs(",\n", report); first = false;
-                fprintf(report, "    {\"operacion\": \"histograma\", \"variable\": "); json_text(report, column);
-                fprintf(report, ", \"bins\": [");
-                for (size_t i = 0; i < histogram.bin_count; i++) {
-                    if (i) fputs(", ", report);
-                    fprintf(report, "%zu", histogram.counts[i]);
-                }
-                fprintf(report, "], \"bajo_minimo\": %zu, \"sobre_maximo\": %zu}", histogram.underflow, histogram.overflow);
-            }
-            if (status == MILENA_OK) sst_histogram_destroy(&histogram);
-            free(values);
-        } else if (strncmp(text, "#normalidad", 11) == 0) {
-            char column[256];
-            if (!get_quoted(text, 0, column, sizeof(column))) status = MILENA_ERR_PARSE;
-            double *values = NULL; size_t count = 0;
-            if (status == MILENA_OK) status = numeric_column(dataset, column, &values, &count, error);
-            SstNormalityResult normality;
-            if (status == MILENA_OK) status = sst_normality_test(values, count, &normality, error);
-            if (status == MILENA_OK) {
-                if (!first) fputs(",\n", report); first = false;
-                fputs("    {\"operacion\": \"normalidad\", \"variable\": ", report); json_text(report, column);
-                fprintf(report, ", \"metodo\": "); json_text(report, normality.method);
-                fprintf(report, ", \"estadistico\": %.10g, \"p\": %.10g, \"normal\": %s, \"aproximado\": %s, \"interpretacion\": ",
-                        normality.statistic, normality.p_value,
-                        normality.normal ? "true" : "false",
-                        normality.approximate ? "true" : "false");
-                json_text(report, normality.interpretation);
-                fputs("}", report);
-            }
-            free(values);
-        } else if (strncmp(text, "#poisson", 8) == 0) {
-            char event_column[256], exposure_column[256];
-            if (!get_quoted(text, 0, event_column, sizeof(event_column)) ||
-                !get_quoted(text, 1, exposure_column, sizeof(exposure_column))) status = MILENA_ERR_PARSE;
-            double factor = 200000.0;
-            const char *factor_text = strstr(text, "factor");
-            if (factor_text) { const char *equal = strchr(factor_text, '='); if (equal) factor = strtod(equal + 1, NULL); }
-            int event_index = dataset_column_index(dataset, event_column);
-            int exposure_index = dataset_column_index(dataset, exposure_column);
-            size_t incidents = 0; double exposure = 0.0;
-            if (status == MILENA_OK && (event_index < 0 || exposure_index < 0)) status = MILENA_ERR_DATA;
-            if (status == MILENA_OK) for (size_t i = 0; i < dataset->row_count; i++) {
-                if (sst_binary_parse(dataset->rows[i][event_index]) == SST_BINARY_TRUE) incidents++;
-                double hours; if (milena_parse_double(dataset->rows[i][exposure_index], &hours) == MILENA_OK && hours >= 0.0) exposure += hours;
-            }
-            SstPoissonInterval interval;
-            if (status == MILENA_OK) status = sst_poisson_exact_interval(incidents, exposure, factor, 0.95, &interval, error);
-            if (status == MILENA_OK) {
-                if (!first) fputs(",\n", report); first = false;
-                fputs("    {\"operacion\": \"poisson\", \"evento\": ", report); json_text(report, event_column);
-                fputs(", \"exposicion\": ", report); json_text(report, exposure_column);
-                fprintf(report, ", \"eventos\": %zu, \"tasa\": %.10g, \"ic_inferior\": %.10g, \"ic_superior\": %.10g, \"nivel\": 0.95, \"aproximado\": %s}", incidents, interval.rate, interval.lower, interval.upper, interval.approximate ? "true" : "false");
-            }
-        } else if (strncmp(text, "#tasa", 5) == 0) {
-            char event_column[256], exposure_column[256];
-            if (!get_quoted(text, 0, event_column, sizeof(event_column)) ||
-                !get_quoted(text, 1, exposure_column, sizeof(exposure_column))) {
-                status = MILENA_ERR_PARSE;
-            }
-            double factor = 200000.0;
-            const char *factor_text = strstr(text, "factor");
-            if (factor_text) {
-                const char *equal = strchr(factor_text, '=');
-                if (equal) factor = strtod(equal + 1, NULL);
-            }
-            int event_index = dataset_column_index(dataset, event_column);
-            int exposure_index = dataset_column_index(dataset, exposure_column);
-            size_t incidents = 0; double exposure = 0.0;
-            if (status == MILENA_OK && (event_index < 0 || exposure_index < 0)) status = MILENA_ERR_DATA;
-            if (status == MILENA_OK) {
-                for (size_t i = 0; i < dataset->row_count; i++) {
-                    SstBinaryValue binary = sst_binary_parse(dataset->rows[i][event_index]);
-                    if (binary == SST_BINARY_TRUE) incidents++;
-                    double hours;
-                    if (milena_parse_double(dataset->rows[i][exposure_index], &hours) == MILENA_OK && hours >= 0.0) exposure += hours;
-                }
-            }
-            SstRateResult rate;
-            if (status == MILENA_OK) status = sst_rate_from_counts(incidents, exposure, factor, &rate, error);
-            if (status == MILENA_OK) {
-                if (!first) fputs(",\n", report); first = false;
-                fputs("    {\"operacion\": \"tasa\", \"evento\": ", report); json_text(report, event_column);
-                fputs(", \"exposicion\": ", report); json_text(report, exposure_column);
-                fprintf(report, ", \"incidentes\": %zu, \"horas\": %.10g, \"factor\": %.10g, \"tasa\": %.10g}", incidents, exposure, factor, rate.rate);
-            }
-        } else if (strncmp(text, "#correlacion", 12) == 0) {
-            char left[256], right[256];
-            if (!get_quoted(text, 0, left, sizeof(left)) || !get_quoted(text, 1, right, sizeof(right))) status = MILENA_ERR_PARSE;
-            double *x = NULL, *y = NULL; size_t count = 0;
-            if (status == MILENA_OK) status = paired_columns(dataset, left, right, &x, &y, &count, error);
-            SstCorrelationResult result;
-            if (status == MILENA_OK) status = sst_pearson(x, y, count, &result, error);
-            if (status == MILENA_OK) {
-                if (!first) fputs(",\n", report); first = false;
-                fprintf(report, "    {\"operacion\": \"pearson\", \"x\": "); json_text(report, left);
-                fprintf(report, ", \"y\": "); json_text(report, right);
-                fprintf(report, ", \"pares\": %zu, \"r\": %.10g, \"advertencia_muestra_pequena\": %s}", result.pairs, result.coefficient, result.warning_small_sample ? "true" : "false");
-            }
-            free(x); free(y);
-        } else if (strncmp(text, "#chi_cuadrado", 13) == 0) {
-            char row_name[256], col_name[256];
-            if (!get_quoted(text, 0, row_name, sizeof(row_name)) || !get_quoted(text, 1, col_name, sizeof(col_name))) status = MILENA_ERR_PARSE;
-            int ri = dataset_column_index(dataset, row_name), ci = dataset_column_index(dataset, col_name);
-            const char **rows = NULL, **cols = NULL;
-            if (status == MILENA_OK && (ri < 0 || ci < 0)) status = MILENA_ERR_DATA;
-            if (status == MILENA_OK) {
-                rows = (const char **)calloc(dataset->row_count, sizeof(*rows));
-                cols = (const char **)calloc(dataset->row_count, sizeof(*cols));
-                if (!rows || !cols) status = MILENA_ERR_MEMORY;
-            }
-            if (status == MILENA_OK) for (size_t i = 0; i < dataset->row_count; i++) { rows[i] = dataset->rows[i][ri]; cols[i] = dataset->rows[i][ci]; }
-            SstContingency2D table; sst_contingency_init(&table); SstChiSquareResult chi;
-            if (status == MILENA_OK) status = sst_contingency_build(rows, cols, dataset->row_count, &table, error);
-            if (status == MILENA_OK) status = sst_contingency_chi_square(&table, &chi, error);
-            if (status == MILENA_OK) {
-                if (!first) fputs(",\n", report); first = false;
-                fprintf(report, "    {\"operacion\": \"chi_cuadrado\", \"filas\": %zu, \"columnas\": %zu, \"estadistico\": %.10g, \"grados_libertad\": %zu, \"p_aproximado\": %.10g, \"celdas_esperadas_bajas\": %zu}", table.row_count, table.column_count, chi.statistic, chi.degrees_of_freedom, sst_chi_square_approx_pvalue(chi.statistic, chi.degrees_of_freedom), chi.low_expected_cells);
-            }
-            sst_contingency_destroy(&table); free(rows); free(cols);
-        } else if (strncmp(text, "#balance", 8) == 0) {
-            char column[256];
-            if (!get_quoted(text, 0, column, sizeof(column))) status = MILENA_ERR_PARSE;
-            int index = dataset_column_index(dataset, column); size_t zeros = 0, ones = 0, invalid = 0;
-            if (status == MILENA_OK && index < 0) status = MILENA_ERR_DATA;
-            if (status == MILENA_OK) for (size_t i = 0; i < dataset->row_count; i++) { SstBinaryValue v = sst_binary_parse(dataset->rows[i][index]); if (v == SST_BINARY_TRUE) ones++; else if (v == SST_BINARY_FALSE) zeros++; else invalid++; }
-            if (status == MILENA_OK) { if (!first) fputs(",\n", report); first = false; fprintf(report, "    {\"operacion\": \"balance\", \"variable\": "); json_text(report, column); fprintf(report, ", \"ceros\": %zu, \"unos\": %zu, \"invalidos\": %zu}", zeros, ones, invalid); }
-        }
-        if (status != MILENA_OK) { free(copy); fclose(report); return status; }
-        line = strtok(NULL, "\n\r");
-    }
-    free(copy);
-    fputs("\n  ],\n  \"advertencias\": [\n", report);
-    fputs("    {\"tipo\": \"causalidad\", \"mensaje\": ", report);
-    json_text(report, "Asociación estadística no implica causalidad; pueden existir confusores, sesgo de selección o azar.");
-    fputs("},\n", report);
-    fputs("    {\"tipo\": \"aproximacion\", \"mensaje\": ", report);
-    json_text(report, "Los métodos inferenciales aproximados deben interpretarse junto con sus supuestos y tamaño muestral.");
-    fputs("}\n  ]\n}\n", report);
-    bool io_error = ferror(report) != 0; if (fclose(report) != 0) io_error = true;
-    if (io_error) return MILENA_ERR_IO;
-    printf("Reporte SST avanzado: %s\n", path);
-    return MILENA_OK;
-}
-
 
 typedef struct {
     char name[128];
@@ -614,7 +351,9 @@ static void print_array_operation(const char *left, char operation,
     printf(")\n");
 }
 
-static MilenaStatus run_array_declarations(const char *script, MilenaError *error) {
+/* COMPATIBILIDAD: parser textual histórico de arrays; solo se conserva para
+ * archivos antiguos que no producen un AST canónico. */
+static MilenaStatus run_legacy_array_declarations(const char *script, MilenaError *error) {
     const char *cursor = script;
     size_t declarations = 0;
     ScriptArrayBinding *bindings = NULL;
@@ -1030,7 +769,101 @@ array_cleanup_error:
 /* Execute the numeric function section of a script before the data-script path.
  * Function declarations are deliberately isolated from the legacy command parser,
  * so adding functions cannot change statistical/array semantics. */
-static MilenaStatus run_numeric_functions(const char *script, MilenaError *error) {
+typedef enum {
+    SCRIPT_PIPELINE_CANONICAL_ARRAY,
+    SCRIPT_PIPELINE_CANONICAL_DATASET,
+    SCRIPT_PIPELINE_CANONICAL_FUNCTION,
+    SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS,
+    SCRIPT_PIPELINE_LEGACY_ARRAY,
+    SCRIPT_PIPELINE_LEGACY_DATASET
+} ScriptPipeline;
+
+/*
+ * Todas las decisiones de compatibilidad pasan por este punto. El objetivo
+ * de la migración es reemplazar esta detección temporal por el resultado del
+ * parser, sin volver a repartir condicionales por el ejecutor.
+ */
+static void script_scan_canonical_ast(const ASTNode *node,
+                                      bool *has_dataset,
+                                      bool *has_array,
+                                      bool *has_function) {
+    if (!node) return;
+    if (node->type == AST_LLAMADA_CARGAR) *has_dataset = true;
+    if (node->type == AST_DECLARACION_ARRAY ||
+        node->type == AST_EXPRESION_ARRAY) *has_array = true;
+    if (node->type == AST_DECLARACION_FUNCION) *has_function = true;
+    for (size_t i = 0; i < node->child_count; i++)
+        script_scan_canonical_ast(node->children[i], has_dataset, has_array,
+                                  has_function);
+}
+
+static ScriptPipeline script_pipeline_from_ast(const char *script) {
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, script);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    bool has_dataset = false, has_array = false, has_function = false;
+    if (program && !parser.has_error)
+        script_scan_canonical_ast(program, &has_dataset, &has_array, &has_function);
+    ast_destroy(program);
+    parser_release(&parser);
+    if (has_dataset) return SCRIPT_PIPELINE_CANONICAL_DATASET;
+    if (has_array) return SCRIPT_PIPELINE_CANONICAL_ARRAY;
+    if (has_function) return SCRIPT_PIPELINE_CANONICAL_FUNCTION;
+    return SCRIPT_PIPELINE_LEGACY_DATASET;
+}
+
+static ScriptPipeline script_pipeline_for_source(const char *script) {
+    if (!script) return SCRIPT_PIPELINE_LEGACY_DATASET;
+    ScriptPipeline parsed_pipeline = script_pipeline_from_ast(script);
+    if (parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
+        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) return parsed_pipeline;
+    if (strstr(script, "funcion") != NULL) {
+        return SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS;
+    }
+    if ((strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL) &&
+        strstr(script, "dataset cargar") == NULL) {
+        return SCRIPT_PIPELINE_LEGACY_ARRAY;
+    }
+    return SCRIPT_PIPELINE_LEGACY_DATASET;
+}
+
+static MilenaStatus run_canonical_functions(const char *script,
+                                             MilenaError *error) {
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, script);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    if (!program || parser.has_error) {
+        if (error) *error = parser.error;
+        ast_destroy(program);
+        parser_release(&parser);
+        return MILENA_ERR_PARSE;
+    }
+    Interpreter interpreter;
+    if (!interpreter_init(&interpreter, program)) {
+        ast_destroy(program);
+        parser_release(&parser);
+        milena_error_set(error, MILENA_ERR_MEMORY, 0, 0, 0,
+                         "No se pudo inicializar el runtime de funciones");
+        return MILENA_ERR_MEMORY;
+    }
+    bool ok = interpreter_run(&interpreter);
+    interpreter_destroy(&interpreter);
+    ast_destroy(program);
+    parser_release(&parser);
+    if (!ok) {
+        milena_error_set(error, MILENA_ERROR_RUNTIME, 0, 0, 0,
+                         "La ejecución de funciones AST falló");
+        return MILENA_ERROR_RUNTIME;
+    }
+    return MILENA_OK;
+}
+
+/* COMPATIBILIDAD: las funciones nuevas deben usar parser + AST + Interpreter. */
+static MilenaStatus run_legacy_numeric_functions(const char *script, MilenaError *error) {
     const char *p = script; size_t total = strlen(script), used = 0;
     char *decls = (char *)malloc(total + 1), message[256] = {0};
     MilenaFunctionTable table; milena_function_table_init(&table);
@@ -1066,23 +899,36 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     if (!filename) return MILENA_ERR_ARGUMENT;
     char *script = read_file(filename, error);
     if (!script) return error && error->code ? error->code : MILENA_ERR_IO;
-    /* Primera migración incremental al pipeline canónico. El reconocimiento
-     * textual solo decide compatibilidad; la sintaxis y la ejecución quedan
-     * completamente a cargo de lexer/parser/AST/language_runtime. */
-    if (strstr(script, "analisis") != NULL &&
-        strstr(script, "arreglo") != NULL &&
-        strstr(script, "dataset cargar") == NULL) {
+    /* El AST decide toda ejecución oficial. El router textual que queda abajo
+     * solo atiende sintaxis histórica explícita y no recibe capacidades nuevas. */
+    ScriptPipeline pipeline = script_pipeline_for_source(script);
+    if (pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) {
         MilenaStatus canonical_status = milena_run_array_program(script, stdout, error);
         free(script);
         return canonical_status;
     }
-    if (strstr(script, "funcion") != NULL) { MilenaStatus fn_status = run_numeric_functions(script, error); free(script); return fn_status; }
-    if ((strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL) &&
-        strstr(script, "dataset cargar") == NULL) {
-        MilenaStatus array_status = run_array_declarations(script, error);
+    if (pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET) {
+        MilenaStatus canonical_status = milena_run_dataset_program(script, filename,
+                                                                    stdout, error);
+        free(script);
+        return canonical_status;
+    }
+    if (pipeline == SCRIPT_PIPELINE_CANONICAL_FUNCTION) {
+        MilenaStatus function_status = run_canonical_functions(script, error);
+        free(script);
+        return function_status;
+    }
+    if (pipeline == SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS) {
+        MilenaStatus fn_status = run_legacy_numeric_functions(script, error);
+        free(script);
+        return fn_status;
+    }
+    if (pipeline == SCRIPT_PIPELINE_LEGACY_ARRAY) {
+        MilenaStatus array_status = run_legacy_array_declarations(script, error);
         free(script);
         return array_status;
     }
+    /* Desde aquí comienza únicamente la ruta histórica de compatibilidad. */
     MilenaSchema schema; schema_init(&schema);
     MilenaStatus status = parse_schema(script, &schema, error);
     if (status == MILENA_OK) status = validate_commands(script, error);
@@ -1112,7 +958,6 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     if (status == MILENA_OK && has_text(script, "#periodo extraer(\"mes de fecha\")")) status = dataset_add_month(&dataset, "fecha", "periodo", error);
     if (status == MILENA_OK && has_text(script, "#condicion(\"total > 0\")")) status = dataset_filter_positive_product(&dataset, "precio", "cantidad", error);
     if (status == MILENA_OK) status = analysis_dataset_report(&dataset, &schema, resolved_output, error);
-    if (status == MILENA_OK) status = run_sst_commands(script, &dataset, resolved_output, error);
     if (status == MILENA_OK) { printf("Script ejecutado correctamente: %s\n", filename); printf("Filas: %zu | Columnas: %zu | Filas inválidas: %zu\n", dataset.row_count, dataset.column_count, dataset.invalid_rows); }
     dataset_destroy(&dataset); schema_destroy(&schema); free(script); return status;
 }

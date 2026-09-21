@@ -105,6 +105,7 @@ void ast_destroy(ASTNode *node) {
     }
     free(node->children);
     free(node->value);
+    free(node->type_name);
     free(node);
 }
 
@@ -121,7 +122,11 @@ const char *ast_type_name(ASTNodeType type) {
         "DECLARACION_VARIABLE", "ASIGNACION_VARIABLE", "COMANDO_NULOS",
         "COMANDO_DUPLICADOS", "COMANDO_CONDICION", "COMANDO_EXTRAER",
         "COMANDO_TOTAL", "COMANDO_PERIODO", "AGRUPACION_POR",
-        "RESUMEN_METRICA", "OPERACION_ESTADISTICA"
+        "RESUMEN_METRICA", "OPERACION_ESTADISTICA",
+        "DECLARACION_ENTRADA", "DECLARACION_SALIDA",
+        "BLOQUE_SELECCIONAR", "COMANDO_COLUMNAS",
+        "BLOQUE_UNIR", "COMANDO_DERECHA", "COMANDO_CLAVE",
+        "COMANDO_SST"
     };
     if ((unsigned)type >= (unsigned)AST_NODE_TYPE_COUNT) return "DESCONOCIDO";
     return names[type];

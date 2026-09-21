@@ -610,13 +610,13 @@ static bool date_leap(int32_t year) {
     return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
 }
 
-static uint8_t date_month_days(int32_t year, uint8_t month) {
-    static const uint8_t days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
-    return month == 2 && date_leap(year) ? 29 : days[month - 1];
+static unsigned date_month_days(int32_t year, unsigned month) {
+    static const unsigned days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    return month == 2 && date_leap(year) ? 29u : days[month - 1u];
 }
 
-MilenaStatus milena_date_init(MilenaDate *out, int32_t year, uint8_t month,
-                              uint8_t day, MilenaError *error) {
+MilenaStatus milena_date_init(MilenaDate *out, int32_t year, unsigned month,
+                              unsigned day, MilenaError *error) {
     if (!out || month < 1 || month > 12 || day < 1 || day > date_month_days(year, month)) {
         finance_error(error, MILENA_ERR_ARGUMENT, "Fecha inválida");
         return MILENA_ERR_ARGUMENT;
@@ -624,6 +624,7 @@ MilenaStatus milena_date_init(MilenaDate *out, int32_t year, uint8_t month,
     out->year = year;
     out->month = month;
     out->day = day;
+    out->valid = true;
     return MILENA_OK;
 }
 
@@ -700,13 +701,15 @@ void milena_cash_flow_series_destroy(MilenaCashFlowSeries *series) {
 MilenaStatus milena_cash_flow_series_add(MilenaCashFlowSeries *series,
                                          MilenaCashFlow flow,
                                          MilenaError *error) {
+    MilenaDate validated_date;
     if (!series || check_currency(flow.money.currency, error) != MILENA_OK ||
-        milena_date_init(&(MilenaDate){0}, flow.date.year, flow.date.month,
+        milena_date_init(&validated_date, flow.date.year, flow.date.month,
                          flow.date.day, error) != MILENA_OK) {
         if (error && error->code == MILENA_OK)
             finance_error(error, MILENA_ERR_ARGUMENT, "Flujo de caja inválido");
         return MILENA_ERR_ARGUMENT;
     }
+    flow.date = validated_date;
     if (series->count > 0 && strcmp(series->currency, flow.money.currency) != 0) {
         finance_error(error, MILENA_ERR_ARGUMENT, "Los flujos deben usar la misma moneda");
         return MILENA_ERR_ARGUMENT;
@@ -871,8 +874,8 @@ MilenaStatus milena_date_add_months(MilenaDate *out, MilenaDate date,
     uint64_t total = (uint64_t)(date.year < 0 ? 0 : date.year) * 12u +
                      (uint64_t)(date.month - 1u) + months;
     int32_t year = (int32_t)(total / 12u);
-    uint8_t month = (uint8_t)(total % 12u + 1u);
-    uint8_t day = date.day > date_month_days(year, month) ?
+    unsigned month = (unsigned)(total % 12u + 1u);
+    unsigned day = date.day > date_month_days(year, month) ?
         date_month_days(year, month) : date.day;
     return milena_date_init(out, year, month, day, error);
 }
@@ -900,8 +903,13 @@ MilenaStatus milena_date_add_period_policy(
         finance_error(error, MILENA_ERR_ARGUMENT, "Política de fin de mes inválida");
         return MILENA_ERR_ARGUMENT;
     }
+    MilenaDate validated;
+    MilenaStatus status = milena_date_init(&validated, date.year, date.month,
+                                           date.day, error);
+    if (status != MILENA_OK) return status;
+    date = validated;
     bool source_is_month_end = date.day == date_month_days(date.year, date.month);
-    MilenaStatus status = milena_date_add_months(out, date, periods * multiplier, error);
+    status = milena_date_add_months(out, date, periods * multiplier, error);
     if (status != MILENA_OK) return status;
     if (policy == MILENA_MONTH_END_STICK_TO_END && source_is_month_end) {
         out->day = date_month_days(out->year, out->month);

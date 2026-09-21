@@ -2,6 +2,7 @@
 #define MILENA_FINANCE_H
 
 #include "common.h"
+#include "sst_dates.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -116,19 +117,13 @@ MilenaStatus milena_annuity_payment(MilenaDecimal *out,
                                     MilenaRoundingMode mode,
                                     MilenaError *error);
 
-typedef struct {
-    int32_t year;
-    uint8_t month;
-    uint8_t day;
-} MilenaDate;
-
 typedef enum {
     MILENA_DAY_COUNT_ACTUAL_365 = 0,
     MILENA_DAY_COUNT_ACTUAL_360
 } MilenaDayCount;
 
-MilenaStatus milena_date_init(MilenaDate *out, int32_t year, uint8_t month,
-                              uint8_t day, MilenaError *error);
+MilenaStatus milena_date_init(MilenaDate *out, int32_t year, unsigned month,
+                              unsigned day, MilenaError *error);
 MilenaStatus milena_date_compare(const MilenaDate *left, const MilenaDate *right,
                                  int *result, MilenaError *error);
 MilenaStatus milena_date_days_between(const MilenaDate *start,

@@ -40,6 +40,14 @@ typedef enum {
     AST_AGRUPACION_POR,
     AST_RESUMEN_METRICA,
     AST_OPERACION_ESTADISTICA,
+    AST_DECLARACION_ENTRADA,
+    AST_DECLARACION_SALIDA,
+    AST_BLOQUE_SELECCIONAR,
+    AST_COMANDO_COLUMNAS,
+    AST_BLOQUE_UNIR,
+    AST_COMANDO_DERECHA,
+    AST_COMANDO_CLAVE,
+    AST_COMANDO_SST,
     AST_NODE_TYPE_COUNT
 } ASTNodeType;
 
@@ -60,10 +68,12 @@ typedef struct ASTNode {
     ASTNodeType type;
     ASTStatOperation statistical_operation;
     char *value;
+    char *type_name;
     double number_value;
     double percentile;
     int axis;
     bool keepdims;
+    bool zeros_constructor;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;

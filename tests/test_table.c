@@ -30,7 +30,7 @@ int main(void) {
     expect_ok(milena_array_zeros(&filter, MILENA_DTYPE_BOOL, 1, shape, &error), &error);
     memcpy(milena_array_data(&filter), filter_values, sizeof(filter_values));
 
-    MilenaTable table;
+    MilenaTable table = {0};
     milena_table_init(&table);
     expect_ok(milena_table_add_column_copy(&table, "id", &id_array, NULL, &error), &error);
     expect_ok(milena_table_add_column_copy(&table, "amount", &amount_array,
@@ -40,7 +40,7 @@ int main(void) {
     assert(milena_table_column_index(&table, "amount") == 1);
     assert(milena_table_column_index(&table, "missing") == -1);
 
-    MilenaTable filtered;
+    MilenaTable filtered = {0};
     expect_ok(milena_table_filter(&filtered, &table, &filter, &error), &error);
     assert(filtered.column_count == 2);
     assert(filtered.row_count == 2);
@@ -55,17 +55,17 @@ int main(void) {
     assert(filtered_amounts->validity[1] == true);
 
     const char *selected_names[] = {"amount"};
-    MilenaTable selected_columns;
+    MilenaTable selected_columns = {0};
     expect_ok(milena_table_select_columns(&selected_columns, &table,
                                           selected_names, 1, &error), &error);
     assert(selected_columns.column_count == 1);
     assert(strcmp(selected_columns.columns[0].name, "amount") == 0);
 
-    MilenaTable dropped;
+    MilenaTable dropped = {0};
     expect_ok(milena_table_drop_null(&dropped, &table, &error), &error);
     assert(dropped.row_count == 3);
 
-    MilenaTable sorted;
+    MilenaTable sorted = {0};
     expect_ok(milena_table_sort(&sorted, &table, "amount", true, &error), &error);
     const MilenaTableColumn *sorted_amounts = milena_table_column(&sorted, 1);
     assert(sorted_amounts);
@@ -92,14 +92,14 @@ int main(void) {
     MilenaArray group_value_array = {0};
     expect_ok(milena_array_from_i64(&group_array, 1, shape, groups, &error), &error);
     expect_ok(milena_array_from_f64(&group_value_array, 1, shape, group_values, &error), &error);
-    MilenaTable grouped_source;
+    MilenaTable grouped_source = {0};
     milena_table_init(&grouped_source);
     expect_ok(milena_table_add_column_copy(&grouped_source, "group", &group_array,
                                            NULL, &error), &error);
     expect_ok(milena_table_add_column_copy(&grouped_source, "value", &group_value_array,
                                            group_validity, &error), &error);
 
-    MilenaTable grouped_sum;
+    MilenaTable grouped_sum = {0};
     expect_ok(milena_table_group_by_aggregate(&grouped_sum, &grouped_source,
                                               "group", "value", MILENA_AGG_SUM,
                                               &error), &error);
@@ -108,7 +108,7 @@ int main(void) {
     assert(((const double *)milena_array_const_data(&sum_values->values))[0] == 30.0);
     assert(((const double *)milena_array_const_data(&sum_values->values))[1] == 30.0);
 
-    MilenaTable grouped_count;
+    MilenaTable grouped_count = {0};
     expect_ok(milena_table_group_by_aggregate(&grouped_count, &grouped_source,
                                               "group", "value", MILENA_AGG_COUNT,
                                               &error), &error);

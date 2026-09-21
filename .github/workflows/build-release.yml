@@ -27,13 +27,16 @@ jobs:
 
   linux-amd64:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y clang make dpkg-dev
       - name: Build and test Debian package
-        run: ./packaging/debian/build-local-deb.sh
+        run: |
+          set -euxo pipefail
+          timeout --signal=TERM --kill-after=30s 15m ./packaging/debian/build-local-deb.sh
       - name: Upload Debian artifact
         uses: actions/upload-artifact@v4
         with:
