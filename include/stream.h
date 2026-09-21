@@ -76,11 +76,5 @@ MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
     const MilenaStreamOptions *options, MilenaStreamReport *report,
     MilenaError *error);
 
-MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
-    const char *output_path, const char *group_column,
-    const MilenaStreamMetric *metrics, size_t metric_count,
-    const MilenaStreamOptions *options, MilenaStreamReport *report,
-    MilenaError *error);
-
 #endif
 
