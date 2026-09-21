@@ -805,6 +805,35 @@ static bool script_has_canonical_marker(const char *script) {
            strstr(script, ".limpiar") != NULL || strstr(script, ".transformar") != NULL;
 }
 
+/* The compatibility array fixtures predate the complete array grammar in the
+ * AST parser. Keep those complete fixtures on their explicit legacy path, but
+ * never reinterpret an actually truncated canonical source. */
+static bool script_has_unbalanced_delimiters(const char *script) {
+    char stack[256];
+    size_t depth = 0;
+    bool quoted = false, escaped = false;
+    for (const char *p = script; p && *p; ++p) {
+        unsigned char ch = (unsigned char)*p;
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (ch == '\\') escaped = true;
+            else if (ch == '\"') quoted = false;
+            continue;
+        }
+        if (ch == '\"') { quoted = true; continue; }
+        if (ch == '(' || ch == '[' || ch == '{') {
+            if (depth >= sizeof(stack)) return true;
+            stack[depth++] = (char)ch;
+        } else if (ch == ')' || ch == ']' || ch == '}') {
+            if (depth == 0 || (ch == ')' && stack[depth - 1] != '(') ||
+                (ch == ']' && stack[depth - 1] != '[') ||
+                (ch == '}' && stack[depth - 1] != '{')) return true;
+            --depth;
+        }
+    }
+    return quoted || depth != 0;
+}
+
 static ScriptPipeline script_pipeline_from_ast(const char *script,
                                                MilenaError *parse_error) {
     Lexer lexer;
@@ -832,7 +861,11 @@ static ScriptPipeline script_pipeline_for_source(const char *script,
      * by the compatibility router after a parser error. Legacy fixtures that
      * do not carry those markers continue through their explicit path. */
     if (parse_error != NULL && parse_error->code != MILENA_OK &&
-        script_has_canonical_marker(script))
+        script_has_canonical_marker(script) &&
+        (script_has_unbalanced_delimiters(script) ||
+         strstr(script, "dataset cargar") != NULL ||
+         strstr(script, ".limpiar") != NULL ||
+         strstr(script, ".transformar") != NULL))
         return SCRIPT_PIPELINE_PARSE_ERROR;
     if (parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
         parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) return parsed_pipeline;
