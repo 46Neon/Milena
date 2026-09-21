@@ -1,0 +1,65 @@
+#include "execution_contract.h"
+#include <string.h>
+
+MilenaExecutionPlan milena_execution_plan_default(void) {
+    MilenaExecutionPlan p;
+    memset(&p, 0, sizeof(p));
+    p.source = MILENA_EXEC_SOURCE_TABLE;
+    p.options = milena_stream_options_default();
+    p.sink = MILENA_EXEC_SINK_TABLE;
+    return p;
+}
+
+MilenaStatus milena_execution_validate(const MilenaExecutionPlan *p, MilenaError *e) {
+    if (!p || !p->aggregates || p->aggregate_count == 0 || p->aggregate_count > 64) {
+        milena_error_set(e, MILENA_ERR_ARGUMENT, 0, 0, 0, "Plan de ejecución sin agregaciones válidas");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (p->projection_column || p->filter_expression) {
+        milena_error_set(e, MILENA_ERR_UNSUPPORTED, 0, 0, 0, "Proyección/filtro aún no tienen backend común");
+        return MILENA_ERR_UNSUPPORTED;
+    }
+    for (size_t i = 0; i < p->aggregate_count; ++i) {
+        if (!p->aggregates[i].column || p->aggregates[i].column[0] == '\0' ||
+            p->aggregates[i].operation < MILENA_AGG_COUNT || p->aggregates[i].operation > MILENA_AGG_MAX) {
+            milena_error_set(e, MILENA_ERR_ARGUMENT, 0, 0, 0, "Agregación fuera del contrato canónico");
+            return MILENA_ERR_ARGUMENT;
+        }
+    }
+    return MILENA_OK;
+}
+
+MilenaStatus milena_stream_execute_plan(const MilenaExecutionPlan *p, const char *in, const char *out, MilenaExecutionReport *r, MilenaError *e) {
+    MilenaStatus st = milena_execution_validate(p, e);
+    if (st != MILENA_OK || !in || !out || p->source != MILENA_EXEC_SOURCE_CSV_STREAM || p->sink != MILENA_EXEC_SINK_JSON_REPORT) {
+        if (st == MILENA_OK) { milena_error_set(e, MILENA_ERR_ARGUMENT, 0, 0, 0, "Fuente/salida incompatibles con backend de flujo"); st = MILENA_ERR_ARGUMENT; }
+        if (r) { memset(r, 0, sizeof(*r)); r->status = st; r->backend = "stream"; }
+        return st;
+    }
+    MilenaStreamMetric metrics[64];
+    for (size_t i = 0; i < p->aggregate_count; ++i) {
+        metrics[i].column = p->aggregates[i].column;
+        metrics[i].name = p->aggregates[i].output_name;
+        metrics[i].operation = (MilenaStreamOperation)p->aggregates[i].operation;
+    }
+    MilenaStreamReport sr;
+    if (p->group_column) st = milena_stream_csv_grouped_with_options(in, out, p->group_column, metrics, p->aggregate_count, &p->options, &sr, e);
+    else st = milena_stream_csv_summary_with_options(in, out, metrics, p->aggregate_count, &p->options, &sr, e);
+    if (r) { memset(r, 0, sizeof(*r)); r->status = st; r->backend = "stream"; r->rows_read = sr.rows_read; r->malformed_rows = sr.malformed_rows; r->peak_record_bytes = sr.peak_record_bytes; r->input_bytes = sr.input_bytes; r->elapsed_milliseconds = sr.elapsed_milliseconds; }
+    return st;
+}
+
+MilenaStatus milena_table_execute_plan(MilenaTable *out, const MilenaTable *source, const MilenaExecutionPlan *p, MilenaExecutionReport *r, MilenaError *e) {
+    MilenaStatus st = milena_execution_validate(p, e);
+    if (st != MILENA_OK || !out || !source || p->source != MILENA_EXEC_SOURCE_TABLE || p->sink != MILENA_EXEC_SINK_TABLE) {
+        if (st == MILENA_OK) { milena_error_set(e, MILENA_ERR_ARGUMENT, 0, 0, 0, "Fuente/salida incompatibles con backend de tabla"); st = MILENA_ERR_ARGUMENT; }
+        if (r) { memset(r, 0, sizeof(*r)); r->status = st; r->backend = "table"; }
+        return st;
+    }
+    MilenaAggregateSpec specs[64];
+    for (size_t i = 0; i < p->aggregate_count; ++i) { specs[i].value_column = p->aggregates[i].column; specs[i].operation = p->aggregates[i].operation; specs[i].output_name = p->aggregates[i].output_name; }
+    if (p->group_column) st = milena_table_group_by(out, source, &p->group_column, 1, specs, p->aggregate_count, e);
+    else st = milena_table_summarize(out, source, specs, p->aggregate_count, e);
+    if (r) { memset(r, 0, sizeof(*r)); r->status = st; r->backend = "table"; r->rows_read = source->row_count; r->rows_emitted = out->row_count; r->groups = p->group_column ? out->row_count : 1; }
+    return st;
+}

@@ -84,3 +84,29 @@ throughput o escala industrial.
 La agrupación sigue siendo de un proceso y mantiene el estado de grupos en
 memoria. Spill-to-disk, formatos columnares (Arrow/Parquet), paralelismo,
 particionado y distribución son trabajo futuro explícito.
+
+
+## Contrato canónico de ejecución (incremento de unificación)
+
+El incremento posterior de PR25 define `MilenaExecutionPlan` y
+`MilenaExecutionReport` en el runtime canónico. El plan tipado expresa fuente
+(tabla materializada o CSV acotado), agrupación, agregaciones, sink y opciones
+(incluidos límites de registro, columnas y grupos). `src/execution_contract.c`
+es el único adaptador: traduce el mismo plan a `MilenaTable` o a `stream.c`;
+no hay un parser, CLI o runtime Big Data paralelo. La sintaxis española sigue
+entrando por lexer → parser → AST → semántica → runtime.
+
+Las pruebas estructurales comprueban que el contrato está en el binario
+oficial y que ambos backends existen detrás de él. La ruta materializada
+conserva `milena_table_summarize`/`milena_table_group_by`; la ruta de flujo
+conserva memoria acotada, el límite duro de grupos y sus contadores de filas
+malformadas. La equivalencia de agregados en memoria y flujo se valida por los
+contratos y fixtures de backend; las diferencias documentadas son que el CSV
+rechaza filas con columnas incorrectas, cuenta números inválidos por métrica y
+no garantiza orden de grupos, mientras la tabla preserva tipos nativos,
+nullabilidad y orden de primera aparición.
+
+Esto no es Big Data distribuido completo: no incluye spill-to-disk,
+particionado, paralelismo, Arrow/Parquet ni un planificador remoto. Proyección y
+filtros están reservados explícitamente en el contrato hasta tener semántica y
+backend equivalentes.
