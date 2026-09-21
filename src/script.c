@@ -802,8 +802,7 @@ static bool script_has_canonical_marker(const char *script) {
     if (!script) return false;
     return strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL ||
            strstr(script, "dataset cargar") != NULL ||
-           strstr(script, ".limpiar") != NULL || strstr(script, ".transformar") != NULL ||
-           strstr(script, "funcion") != NULL;
+           strstr(script, ".limpiar") != NULL || strstr(script, ".transformar") != NULL;
 }
 
 static ScriptPipeline script_pipeline_from_ast(const char *script,
