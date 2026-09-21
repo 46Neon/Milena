@@ -244,7 +244,7 @@ static void stream_free_headers(char **headers, size_t count) {
 
 MilenaStreamOptions milena_stream_options_default(void) {
     MilenaStreamOptions options = {4096u, STREAM_DEFAULT_MAX_RECORD,
-                                   STREAM_DEFAULT_MAX_COLUMNS};
+                                   STREAM_DEFAULT_MAX_COLUMNS, 0u, 0.0};
     return options;
 }
 
@@ -261,7 +261,8 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         metric_count > STREAM_MAX_METRICS || options->chunk_rows == 0 ||
         options->max_record_bytes < STREAM_INITIAL_RECORD ||
         options->max_record_bytes > STREAM_DEFAULT_MAX_RECORD ||
-        options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS)
+        options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS ||
+        options->max_elapsed_milliseconds < 0.0)
         return MILENA_ERR_ARGUMENT;
     if (report) memset(report, 0, sizeof(*report));
     if (error) milena_error_clear(error);
@@ -280,6 +281,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
     size_t column_count = 0;
     StreamAccumulator accumulators[STREAM_MAX_METRICS] = {{0}};
     size_t rows_read = 0, rows_valid = 0, malformed = 0;
+    bool resource_limit_reached = false;
     MilenaStatus status = stream_read_record(input, &record, &record_capacity, options->max_record_bytes, error);
     if (status != MILENA_OK) {
         if (status == MILENA_ERR_IO && feof(input)) {
@@ -311,6 +313,21 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         }
     }
     while ((status = stream_read_record(input, &record, &record_capacity, options->max_record_bytes, error)) == MILENA_OK) {
+        if (options->max_rows != 0 && rows_read >= options->max_rows) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "El flujo alcanzó el máximo de filas configurado");
+            resource_limit_reached = true;
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
+        if (options->max_elapsed_milliseconds > 0.0 &&
+            stream_now_ms() - started >= options->max_elapsed_milliseconds) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "El flujo alcanzó el presupuesto de tiempo configurado");
+            resource_limit_reached = true;
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
         rows_read++;
         size_t field_count = 0;
         status = stream_split(record, ',', fields, options->max_columns, &field_count, error);
@@ -374,11 +391,28 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
             report->header_columns = column_count;
             report->max_record_bytes = options->max_record_bytes;
             report->max_columns = options->max_columns;
+            report->max_rows = options->max_rows;
+            report->max_elapsed_milliseconds = options->max_elapsed_milliseconds;
+            report->resource_limit_reached = resource_limit_reached;
         }
     }
 
 finish:
     if (fclose(input) != 0 && status == MILENA_OK) status = MILENA_ERR_IO;
+    if (report && status != MILENA_OK) {
+        report->rows_read = rows_read;
+        report->rows_with_valid_values = rows_valid;
+        report->malformed_rows = malformed;
+        report->chunk_rows = options->chunk_rows;
+        report->elapsed_milliseconds = stream_now_ms() - started;
+        report->peak_record_bytes = record_capacity;
+        report->header_columns = column_count;
+        report->max_record_bytes = options->max_record_bytes;
+        report->max_columns = options->max_columns;
+        report->max_rows = options->max_rows;
+        report->max_elapsed_milliseconds = options->max_elapsed_milliseconds;
+        report->resource_limit_reached = resource_limit_reached;
+    }
     free(record);
     free(fields);
     stream_free_headers(headers, column_count);

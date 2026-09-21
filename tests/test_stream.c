@@ -57,6 +57,25 @@ int main(void) {
     assert(strstr(limited_error.message, "límite") != NULL);
     remove(large_input);
     remove(large_output);
+
+    const char *budget_input = "tests/.stream_budget.csv";
+    const char *budget_output = "tests/.stream_budget.json";
+    FILE *budget = fopen(budget_input, "wb");
+    assert(budget != NULL);
+    fputs("importe\n1\n2\n3\n", budget);
+    assert(fclose(budget) == 0);
+    MilenaStreamOptions budget_options = milena_stream_options_default();
+    budget_options.max_rows = 2;
+    MilenaError budget_error;
+    milena_error_clear(&budget_error);
+    MilenaStreamReport budget_report = {0};
+    assert(milena_stream_csv_summary_with_options(
+        budget_input, budget_output, metrics, 1, &budget_options,
+        &budget_report, &budget_error) == MILENA_ERR_OVERFLOW);
+    assert(budget_report.resource_limit_reached == true);
+    assert(strstr(budget_error.message, "filas") != NULL);
+    remove(budget_input);
+    remove(budget_output);
     puts("stream tests passed");
     return 0;
 }
