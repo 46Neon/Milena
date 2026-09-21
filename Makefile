@@ -49,6 +49,9 @@ tests/test_array: tests/test_array.c src/array.c src/common.c
 test-table: tests/test_table
 	./tests/test_table
 
+tests/test_table: tests/test_table.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c
+	$(CC) $(CFLAGS) tests/test_table.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c $(LDFLAGS) -o $@
+
 test-table-worker4: tests/test_table_worker4
 	./tests/test_table_worker4
 
