@@ -44,7 +44,7 @@ jobs:
           timeout --signal=TERM --kill-after=30s 15m make clean
           timeout --signal=TERM --kill-after=30s 15m make CC=clang \
             CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
-            LDFLAGS='-fsanitize=address,undefined -lm' test
+            LDFLAGS='-fsanitize=address,undefined -lm -pthread' test
 
   windows-c17:
     name: Windows C17 array tests

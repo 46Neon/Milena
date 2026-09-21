@@ -7,13 +7,13 @@ CC ?= cc
 TERMUX ?= 0
 TERMUX_PREFIX ?= /data/data/com.termux/files/usr
 TERMUX_CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Oz -ffunction-sections -fdata-sections -Iinclude
-TERMUX_LDFLAGS ?= -lm -Wl,--gc-sections
+TERMUX_LDFLAGS ?= -lm -pthread -Wl,--gc-sections
 ifeq ($(TERMUX),1)
 CFLAGS ?= $(TERMUX_CFLAGS)
 LDFLAGS ?= $(TERMUX_LDFLAGS)
 else
 CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude
-LDFLAGS ?= -lm
+LDFLAGS ?= -lm -pthread
 endif
 SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/dataset.c src/analysis.c src/script.c src/main.c \
           src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/language_runtime.c src/canonical_compiler.c src/interpreter.c \
