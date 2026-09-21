@@ -11,6 +11,7 @@ materializar el dataset completo. La entrada sigue el recorrido lexer → parser
     datos desde "datos/ventas.csv"
         procesar por lotes de 4096 filas
         con registros de hasta 8 MiB
+        con columnas de 4096
 
     resumir {
         suma de "importe";
@@ -29,13 +30,14 @@ materializar el dataset completo. La entrada sigue el recorrido lexer → parser
 `procesar por lotes de N filas` expresa el tamaño de lectura lógico. El motor
 no conserva el lote completo: reutiliza un registro CSV, la cabecera, los
 punteros de campos y un acumulador por métrica. `con registros de hasta N MiB`
-es opcional; el límite duro del runtime es 64 MiB por registro y el valor
-predeterminado también es 64 MiB. El tamaño mínimo aceptado es 4096 bytes.
+y `con columnas de N` son opcionales; el límite duro del runtime es 64 MiB por
+registro y 4096 columnas, y esos valores son los predeterminados. El tamaño
+mínimo aceptado es 4096 bytes.
 Estos límites permiten fallar pronto con un diagnóstico explícito en lugar de
 reservar memoria sin cota. La salida incluye el límite configurado, el número
 de columnas de la cabecera y el pico de búfer observado.
 
-La forma anterior de PR24 continúa funcionando:
+La forma anterior de PR24 continúa funcionando solo como compatibilidad; no recibe operaciones nuevas:
 
 ```milena
 dataset cargar flujo("datos/ventas.csv", 4096)
@@ -45,6 +47,17 @@ dataset cargar flujo("datos/ventas.csv", 4096)
 
 En la forma legacy, el segundo argumento es opcional y el valor predeterminado
 es 4096 filas.
+
+## Contrato arquitectónico
+
+`stream.c` es un backend interno del runtime canónico. No tiene un ejecutable,
+parser, lector de scripts ni ruta CLI propios: la única ruta de producto es
+`lexer → parser → AST → semántica → milena_run_dataset_program → stream.c`.
+La sintaxis humana conserva en el AST la operación, columna, tamaño de lote,
+límite de registro y límite de columnas; `stream.c` recibe únicamente ese
+contrato tipado. Las pruebas directas del backend son pruebas unitarias, no una
+segunda interfaz de usuario. SST, finanzas y análisis siguen siendo comandos
+AST del mismo runtime y no se incluyen módulos experimentales.
 
 ## Qué hace
 

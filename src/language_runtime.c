@@ -1415,26 +1415,61 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
             has_summary = true;
             for (size_t j = 0; j < node->child_count; j++) {
                 const ASTNode *summary = node->children[j];
-                if (!summary || !summary->value || metric_count >= 64 ||
-                    sscanf(summary->value, "%31[^:]:%127s",
-                           operations[metric_count], columns[metric_count]) != 2) {
+                if (!summary || !summary->value || metric_count >= 64) {
                     runtime_error(error, MILENA_ERR_PARSE,
                                   "El resumen en modo flujo tiene una métrica inválida");
                     return MILENA_ERR_PARSE;
                 }
-                const char *metric = operations[metric_count];
                 MilenaStreamOperation operation;
-                if (strcmp(metric, "suma") == 0) operation = MILENA_STREAM_SUM;
-                else if (strcmp(metric, "media") == 0) operation = MILENA_STREAM_MEAN;
-                else if (strcmp(metric, "minimo") == 0) operation = MILENA_STREAM_MIN;
-                else if (strcmp(metric, "maximo") == 0) operation = MILENA_STREAM_MAX;
-                else if (strcmp(metric, "conteo") == 0) operation = MILENA_STREAM_COUNT;
-                else if (strcmp(metric, "varianza") == 0) operation = MILENA_STREAM_VARIANCE;
-                else if (strcmp(metric, "desviacion_estandar") == 0) operation = MILENA_STREAM_STDDEV;
-                else {
-                    runtime_error(error, MILENA_ERR_UNSUPPORTED,
-                                  "El modo flujo admite suma, media, minimo, maximo, conteo, varianza y desviacion_estandar");
-                    return MILENA_ERR_UNSUPPORTED;
+                const char *metric;
+                if (summary->stream_operation != AST_STREAM_OPERATION_NONE) {
+                    /* Natural Spanish syntax is already typed in the AST. */
+                    strncpy(columns[metric_count], summary->value,
+                            sizeof(columns[metric_count]) - 1);
+                    columns[metric_count][sizeof(columns[metric_count]) - 1] = '\0';
+                    switch (summary->stream_operation) {
+                    case AST_STREAM_OPERATION_SUM: operation = MILENA_STREAM_SUM; metric = "suma"; break;
+                    case AST_STREAM_OPERATION_MEAN: operation = MILENA_STREAM_MEAN; metric = "media"; break;
+                    case AST_STREAM_OPERATION_MIN: operation = MILENA_STREAM_MIN; metric = "minimo"; break;
+                    case AST_STREAM_OPERATION_MAX: operation = MILENA_STREAM_MAX; metric = "maximo"; break;
+                    case AST_STREAM_OPERATION_COUNT: operation = MILENA_STREAM_COUNT; metric = "conteo"; break;
+                    case AST_STREAM_OPERATION_VARIANCE: operation = MILENA_STREAM_VARIANCE; metric = "varianza"; break;
+                    case AST_STREAM_OPERATION_STDDEV: operation = MILENA_STREAM_STDDEV; metric = "desviacion_estandar"; break;
+                    default: operation = MILENA_STREAM_SUM; metric = NULL; break;
+                    }
+                    if (!metric) {
+                        runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                      "Operación de flujo no registrada en el runtime común");
+                        return MILENA_ERR_UNSUPPORTED;
+                    }
+                } else {
+                    /* Compatibility-only legacy form: operation:column. */
+                    char *separator = strchr(summary->value, ':');
+                    if (!separator || separator == summary->value || !separator[1] ||
+                        (size_t)(separator - summary->value) >= sizeof(operations[metric_count])) {
+                        runtime_error(error, MILENA_ERR_PARSE,
+                                      "El resumen legacy de flujo tiene una métrica inválida");
+                        return MILENA_ERR_PARSE;
+                    }
+                    size_t operation_length = (size_t)(separator - summary->value);
+                    memcpy(operations[metric_count], summary->value, operation_length);
+                    operations[metric_count][operation_length] = '\0';
+                    strncpy(columns[metric_count], separator + 1,
+                            sizeof(columns[metric_count]) - 1);
+                    columns[metric_count][sizeof(columns[metric_count]) - 1] = '\0';
+                    const char *legacy_metric = operations[metric_count];
+                    if (strcmp(legacy_metric, "suma") == 0) { operation = MILENA_STREAM_SUM; metric = "suma"; }
+                    else if (strcmp(legacy_metric, "media") == 0) { operation = MILENA_STREAM_MEAN; metric = "media"; }
+                    else if (strcmp(legacy_metric, "minimo") == 0) { operation = MILENA_STREAM_MIN; metric = "minimo"; }
+                    else if (strcmp(legacy_metric, "maximo") == 0) { operation = MILENA_STREAM_MAX; metric = "maximo"; }
+                    else if (strcmp(legacy_metric, "conteo") == 0) { operation = MILENA_STREAM_COUNT; metric = "conteo"; }
+                    else if (strcmp(legacy_metric, "varianza") == 0) { operation = MILENA_STREAM_VARIANCE; metric = "varianza"; }
+                    else if (strcmp(legacy_metric, "desviacion_estandar") == 0) { operation = MILENA_STREAM_STDDEV; metric = "desviacion_estandar"; }
+                    else {
+                        runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                      "El modo flujo admite suma, media, minimo, maximo, conteo, varianza y desviacion_estandar");
+                        return MILENA_ERR_UNSUPPORTED;
+                    }
                 }
                 (void)snprintf(metric_names[metric_count], sizeof(metric_names[metric_count]),
                                "%s_%s", columns[metric_count], metric);
@@ -1538,14 +1573,17 @@ MilenaStatus milena_run_dataset_program(const char *source,
         status = dataset_runtime_path(requested_output, script_filename, true,
                                       output_path, sizeof(output_path), error);
         if (status == MILENA_OK) {
-            size_t chunk_rows = load->number_value > 0.0
-                ? (size_t)load->number_value : 4096u;
+            size_t chunk_rows = load->stream_chunk_rows > 0
+                ? load->stream_chunk_rows
+                : (load->number_value > 0.0 ? (size_t)load->number_value : 4096u);
             /* La sintaxis humana conserva los límites en el AST; el motor
              * recibe opciones, no una ruta textual paralela. */
             MilenaStreamOptions options = milena_stream_options_default();
             options.chunk_rows = chunk_rows;
             if (load->stream_record_limit > 0)
                 options.max_record_bytes = load->stream_record_limit;
+            if (load->stream_column_limit > 0)
+                options.max_columns = load->stream_column_limit;
             status = run_stream_dataset_with_options(analysis, input, output_path,
                                                      &options, output, error);
         }

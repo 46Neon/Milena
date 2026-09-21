@@ -284,7 +284,7 @@ static int run_human_stream_pipeline(void) {
     CHECK(write_file(csv, content), "flujo humano: no se pudo crear el CSV");
     const char *source =
         ".analisis ventas_grandes {\n"
-        "  datos desde \"test-language-runtime-human-stream.csv\" procesar por lotes de 2 filas con registros de hasta 1 MiB\n"
+        "  datos desde \"test-language-runtime-human-stream.csv\" procesar por lotes de 2 filas con registros de hasta 1 MiB con columnas de 8\n"
         "  resumir { suma de \"importe\"; media de \"importe\"; contar de \"importe\"; }\n"
         "  guardar resultado en \"test-language-runtime-human-stream.json\"\n"
         "}\n";
@@ -299,7 +299,8 @@ static int run_human_stream_pipeline(void) {
     CHECK(strstr(text, "\"modo\":\"flujo\"") != NULL &&
           strstr(text, "importe_suma") != NULL &&
           strstr(text, "\"tamano_lote\":2") != NULL &&
-          strstr(text, "\"limite_registro_bytes\":1048576") != NULL,
+          strstr(text, "\"limite_registro_bytes\":1048576") != NULL &&
+          strstr(text, "\"limite_columnas\":8") != NULL,
           "flujo humano: sintaxis o límites no llegaron al runtime");
     remove(csv); remove(output);
     return 0;

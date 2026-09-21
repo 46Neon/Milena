@@ -533,8 +533,20 @@ static bool parser_is_stream_metric(Parser *parser) {
            (parser_match(parser, TOKEN_KW_CONTAR));
 }
 
+static ASTStreamOperation stream_operation_from_token(Parser *parser) {
+    if (!parser) return AST_STREAM_OPERATION_NONE;
+    if (parser_match(parser, TOKEN_FUNCION_SUMA)) return AST_STREAM_OPERATION_SUM;
+    if (parser_match(parser, TOKEN_FUNCION_MEDIA)) return AST_STREAM_OPERATION_MEAN;
+    if (parser_match(parser, TOKEN_FUNCION_MINIMO)) return AST_STREAM_OPERATION_MIN;
+    if (parser_match(parser, TOKEN_FUNCION_MAXIMO)) return AST_STREAM_OPERATION_MAX;
+    if (parser_match(parser, TOKEN_KW_CONTAR)) return AST_STREAM_OPERATION_COUNT;
+    if (parser_match(parser, TOKEN_FUNCION_VARIANZA)) return AST_STREAM_OPERATION_VARIANCE;
+    if (parser_match(parser, TOKEN_FUNCION_DESVIACION)) return AST_STREAM_OPERATION_STDDEV;
+    return AST_STREAM_OPERATION_NONE;
+}
+
 /* Forma legible: resumir { suma de "importe"; contar de "importe"; }.
- * El resultado sigue siendo AST_RESUMEN_METRICA, igual que la forma legacy. */
+ * Cada métrica queda tipada en el AST; el runtime no vuelve a escanearla. */
 static ASTNode *parse_stream_summary(Parser *parser) {
     parser_advance(parser); /* consume the natural keyword 'resumir' */
     if (!parser_expect(parser, TOKEN_LLAVE_IZQ,
@@ -547,24 +559,15 @@ static ASTNode *parse_stream_summary(Parser *parser) {
             parser_error(parser, "Se esperaba una métrica como 'suma de \\\"columna\\\"'");
             break;
         }
-        const char *metric = parser->current.type == TOKEN_KW_CONTAR
-            ? "conteo" : parser->current.lexeme;
-        char metric_copy[MAX_TOKEN_LEN];
-        strncpy(metric_copy, metric, sizeof(metric_copy) - 1);
-        metric_copy[sizeof(metric_copy) - 1] = '\0';
+        ASTStreamOperation operation = stream_operation_from_token(parser);
         parser_advance(parser);
         if (!parser_expect_word(parser, "de",
                                 "Se esperaba 'de' después de la métrica")) break;
         if (!parser_expect(parser, TOKEN_CADENA,
                            "Se esperaba el nombre de columna entre comillas")) break;
-        char specification[MAX_TOKEN_LEN * 2];
-        int written = snprintf(specification, sizeof(specification), "%s:%s",
-                               metric_copy, parser->previous.lexeme);
-        if (written < 0 || (size_t)written >= sizeof(specification)) {
-            parser_error(parser, "La especificación de resumen es demasiado larga");
-            break;
-        }
-        ASTNode *metric_node = ast_create_leaf(AST_RESUMEN_METRICA, specification);
+        ASTNode *metric_node = ast_create_leaf(AST_RESUMEN_METRICA,
+                                               parser->previous.lexeme);
+        if (metric_node) metric_node->stream_operation = operation;
         if (!metric_node) {
             parser_error(parser, "Sin memoria para métrica de resumen");
             break;
@@ -589,7 +592,7 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
     ASTNode *load = ast_create_leaf(AST_LLAMADA_CARGAR, parser->previous.lexeme);
     if (!load) { parser_error(parser, "Sin memoria para cargar datos"); return NULL; }
     load->type_name = milena_strdup("flujo");
-    load->number_value = 4096.0;
+    load->stream_chunk_rows = 4096u;
     if (!load->type_name) { ast_destroy(load); parser_error(parser, "Sin memoria para modo flujo"); return NULL; }
     if (parser_match(parser, TOKEN_KW_PROCESAR)) {
         parser_advance(parser);
@@ -601,24 +604,36 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
         if (!isfinite(chunk) || chunk < 1.0 || chunk > 1000000.0 || floor(chunk) != chunk) {
             parser_error(parser, "El tamaño del lote debe ser un entero entre 1 y 1000000"); goto fail;
         }
-        load->number_value = chunk;
+        load->stream_chunk_rows = (size_t)chunk;
         if (!parser_expect(parser, TOKEN_KW_FILAS, "Se esperaba 'filas' después del tamaño del lote")) goto fail;
     }
-    /* Opcional y explícito: con registros de hasta N MiB. Mantiene un tope
-     * duro de 64 MiB en el runtime para no convertir el modo flujo en carga. */
-    if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "con") == 0) {
+    /* Las opciones son parte del contrato AST, no texto interpretado por el backend. */
+    while (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "con") == 0) {
         parser_advance(parser);
-        if (!parser_expect(parser, TOKEN_KW_REGISTROS, "Se esperaba 'registros'")) goto fail;
-        if (!parser_expect_word(parser, "de", "Se esperaba 'de'")) goto fail;
-        if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta'")) goto fail;
-        if (!parser_expect(parser, TOKEN_NUMERO, "El límite del registro debe ser numérico")) goto fail;
-        double limit = parser->previous.number_value;
-        if (!isfinite(limit) || limit < 0.004 || limit > 64.0 || floor(limit * 1024.0) != limit * 1024.0) {
-            parser_error(parser, "El límite debe estar entre 0.004 y 64 MiB"); goto fail;
+        if (parser_match(parser, TOKEN_KW_REGISTROS)) {
+            parser_advance(parser);
+            if (!parser_expect_word(parser, "de", "Se esperaba 'de'")) goto fail;
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta'")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El límite del registro debe ser numérico")) goto fail;
+            double limit = parser->previous.number_value;
+            if (!isfinite(limit) || limit < 0.004 || limit > 64.0 || floor(limit * 1024.0) != limit * 1024.0) {
+                parser_error(parser, "El límite debe estar entre 0.004 y 64 MiB"); goto fail;
+            }
+            if (parser_match(parser, TOKEN_KW_MIB)) parser_advance(parser);
+            else { parser_error(parser, "Se esperaba la unidad 'MiB'"); goto fail; }
+            load->stream_record_limit = (size_t)(limit * 1024.0 * 1024.0);
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "columnas") == 0) {
+            parser_advance(parser);
+            if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de columnas")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El límite de columnas debe ser numérico")) goto fail;
+            double columns = parser->previous.number_value;
+            if (!isfinite(columns) || columns < 1.0 || columns > 4096.0 || floor(columns) != columns) {
+                parser_error(parser, "El límite de columnas debe ser un entero entre 1 y 4096"); goto fail;
+            }
+            load->stream_column_limit = (size_t)columns;
+        } else {
+            parser_error(parser, "Se esperaba 'registros' o 'columnas' después de 'con'"); goto fail;
         }
-        if (parser_match(parser, TOKEN_KW_MIB)) parser_advance(parser);
-        else { parser_error(parser, "Se esperaba la unidad 'MiB'"); goto fail; }
-        load->stream_record_limit = (size_t)(limit * 1024.0 * 1024.0);
     }
     if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
     return load;

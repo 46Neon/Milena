@@ -78,6 +78,8 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                 (node->stream_record_limit != 0 &&
                  node->stream_record_limit < 4096u))
                 return semantic_error(node, error, "Límite de registro de flujo inválido");
+            if (node->stream_column_limit > 4096u)
+                return semantic_error(node, error, "Límite de columnas de flujo inválido");
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Carga de dataset sin archivo");
             break;
