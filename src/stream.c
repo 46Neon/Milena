@@ -461,5 +461,5 @@ MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
 }
 
 
-typedef struct { char *key; StreamAccumulator *acc; size_t invalid; } StreamGroup;
+
 
