@@ -123,6 +123,12 @@ static MilenaStatus stream_split(char *record, char delimiter, char **fields,
                                  size_t field_capacity, size_t *field_count,
                                  MilenaError *error) {
     if (!record || !fields || !field_count) return MILENA_ERR_ARGUMENT;
+    if (*record == '\0') {
+        if (field_capacity == 0) return MILENA_ERR_OVERFLOW;
+        fields[0] = record;
+        *field_count = 1;
+        return MILENA_OK;
+    }
     char *read = record;
     char *write = record;
     size_t count = 0;
@@ -191,6 +197,15 @@ static int stream_column_index(char **headers, size_t count, const char *name) {
         if (strcmp(headers[i], name) == 0) return (int)i;
     }
     return -1;
+}
+
+static bool stream_has_duplicate_header(char **headers, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        for (size_t j = i + 1; j < count; j++) {
+            if (strcmp(headers[i], headers[j]) == 0) return true;
+        }
+    }
+    return false;
 }
 
 static bool stream_parse_number(const char *text, double *value) {
@@ -299,6 +314,12 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
     for (size_t i = 0; i < column_count; i++) {
         headers[i] = milena_strdup(fields[i]);
         if (!headers[i]) { status = MILENA_ERR_MEMORY; goto finish; }
+    }
+    if (stream_has_duplicate_header(headers, column_count)) {
+        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
+                         "La cabecera CSV contiene columnas duplicadas");
+        status = MILENA_ERR_DATA;
+        goto finish;
     }
     int indexes[STREAM_MAX_METRICS];
     for (size_t i = 0; i < metric_count; i++) {
