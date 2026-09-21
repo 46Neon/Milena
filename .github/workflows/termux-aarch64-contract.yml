@@ -54,7 +54,8 @@ jobs:
           python3 scripts/validate_termux_artifact.py "$package" \
             --checksum "$package.sha256" \
             --provenance "$package.provenance.json" \
-            --require-provenance
+            --require-provenance \
+            --require-elf
           test -s "$package.sbom.json"
           sha256sum -c dist/termux/SHA256SUMS
 

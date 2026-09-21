@@ -15,6 +15,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PREFIX_RE = re.compile(r"data/data/[A-Za-z0-9._-]+/files/usr/")
@@ -89,6 +90,28 @@ def validate_package(package: Path) -> dict[str, str]:
     return meta
 
 
+def validate_elf(package: Path) -> None:
+    """Inspect the packaged executable without executing an untrusted artifact."""
+    with tempfile.TemporaryDirectory(prefix="milena-termux-elf-") as raw:
+        root = Path(raw)
+        run("dpkg-deb", "--extract", str(package), str(root))
+        binaries = [p for p in root.rglob("milena") if p.is_file()]
+        if len(binaries) != 1:
+            fail("ELF validation expected exactly one packaged milena executable")
+        binary = binaries[0]
+        header = run("readelf", "-h", str(binary))
+        if not re.search(r"^\s*Class:\s*ELF64\s*$", header, re.MULTILINE):
+            fail("packaged executable is not ELF64")
+        if not re.search(r"^\s*Machine:\s*AArch64\s*$", header, re.MULTILINE):
+            fail("packaged executable is not AArch64")
+        program_headers = run("readelf", "-l", str(binary))
+        if not re.search(r"Requesting program interpreter:\s*/system/bin/linker64", program_headers):
+            fail("packaged executable does not use Android/bionic linker64")
+        dynamic = run("readelf", "-d", str(binary))
+        if re.search(r"libc6|libstdc\+\+|libgcc_s\.so|ld-linux|/lib64/", dynamic, re.IGNORECASE):
+            fail("packaged ELF has a Debian/Ubuntu runtime dependency")
+
+
 def validate_checksum(package: Path, checksum: Path) -> None:
     if not checksum.is_file():
         fail(f"checksum file does not exist: {checksum}")
@@ -131,6 +154,10 @@ def validate_provenance(package: Path, provenance: Path, require: bool = False) 
         fail("provenance SHA-256 does not match the package")
     if data.get("artifact", {}).get("architecture") != "aarch64":
         fail("provenance does not assert aarch64")
+    if data.get("artifact", {}).get("version") != fields(package)["Version"]:
+        fail("provenance version does not match the package")
+    if "android" not in data.get("build", {}).get("target", "").lower():
+        fail("provenance target is not Android")
     if not data.get("source", {}).get("commit"):
         fail("provenance does not contain a source commit")
 
@@ -210,9 +237,12 @@ def main() -> int:
     parser.add_argument("--expected-fingerprint")
     parser.add_argument("--provenance", type=Path)
     parser.add_argument("--require-provenance", action="store_true")
+    parser.add_argument("--require-elf", action="store_true", help="inspect the packaged AArch64 Android ELF")
     args = parser.parse_args()
     try:
         validate_package(args.package)
+        if args.require_elf:
+            validate_elf(args.package)
         if args.provenance:
             validate_provenance(args.package, args.provenance, args.require_provenance)
         elif args.require_provenance:
@@ -227,6 +257,8 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     print(f"Termux artifact boundary: OK ({args.package.name})")
+    if args.require_elf:
+        print("Packaged ELF boundary: OK (ELF64 AArch64 /system/bin/linker64)")
     if args.apt_root:
         print(f"APT repository structure: OK ({args.apt_root})")
     return 0

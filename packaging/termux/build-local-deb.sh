@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 umask 022
 
@@ -21,14 +21,26 @@ ARCH="$(dpkg --print-architecture)"
 [[ "$ARCH" == 'aarch64' ]] || { echo "Termux package target must be aarch64 (got $ARCH)" >&2; exit 1; }
 TARGET_TRIPLE="$(clang -print-target-triple 2>/dev/null || true)"
 printf '%s' "$TARGET_TRIPLE" | grep -Eqi aarch64 || { echo 'clang target is not aarch64' >&2; exit 1; }
-
+printf '%s' "$TARGET_TRIPLE" | grep -Eqi android || { echo "clang target is not Android/bionic: $TARGET_TRIPLE" >&2; exit 1; }
+# Keep the package version and the runtime's --version output identical.  Do
+# not inherit a host compiler's default C flags when a caller has not supplied
+# them; the product has no third-party libraries.
+BASE_CFLAGS="${CFLAGS:--std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2}"
+VERSION_DEFINE="-DMILENA_VERSION=\\\"$VERSION\\\""
+BUILD_CFLAGS="$BASE_CFLAGS $VERSION_DEFINE"
+export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-reproducible}"
 make clean
-CC=clang make
-CC=clang make test
+CC=clang make CFLAGS="$BUILD_CFLAGS"
+CC=clang make CFLAGS="$BUILD_CFLAGS" test
+./milena --self-check
+./milena --version | grep -Fxq "$VERSION"
 # Check the produced ELF before it is copied into a package.
 readelf -h milena | grep -Eq 'Class:[[:space:]]+ELF64'
 readelf -h milena | grep -Eq 'Machine:[[:space:]]+AArch64'
-if readelf -d milena 2>/dev/null | grep -Eiq 'libc6|libstdc\+\+|libgcc_s\.so'; then
+readelf -l milena | grep -Eq 'Requesting program interpreter: /system/bin/linker64' || {
+    echo 'ELF interpreter is not Android/bionic linker64' >&2; exit 1;
+}
+if readelf -d milena 2>/dev/null | grep -Eiq 'libc6|libstdc\+\+|libgcc_s\.so|ld-linux|/lib64/'; then
     echo 'ELF contains a Debian/Ubuntu runtime dependency' >&2; exit 1
 fi
 
@@ -58,7 +70,11 @@ OUTPUT="$DIST_DIR/milena_${VERSION}_aarch64.deb"
 dpkg-deb --build --root-owner-group -Zxz --uniform-compression "$STAGE" "$OUTPUT" >/dev/null
 dpkg-deb -f "$OUTPUT" Package | grep -Fxq milena
 dpkg-deb -f "$OUTPUT" Architecture | grep -Fxq aarch64
+dpkg-deb -f "$OUTPUT" Version | grep -Fxq "$VERSION"
 dpkg-deb --contents "$OUTPUT" | grep -Fq "${PREFIX_DIR#/}/bin/milena"
+! dpkg-deb --contents "$OUTPUT" | grep -Eq '(^|[[:space:]])(usr|bin|lib|etc)/' || {
+    echo 'Termux package contains a Debian filesystem path' >&2; exit 1;
+}
 sha256sum "$OUTPUT" > "$OUTPUT.sha256"
 python3 - "$OUTPUT" "$OUTPUT.sha256" "$ROOT_DIR" "$SOURCE_DATE_EPOCH" "$TARGET_TRIPLE" > "$OUTPUT.provenance.json" <<'PY'
 import hashlib, json, os, subprocess, sys

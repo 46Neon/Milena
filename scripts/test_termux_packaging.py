@@ -60,7 +60,7 @@ def main() -> int:
         checksum.write_text(f"{hashlib.sha256(package.read_bytes()).hexdigest()}  {package}\n", encoding="utf-8")
         run_validator(package, "--checksum", str(checksum))
         provenance = work / (package.name + ".provenance.json")
-        provenance.write_text(json.dumps({"artifact": {"filename": package.name, "sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "architecture": "aarch64"}, "source": {"commit": "fixture-commit"}}), encoding="utf-8")
+        provenance.write_text(json.dumps({"artifact": {"filename": package.name, "sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "architecture": "aarch64", "version": "0.1.1"}, "source": {"commit": "fixture-commit"}, "build": {"target": "aarch64-unknown-linux-android24"}}), encoding="utf-8")
         run_validator(package, "--provenance", str(provenance), "--require-provenance")
         provenance.write_text(provenance.read_text(encoding="utf-8").replace("fixture-commit", ""), encoding="utf-8")
         run_validator(package, "--provenance", str(provenance), "--require-provenance", expect_success=False)

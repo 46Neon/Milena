@@ -65,7 +65,7 @@ jobs:
           test -s "$package.sbom.json"
           sha256sum -c "$package.sha256"
           python3 scripts/validate_termux_artifact.py "$package" --checksum "$package.sha256" \
-            --provenance "$package.provenance.json" --require-provenance
+            --provenance "$package.provenance.json" --require-provenance --require-elf
           test "$(dpkg-deb -f "$package" Package)" = milena
           test "$(dpkg-deb -f "$package" Architecture)" = aarch64
           if find dist/inputs -type f -name '*amd64*' -o -name '*arm64*' | grep -q .; then exit 1; fi
@@ -109,7 +109,7 @@ jobs:
           gpgv --version >/dev/null
           python3 scripts/validate_termux_artifact.py "$package" \
             --checksum "$package.sha256" --provenance "$package.provenance.json" \
-            --require-provenance --apt-root dist/apt --keyring dist/apt/milena-archive-keyring.asc \
+            --require-provenance --require-elf --apt-root dist/apt --keyring dist/apt/milena-archive-keyring.asc \
             --expected-fingerprint "$key_fingerprint"
 
       - name: Install pinned Netlify CLI

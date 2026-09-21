@@ -14,7 +14,10 @@ trap cleanup EXIT
 
 dpkg --install "$PACKAGE"
 command -v milena >/dev/null
-milena --help >/dev/null 2>&1 || true
+expected_version="$(dpkg-deb -f "$PACKAGE" Version)"
+[[ "$(milena --version)" == "$expected_version" ]] || { echo 'installed binary version does not match package' >&2; exit 1; }
+milena --help >/dev/null
+milena --self-check
 # A second install exercises the upgrade/reconfigure path without inventing a second artifact.
 dpkg --install "$PACKAGE"
 dpkg-query -W -f='${Status}' milena | grep -q 'install ok installed'

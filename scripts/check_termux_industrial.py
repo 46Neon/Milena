@@ -23,7 +23,7 @@ require('.github/workflows/termux-aarch64-contract.yml',
 require('.github/workflows/publish-apt.yml',
         'concurrency:', 'confirm_publish:', 'if: inputs.confirm_publish == true',
         "--pattern 'milena_*_aarch64.deb'", 'gpgv',
-        '--provenance', '--require-provenance', 'if-no-files-found: error')
+        '--provenance', '--require-provenance', '--require-elf', 'if-no-files-found: error')
 require('scripts/termux-runner-preflight.sh',
         'uname -m', 'dpkg --print-architecture', 'termux-info',
         'readelf', 'workspace-sha256.txt')

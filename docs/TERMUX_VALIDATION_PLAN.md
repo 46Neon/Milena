@@ -99,3 +99,20 @@ eliminación en Android, ni una prueba de cliente contra un repositorio remoto.
 La CI de Linux y los fixtures sintéticos validan el contrato y los metadatos,
 pero no pueden demostrar compatibilidad con Android, bionic, almacenamiento,
 permisos o el gestor APT de un dispositivo.
+
+## Puerta adicional de portabilidad Android/bionic
+
+El build nativo no acepta solo una etiqueta del runner: `clang
+-print-target-triple` debe contener `aarch64` y `android`, y el preflight registra
+la API de Android mediante `getprop`. El constructor compila la versión del
+paquete dentro del binario, ejecuta `milena --self-check`/`--version` y examina
+el ELF antes de copiarlo al staging. El validador extrae el `.deb` sin
+**ejecutarlo** para comprobar ELF64, AArch64, `/system/bin/linker64` y la
+ausencia de `libc6`, `libstdc++`, `libgcc_s`, `ld-linux` o `/lib64`.
+
+Estas comprobaciones son fail-closed: un Linux x86_64, un Clang host o un ELF
+Debian no se presentan como Termux. El único requisito que queda fuera de la
+CI hospedada es un dispositivo/emulador Android real aarch64 con Termux,
+`getprop`, Clang, dpkg y un `PREFIX` utilizable; sin ese runner no se afirma
+instalación, ejecución o compatibilidad bionic. El workflow manual falla
+explícitamente antes de construir si el dispositivo no puede demostrarlo.

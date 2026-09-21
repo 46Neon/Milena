@@ -47,3 +47,18 @@ Solo después de una ejecución aprobada del workflow manual se puede ejecutar:
 La prueba se niega si `milena` ya estaba instalado, instala el paquete, ejecuta
 el binario, repite la instalación para cubrir actualización/reconfiguración y
 lo elimina. Esto no sustituye la prueba APT desde una sesión Termux limpia.
+
+## Portabilidad nativa y autodiagnóstico
+
+El constructor usa la versión exacta del paquete al compilar (`--version` debe
+coincidir con `dpkg-deb`), ejecuta `--self-check` antes de empaquetar y exige un
+triple Clang `aarch64-*-android*`. El ELF se inspecciona sin ejecutarlo:
+`ELF64/AArch64`, intérprete `/system/bin/linker64` y ausencia de dependencias
+Debian/glibc. El validador del workflow repite esa inspección dentro del `.deb`.
+
+No se añaden bibliotecas externas: el enlace usa únicamente la libc/bionic y
+libm provistas por Termux. Las pruebas con límite de tiempo tienen una ruta
+alternativa cuando `timeout` no está disponible, y el Makefile separa
+`CPPFLAGS`, `CFLAGS` y `LDFLAGS` para no asumir flags de GNU. Las pruebas del
+paquete siguen validando el binario canónico; los módulos experimentales
+continúan fuera de `SOURCES` y de la frontera de ejecución oficial.

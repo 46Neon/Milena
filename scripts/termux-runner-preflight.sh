@@ -23,7 +23,7 @@ RUNNER_OS_VALUE="${RUNNER_OS:-unknown}"
     exit 1
 }
 
-for command in clang make dpkg dpkg-deb python3 sha256sum readelf pkg termux-info; do
+for command in clang make dpkg dpkg-deb python3 sha256sum readelf pkg termux-info getprop; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required Termux command: $command" >&2
         exit 1
@@ -43,6 +43,15 @@ printf '%s' "$TARGET_TRIPLE" | grep -Eqi 'aarch64' || {
     echo "Clang target is not aarch64: $TARGET_TRIPLE" >&2
     exit 1
 }
+printf '%s' "$TARGET_TRIPLE" | grep -Eqi 'android' || {
+    echo "Clang target is not Android/bionic: $TARGET_TRIPLE" >&2
+    exit 1
+}
+ANDROID_API="$(getprop ro.build.version.sdk 2>/dev/null || true)"
+[[ "$ANDROID_API" =~ ^[0-9]+$ ]] || {
+    echo "Android SDK property is unavailable; this is not a verifiable device runner" >&2
+    exit 1
+}
 
 EVIDENCE_DIR="$ROOT_DIR/artifacts/termux-runner"
 rm -rf "$EVIDENCE_DIR"
@@ -56,6 +65,7 @@ mkdir -p "$EVIDENCE_DIR"
     printf 'dpkg_architecture=%s\n' "$DPKG_ARCH"
     printf 'prefix=%s\n' "$PREFIX_DIR"
     printf 'target_triple=%s\n' "$TARGET_TRIPLE"
+    printf 'android_api=%s\n' "$ANDROID_API"
     printf 'commit=%s\n' "$(git -C "$ROOT_DIR" rev-parse HEAD)"
     printf 'termux_info<<EOF\n%s\nEOF\n' "$TERMUX_INFO"
 } > "$EVIDENCE_DIR/preflight.txt"
@@ -66,6 +76,7 @@ mkdir -p "$EVIDENCE_DIR"
     printf '%s\n' '== python ==' ; python3 --version
     printf '%s\n' '== pkg ==' ; pkg --version
     printf '%s\n' '== target ==' ; printf '%s\n' "$TARGET_TRIPLE"
+    printf '%s\n' '== android-api ==' ; printf '%s\n' "$ANDROID_API"
 } > "$EVIDENCE_DIR/toolchain.txt"
 # This is a record, not an assertion that Android execution occurred elsewhere.
 find "$ROOT_DIR" -maxdepth 2 -type f -print0 | sort -z | xargs -0 sha256sum > "$EVIDENCE_DIR/workspace-sha256.txt"
