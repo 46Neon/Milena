@@ -60,6 +60,35 @@ int main(void) {
     assert(strstr(limited_error.message, "límite") != NULL);
     remove(large_input);
     remove(large_output);
+    const char *group_input = "tests/.stream_grouped.csv";
+    const char *group_output = "tests/.stream_grouped.json";
+    FILE *group = fopen(group_input, "wb");
+    assert(group != NULL);
+    fputs("grupo,a,b\nrojo,1,10\nazul,2,no\nrojo,no,30\nazul,4,40\n", group);
+    assert(fclose(group) == 0);
+    MilenaStreamMetric grouped_metrics[] = {
+        {"a", "a_suma", MILENA_STREAM_SUM},
+        {"b", "b_media", MILENA_STREAM_MEAN}
+    };
+    MilenaStreamOptions grouped_options = milena_stream_options_default();
+    grouped_options.max_groups = 2;
+    MilenaError grouped_error;
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_with_options(group_input, group_output,
+        "grupo", grouped_metrics, 2, &grouped_options, NULL,
+        &grouped_error) == MILENA_OK);
+    FILE *group_json = fopen(group_output, "rb");
+    assert(group_json != NULL);
+    char grouped_buffer[4096] = {0};
+    assert(fread(grouped_buffer, 1, sizeof(grouped_buffer) - 1, group_json) > 0);
+    assert(fclose(group_json) == 0);
+    assert(strstr(grouped_buffer, "\"clave\":\"rojo\"") != NULL);
+    assert(strstr(grouped_buffer, "\"clave\":\"azul\"") != NULL);
+    assert(strstr(grouped_buffer, "\"a_suma\"") != NULL);
+    assert(strstr(grouped_buffer, "\"valores_invalidos\":1") != NULL);
+    remove(group_input);
+    remove(group_output);
+
     puts("stream tests passed");
     return 0;
 }
