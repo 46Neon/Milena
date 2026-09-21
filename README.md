@@ -1,18 +1,61 @@
-# 🌿 Milena
+<p align="center">
+  <img src="assets/milena-logo-horizontal.jpg" alt="Milena — Lenguaje para análisis de datos" width="900">
+</p>
 
-![Banner provisional de Milena](assets/milena-banner.png)
+<p align="center">
+  <strong>Lenguaje de programación en español para convertir datos en análisis reproducibles.</strong>
+</p>
 
-Lenguaje de programación en español para análisis de datos, estadística y computación científica.
+<p align="center">
+  <kbd>C17</kbd>
+  <kbd>cross-platform</kbd>
+  <kbd>data-analysis</kbd>
+  <kbd>data-science</kbd>
+  <kbd>milena</kbd>
+  <kbd>programming-language</kbd>
+  <kbd>scientific-computing</kbd>
+  <kbd>statistics</kbd>
+  <kbd>windows</kbd>
+  <kbd>winget</kbd>
+</p>
 
-## Análisis de datos intuitivo y nativo en español
+# Milena
 
-Milena es un lenguaje y motor para análisis de datos, estadística y computación científica. Permite trabajar con arreglos, tablas y operaciones reproducibles mediante scripts con extensión `.milena`.
+## Una nueva experiencia de programar datos
 
-Milena se construye con una visión de largo plazo: convertirse en una herramienta clave para el análisis de datos, con una sintaxis clara para las personas, un motor controlable y una evolución orientada a la computación científica. Esa visión se desarrolla paso a paso, con capacidades verificadas antes de presentarlas como terminadas.
+Milena es un lenguaje de programación orientado al análisis de datos, la estadística y la computación científica, con una sintaxis española cada vez más humana.
 
-## 🚀 Empezar ahora
+Su propuesta no consiste solamente en traducir palabras clave del inglés. Milena busca cambiar la relación entre la persona y el análisis: que trabajar con datos se acerque a expresar una idea, no a descifrar una sucesión de comandos técnicos.
 
-### Un primer script
+La dirección del proyecto es construir un lenguaje donde una persona pueda describir qué datos tiene, qué quiere limpiar, qué transformación necesita, cómo desea agruparlos, qué medida quiere calcular y qué resultado desea obtener, mediante una arquitectura de lenguaje real:
+
+```text
+script .milena
+      ↓
+lexer → parser → AST → semántica → runtime canónico
+      ↓
+arreglos, datasets, tablas, estadística y reportes
+```
+
+La sintaxis actual todavía utiliza paréntesis, llaves y símbolos porque permiten interpretar los programas con precisión. La evolución futura busca reducir progresivamente las concatenaciones y expresiones técnicas innecesarias, acercando el lenguaje a una forma más natural de describir análisis.
+
+## La máquina del Excel, convertida en lenguaje
+
+Excel demostró que una persona puede observar datos, transformarlos y obtener respuestas sin construir desde cero un sistema completo. Milena toma esa idea y la lleva hacia un lenguaje de programación.
+
+Milena puede entenderse como una **máquina programable de análisis de datos**:
+
+- las tablas representan la información;
+- las transformaciones representan el razonamiento;
+- las operaciones estadísticas representan las preguntas;
+- el script representa el procedimiento completo;
+- el reporte representa el resultado reproducible.
+
+A diferencia de un flujo manual de celdas y clics, un programa Milena conserva qué archivo se utilizó, qué limpieza se aplicó, qué fórmulas se ejecutaron, cómo se agruparon los registros y qué reporte se generó.
+
+La visión es combinar la accesibilidad conceptual de una hoja de cálculo con la reproducibilidad, automatización y control de un lenguaje de programación.
+
+## Primer programa
 
 ```milena
 .analisis resumen {
@@ -25,45 +68,81 @@ Milena se construye con una visión de largo plazo: convertirse en una herramien
 }
 ```
 
-### Arreglos por eje
+Guárdalo como `estadistica.milena` y ejecútalo con:
+
+```bash
+./milena run estadistica.milena
+```
+
+## Capacidades actuales
+
+Milena cuenta con una ruta canónica para:
+
+- crear arreglos numéricos y arreglos de ceros;
+- calcular suma, media, mínimo, máximo, varianza, desviación estándar, mediana y percentiles;
+- ejecutar reducciones por eje y conservar dimensiones;
+- cargar datasets CSV y declarar columnas numéricas, textuales, categóricas, binarias y de fecha;
+- eliminar valores nulos y duplicados;
+- crear columnas calculadas y extraer períodos desde fechas;
+- filtrar, agrupar, resumir y unir datasets;
+- seleccionar columnas y exportar reportes JSON;
+- generar perfiles estadísticos e histogramas;
+- ejecutar normalidad, tasas, Poisson, correlación, Wilcoxon y chi cuadrado;
+- calcular riesgo relativo y odds ratio;
+- generar modelos SST;
+- ejecutar interés simple desde el lenguaje.
+
+## Análisis de datasets
 
 ```milena
-.analisis matriz {
-    arreglo datos = ceros(2, 3);
+.analisis ventas {
+    dataset cargar datos("datos/ventas.csv")
 
-    media(datos, eje 0);
-    mediana(datos, eje 1);
-    percentil(datos, 90, eje 0);
+    variable precio numerica
+    variable cantidad numerica
+    variable fecha texto
+
+    .limpiar dataset {
+        #nulos("eliminar")
+        #duplicados("eliminar")
+    }
+
+    .transformar dataset {
+        #total("precio * cantidad")
+        #periodo("mes de fecha")
+    }
+
+    .agrupar dataset {
+        #por("periodo")
+        #suma("total")
+        #media("total")
+        #conteo("total")
+    }
+
+    .exportar {
+        ("reporte-ventas.json")
+    }
 }
 ```
 
-Para conservar la dimensión reducida:
+Ejecútalo con:
 
-```milena
-media(matriz, eje 0, conservar dimensiones);
-mediana(matriz, eje 1, conservar dimensiones);
+```bash
+./milena run ventas.milena
 ```
 
-> [!TIP]
-> Los ejemplos nuevos deben usar las palabras españolas. Durante la transición pueden existir nombres históricos compatibles, pero la sintaxis española es la dirección prevista del lenguaje.
+## Instalación y uso
 
-## ¿Qué puede hacer Milena?
+### Linux
 
-- Crear arreglos numéricos y arreglos de ceros.
-- Consultar forma, dimensiones y tamaño.
-- Ejecutar operaciones entre arreglos y escalares.
-- Aplicar broadcasting en operaciones compatibles.
-- Calcular suma, media, mínimo, máximo, varianza y desviación estándar.
-- Calcular medianas y percentiles mediante interpolación lineal.
-- Reducir operaciones por eje y conservar dimensiones.
-- Trabajar con vistas, strides, reshape y transposición desde el motor de arreglos.
-- Analizar archivos tabulares y generar reportes reproducibles.
-- Ejecutar módulos de análisis estadístico y preventivo con advertencias explícitas.
-- Iniciar el desarrollo de árboles de decisión y bosques clasificadores.
+Instala las herramientas de compilación:
 
-## 📦 Instalación y uso
+```bash
+sudo apt update
+sudo apt install -y git build-essential
+```
 
-Desde el repositorio:
+Descarga, construye y prueba Milena:
 
 ```bash
 git clone https://github.com/46Neon/Milena.git
@@ -71,134 +150,146 @@ cd Milena
 ./build.sh
 ```
 
-Ejecutar un script:
+Uso directo:
 
 ```bash
 ./milena run examples/estadistica.milena
-```
-
-Analizar un archivo tabular:
-
-```bash
+./milena inspect datos.csv
 ./milena analizar datos.csv reporte.json
 ./milena perfil datos.csv perfil.json
 ```
 
-La forma exacta de algunos comandos de archivos y reportes continúa evolucionando junto con el lenguaje. Los scripts deben conservar los datos de entrada, las reglas de limpieza y la versión del motor para facilitar la reproducción del análisis.
+También existe un constructor local de paquete Debian:
 
-## ✍️ Sintaxis esencial
-
-Las declaraciones y operaciones principales utilizan palabras españolas:
-
-```milena
-arreglo datos = [10, 20, 30, 40];
-
-suma(datos);
-media(datos);
-minimo(datos);
-maximo(datos);
-varianza(datos);
-desviacion_estandar(datos);
-mediana(datos);
-percentil(datos, 95);
+```bash
+./packaging/debian/build-local-deb.sh
 ```
 
-Las reducciones por eje siguen una estructura explícita:
+Este comando crea un paquete local para pruebas; no significa todavía que Milena esté publicada en un repositorio APT.
 
-```milena
-media(datos, eje 0);
-media(datos, eje 0, conservar dimensiones);
-media(datos, eje 0, sin conservar dimensiones);
+### Windows
+
+Instala Git y LLVM/Clang:
+
+```powershell
+winget install LLVM.LLVM
 ```
 
-La sintaxis busca ser humana en significado, pero conserva delimitadores claros para facilitar el análisis, los mensajes de error y la reproducibilidad. Las frases completamente libres todavía forman parte de una etapa futura.
+Construye el ejecutable portable:
 
-## 🌲 Bosques en desarrollo
+```powershell
+git clone https://github.com/46Neon/Milena.git
+cd Milena
+.\packaging\windows\build.ps1
+```
 
-Milena ya cuenta con una primera base interna para clasificación mediante un conjunto de árboles simples y votación de clases. Esta capacidad todavía está en desarrollo y aún no se presenta como un sistema completo de aprendizaje automático.
-
-El trabajo previsto incluye:
-
-1. Separar árbol y bosque como componentes independientes.
-2. Añadir profundidad configurable.
-3. Incorporar más de dos clases.
-4. Añadir selección reproducible de características.
-5. Incorporar muestras de entrenamiento controladas.
-6. Validar datos imperfectos y casos límite.
-7. Exponer la capacidad mediante sintaxis española estable.
-
-## 🧭 Roadmap
-
-### Base disponible
-
-- Arreglos numéricos.
-- Formas, dimensiones y tamaño.
-- Strides, vistas, reshape y transposición.
-- Broadcasting.
-- Estadística global y por eje.
-- Medianas y percentiles.
-- Reportes y análisis tabular.
-- Validación automatizada en Linux y Windows.
-
-### En desarrollo
-
-- Bosques clasificadores.
-- Pruebas multidimensionales más amplias.
-- Sintaxis española semántica.
-- Álgebra lineal ampliada.
-- Gestión de memoria optimizada.
-
-### Etapas futuras
-
-- Integración numérica.
-- Optimización científica.
-- Diferenciación automática.
-- Mejoras específicas para cada plataforma.
-- Herramientas avanzadas de modelado.
-
-## 🔍 Estado del proyecto
-
-Milena está en desarrollo activo. Sus capacidades se incorporan por capas y se validan con pruebas automatizadas. Algunas operaciones, partes de la sintaxis y módulos avanzados todavía pueden cambiar.
-
-> [!WARNING]
-> Milena no sustituye una auditoría, una investigación profesional, una decisión médica, legal o financiera, ni una validación especializada. Los resultados deben interpretarse según los datos, el método utilizado y el contexto del análisis.
-
-La visualización, los sistemas distribuidos y los modelos avanzados todavía forman parte de etapas posteriores.
-
-## 🏗️ Organización del lenguaje
+El ejecutable se genera en:
 
 ```text
-script .milena
-      ↓
-lexer y parser
-      ↓
-representación semántica
-      ↓
-motor de arreglos y tablas
-      ↓
-operaciones estadísticas
-      ↓
-resultado o reporte
+dist\windows\milena.exe
 ```
 
-La forma en que una persona escribe una operación está separada de la implementación interna que la ejecuta. Esto permite mejorar la sintaxis sin reescribir los cálculos fundamentales.
+Ejecuta un ejemplo:
 
-## 🤝 Contribuir
+```powershell
+.\dist\windows\milena.exe run .\examples\estadistica.milena
+```
 
-Puedes probar Milena, revisar los ejemplos, reportar errores o proponer mejoras en el repositorio:
+### Termux
 
-[Repositorio de Milena](https://github.com/46Neon/Milena)
+Instala Git, Clang y Make:
 
-Al reportar un problema, incluye cuando sea posible:
+```bash
+pkg update
+pkg install -y git clang make
+```
 
-- sistema utilizado;
-- script `.milena` mínimo que reproduce el problema;
+Descarga y compila:
+
+```bash
+git clone https://github.com/46Neon/Milena.git
+cd Milena
+make
+```
+
+Ejecuta las pruebas y un ejemplo:
+
+```bash
+make test
+./milena run examples/estadistica.milena
+```
+
+Termux utiliza las mismas fuentes C17 y el mismo pipeline canónico. La validación automatizada principal se ejecuta actualmente en Linux y Windows; cualquier diferencia específica de Android o Termux debe reportarse con el dispositivo, la versión de Termux y el commit utilizado.
+
+## Distribución mediante gestores de paquetes
+
+La distribución oficial mediante APT, WinGet y el repositorio de paquetes de Termux forma parte del objetivo de portabilidad de Milena.
+
+Los comandos previstos son:
+
+```bash
+sudo apt install milena
+```
+
+```powershell
+winget install milena
+```
+
+```bash
+pkg install milena
+```
+
+Estos comandos **todavía no se presentan como disponibles** porque los repositorios y manifiestos oficiales aún deben publicarse. Mientras tanto, las rutas verificadas son la compilación desde el repositorio, el paquete Debian local, el ejecutable portable de Windows y la compilación desde Termux.
+
+## Estado del proyecto
+
+Milena ya es un runtime funcional y verificable, no solamente una idea conceptual ni una colección de ejemplos aislados. Cuenta con un pipeline lexer → parser → AST → semántica → runtime, ejecución de arreglos, datasets y tablas, análisis estadístico, operaciones SST, integración financiera inicial, reportes reproducibles y validación automatizada en Linux y Windows.
+
+El proyecto se encuentra en una etapa de **consolidación avanzada del núcleo del lenguaje**. La arquitectura principal está implementada y validada, mientras que la sintaxis, las APIs y los módulos de alto nivel continúan evolucionando.
+
+## Volumen de datos y alcance industrial
+
+Actualmente, Milena trabaja principalmente con datasets y tablas cargados en memoria. Esto la hace adecuada para análisis exploratorios, automatización de reportes, datasets medianos, análisis estadístico reproducible, herramientas internas, proyectos científicos y desarrollo de soluciones de datos.
+
+Milena todavía no afirma ofrecer procesamiento distribuido, ejecución out-of-core, clústeres ni garantías de rendimiento para volúmenes masivos de escala industrial.
+
+Para convertirse en una plataforma preparada para grandes soluciones tecnológicas del mercado deberá incorporar y medir benchmarks de alto volumen, procesamiento por streaming, políticas de memoria, más formatos de datos, optimización, compatibilidad de APIs, observabilidad y empaquetado oficial.
+
+La descripción más honesta es:
+
+> Milena es un proyecto de ingeniería de lenguaje con un núcleo funcional avanzado, orientado a convertirse en una plataforma científica y de análisis de datos de alcance industrial.
+
+No es solamente un ejercicio educativo, pero tampoco se presenta todavía como una plataforma industrial masiva ya consolidada. Es una base tecnológica real, verificable y en evolución hacia ese objetivo.
+
+## Contribuir
+
+Puedes contribuir mediante:
+
+- ejemplos `.milena`;
+- pruebas de integración;
+- documentación;
+- reportes de errores;
+- mejoras del lexer, parser, AST y semántica;
+- optimización del runtime;
+- nuevos análisis estadísticos;
+- mejoras de portabilidad;
+- herramientas de empaquetado;
+- propuestas para hacer la sintaxis más humana.
+
+Al reportar un problema, incluye:
+
+- sistema operativo;
+- versión del compilador;
+- comando utilizado;
+- script mínimo que reproduce el problema;
 - resultado esperado;
 - resultado obtenido;
-- versión o commit del proyecto.
+- commit utilizado.
 
-Las contribuciones deben mantener la portabilidad, los errores explícitos, las pruebas automatizadas y la claridad de la sintaxis.
+Las contribuciones deben mantener la ruta canónica del lenguaje, la portabilidad C17, las pruebas automatizadas, los errores explícitos, la reproducibilidad y la claridad de la sintaxis.
 
-## 📄 Licencia e identidad visual
+## Licencia
 
-El código fuente de Milena se distribuye bajo la licencia MIT. Los recursos visuales son provisionales: su procedencia y licencia deben documentarse antes de redistribuirlos. Consulta [BRAND.md](BRAND.md) para conocer su estado y los requisitos de uso.
+Milena se distribuye bajo la licencia MIT.
+
+[Repositorio oficial de Milena](https://github.com/46Neon/Milena)
