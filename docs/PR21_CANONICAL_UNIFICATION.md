@@ -80,11 +80,9 @@ Actions.
   propagan errores de extracción y no escriben reportes parciales.
 - [x] Se eliminó el escaper JSON duplicado de `sst_report_advanced.c`; las
   cadenas dinámicas usan `milena_json_write_string`.
-- [x] Una fuente que declara los bloques canónicos de análisis o arrays pero
-  no puede parsearse ya no cae silenciosamente al router textual: devuelve
-  error de parseo. La sintaxis histórica de funciones, que aún comparte
-  superficie léxica con el parser numérico anterior, sigue aislada como
-  compatibilidad hasta que sus llamadas también tengan representación AST.
+- [ ] Endurecer el router textual sin romper los fixtures existentes: la
+  clasificación canónica debe conservar el diagnóstico específico del parser
+  para análisis y arrays antes de rechazar cualquier fallback.
 
 ## Pendientes verificados después de esta iteración
 

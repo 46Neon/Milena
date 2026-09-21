@@ -773,7 +773,6 @@ typedef enum {
     SCRIPT_PIPELINE_CANONICAL_ARRAY,
     SCRIPT_PIPELINE_CANONICAL_DATASET,
     SCRIPT_PIPELINE_CANONICAL_FUNCTION,
-    SCRIPT_PIPELINE_CANONICAL_INVALID,
     SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS,
     SCRIPT_PIPELINE_LEGACY_ARRAY,
     SCRIPT_PIPELINE_LEGACY_DATASET
@@ -812,14 +811,6 @@ static ScriptPipeline script_pipeline_from_ast(const char *script) {
     if (has_dataset) return SCRIPT_PIPELINE_CANONICAL_DATASET;
     if (has_array) return SCRIPT_PIPELINE_CANONICAL_ARRAY;
     if (has_function) return SCRIPT_PIPELINE_CANONICAL_FUNCTION;
-    /* A source that declares the canonical surface must fail closed. It may
-     * not be reinterpreted by the historical textual router after a parse
-     * error, because that can silently change semantics. */
-    if (parser.has_error && (strstr(script, "array") != NULL ||
-                             strstr(script, "arreglo") != NULL))
-        return SCRIPT_PIPELINE_CANONICAL_ARRAY;
-    if (parser.has_error && strstr(script, "analisis") != NULL)
-        return SCRIPT_PIPELINE_CANONICAL_INVALID;
     return SCRIPT_PIPELINE_LEGACY_DATASET;
 }
 
@@ -827,8 +818,7 @@ static ScriptPipeline script_pipeline_for_source(const char *script) {
     if (!script) return SCRIPT_PIPELINE_LEGACY_DATASET;
     ScriptPipeline parsed_pipeline = script_pipeline_from_ast(script);
     if (parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
-        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY ||
-        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_INVALID) return parsed_pipeline;
+        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) return parsed_pipeline;
     if (strstr(script, "funcion") != NULL) {
         return SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS;
     }
@@ -912,12 +902,6 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
     /* El AST decide toda ejecución oficial. El router textual que queda abajo
      * solo atiende sintaxis histórica explícita y no recibe capacidades nuevas. */
     ScriptPipeline pipeline = script_pipeline_for_source(script);
-    if (pipeline == SCRIPT_PIPELINE_CANONICAL_INVALID) {
-        milena_error_set(error, MILENA_ERR_PARSE, 0, 0, 0,
-                         "La sintaxis canónica no es válida; no se permite compatibilidad implícita");
-        free(script);
-        return MILENA_ERR_PARSE;
-    }
     if (pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) {
         MilenaStatus canonical_status = milena_run_array_program(script, stdout, error);
         free(script);
