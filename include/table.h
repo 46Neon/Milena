@@ -104,7 +104,9 @@ MilenaStatus milena_table_from_dataset(MilenaTable *out,
                                         const Dataset *dataset,
                                         const MilenaSchema *schema,
                                         MilenaError *error);
-/* Reconstruye el Dataset de compatibilidad desde la tabla canónica. */
+/* Reconstruye el Dataset de compatibilidad desde la tabla canónica.
+ * `out` debe estar inicializado; su contenido anterior se reemplaza solo
+ * después de completar la conversión. */
 MilenaStatus milena_dataset_from_table(Dataset *out,
                                         const MilenaTable *table,
                                         MilenaError *error);

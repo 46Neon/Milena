@@ -1,0 +1,68 @@
+# PR21: estado de la unificación canónica
+
+Este documento registra el estado verificable de la migración iniciada desde
+`main` para el PR21. No declara completa la reingeniería: separa lo que ya
+está implementado de los trabajos que siguen abiertos.
+
+## Superficie oficial
+
+La ruta oficial es `milena run <archivo.milena>` y debe recorrer lexer ->
+parser -> AST -> semántica -> runtime. `src/script.c` puede clasificar una
+fuente como canónica o histórica, pero la ruta histórica está encapsulada y no
+puede recibir capacidades nuevas. Los módulos IR/VM/GC, compiler, assembler,
+forest y demás módulos experimentales permanecen fuera del binario oficial.
+
+`Dataset` sigue siendo el formato de entrada/salida de compatibilidad. La
+representación tabular canónica es `MilenaTable`; `milena_dataset_from_table`
+realiza una conversión explícita y reemplaza el destino solo después de
+construir una conversión completa. El destino debe estar inicializado por el
+llamante, como en el resto de la API `Dataset`.
+
+## Cambios implementados en PR21
+
+- El join no escribe la cadena `next` después de un fallo de reserva; la
+  inicialización de esa estructura está protegida por la puerta de memoria.
+- La conversión `MilenaTable -> Dataset` construye un temporal, libera el
+  destino anterior al hacer commit y descarta completamente el temporal ante
+  cualquier error. Esto evita fugas, reutilización de memoria vieja y
+  datasets parcialmente observables.
+- El escritor de strings JSON con escapes para comillas, barra inversa,
+  control y saltos de línea vive en `common.c` y es usado por el serializer de
+  `Dataset` y por las salidas SST que escriben nombres de columnas, métodos y
+  etiquetas.
+- El runtime SST propaga errores de lectura de celdas y rechaza dtypes no
+  numéricos, en vez de producir estadísticas parciales o convertirlos
+  silenciosamente a cero. Las conversiones numéricas aceptan los dtypes
+  enteros y de coma flotante soportados por `MilenaTable`.
+- El parser centraliza la conexión fallible de nodos AST en los puntos de
+  expresión y programa, diagnostica comandos desconocidos en bloques de
+  limpieza/transformación y deja de descartar tokens desconocidos en el
+  bloque de análisis.
+- `tests/test_table_worker4.c` está conectado al objetivo `make test` como
+  regresión de la API tabular.
+
+## Checklist pendiente
+
+- [ ] Completar la API de valores común para escalares, arrays y tablas, con
+      coerciones y tipos comprobados por semántica.
+- [ ] Trasladar la superficie restante de transformaciones/selección/uniones
+      al AST sin ampliar el router textual legado.
+- [ ] Sustituir las salidas JSON formateadas restantes por un escritor común
+      (en particular todas las operaciones SST que solo escriben números y
+      booleanos deben conservar una política única de errores de I/O).
+- [ ] Auditar y propagar cada resultado de `ast_add_child` en las ramas de
+      funciones y en los constructores de bloques complejos.
+- [ ] Añadir pruebas de inyección de escapes JSON, fallo de conversión por
+      dtype y preservación del destino ante error de `Dataset -> MilenaTable`.
+- [ ] Revisar todos los diagnósticos semánticos y garantizar que ninguna
+      sintaxis no reconocida pueda caer silenciosamente a compatibilidad.
+- [ ] Mantener la clasificación de fuentes experimentales y eliminar APIs
+      duplicadas solo cuando exista una sustitución canónica con pruebas.
+
+## Puerta de CI
+
+Antes de fusionar PR21 deben pasar los checks requeridos por los workflows,
+incluidos GCC, Clang, ASan/UBSan, Debian, Windows, enlaces de Markdown y
+Cloudflare Pages. El gate local equivalente es `make test`; por el entorno de
+trabajo de esta migración la compilación y la ejecución se delegan a GitHub
+Actions.

@@ -105,3 +105,23 @@ void milena_error_print(const MilenaError *error, FILE *stream) {
     if (error->column) fprintf(stream, " columna %zu", error->column);
     fprintf(stream, ": %s\n", error->message);
 }
+
+
+void milena_json_write_string(FILE *stream, const char *text) {
+    if (!stream) return;
+    fputc('"', stream);
+    for (const unsigned char *p = (const unsigned char *)(text ? text : "");
+         *p; ++p) {
+        switch (*p) {
+            case '"': fputs("\\\"", stream); break;
+            case '\\': fputs("\\\\", stream); break;
+            case '\n': fputs("\\n", stream); break;
+            case '\r': fputs("\\r", stream); break;
+            case '\t': fputs("\\t", stream); break;
+            default:
+                if (*p < 0x20) fprintf(stream, "\\u%04x", (unsigned)*p);
+                else fputc(*p, stream);
+        }
+    }
+    fputc('"', stream);
+}

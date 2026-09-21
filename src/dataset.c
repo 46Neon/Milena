@@ -573,23 +573,6 @@ MilenaStatus dataset_remove_duplicates(Dataset *dataset, MilenaError *error) {
     return MILENA_OK;
 }
 
-static void json_string(FILE *out, const char *text) {
-    fputc('"', out);
-    for (const unsigned char *p = (const unsigned char *)(text ? text : ""); *p; p++) {
-        switch (*p) {
-            case '"': fputs("\\\"", out); break;
-            case '\\': fputs("\\\\", out); break;
-            case '\n': fputs("\\n", out); break;
-            case '\r': fputs("\\r", out); break;
-            case '\t': fputs("\\t", out); break;
-            default:
-                if (*p < 0x20) fprintf(out, "\\u%04x", *p);
-                else fputc(*p, out);
-        }
-    }
-    fputc('"', out);
-}
-
 MilenaStatus dataset_save_json(const Dataset *dataset, const char *filename,
                              MilenaError *error) {
     if (!dataset || !filename) return MILENA_ERR_ARGUMENT;
@@ -599,18 +582,18 @@ MilenaStatus dataset_save_json(const Dataset *dataset, const char *filename,
         return MILENA_ERR_IO;
     }
     fprintf(out, "{\n  \"dataset\": ");
-    json_string(out, dataset->filename);
+    milena_json_write_string(out, dataset->filename);
     fprintf(out, ",\n  \"columnas\": [");
     for (size_t c = 0; c < dataset->column_count; c++) {
         if (c) fputs(", ", out);
-        json_string(out, dataset->headers[c]);
+        milena_json_write_string(out, dataset->headers[c]);
     }
     fprintf(out, "],\n  \"filas_invalidas\": %zu,\n  \"filas\": [\n", dataset->invalid_rows);
     for (size_t r = 0; r < dataset->row_count; r++) {
         fprintf(out, "    [");
         for (size_t c = 0; c < dataset->column_count; c++) {
             if (c) fputs(", ", out);
-            json_string(out, dataset->rows[r][c]);
+            milena_json_write_string(out, dataset->rows[r][c]);
         }
         fprintf(out, "]%s\n", r + 1 < dataset->row_count ? "," : "");
     }

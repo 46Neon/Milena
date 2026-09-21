@@ -545,20 +545,22 @@ static MilenaStatus runtime_write_sst_profile(const MilenaTable *table,
         return MILENA_ERR_MEMORY;
     }
     size_t count = 0;
+    MilenaStatus status = MILENA_OK;
     for (size_t row = 0; row < table->row_count; row++) {
         if (milena_table_is_null(table, (size_t)column, row)) continue;
         const void *raw = NULL;
-        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
-        switch (data->values.dtype) {
-            case MILENA_DTYPE_INT64: values[count++] = (double)*(const int64_t *)raw; break;
-            case MILENA_DTYPE_UINT64: values[count++] = (double)*(const uint64_t *)raw; break;
-            case MILENA_DTYPE_FLOAT32: values[count++] = (double)*(const float *)raw; break;
-            case MILENA_DTYPE_FLOAT64: values[count++] = *(const double *)raw; break;
-            default: values[count++] = 0.0; break;
+        status = milena_table_get_array_value(table, (size_t)column, row, &raw, error);
+        if (status != MILENA_OK || !runtime_numeric_cell(data, raw, &values[count])) {
+            if (status == MILENA_OK)
+                runtime_error(error, MILENA_ERR_TYPE, "Dtype no numérico en perfil SST");
+            if (status == MILENA_OK) status = MILENA_ERR_TYPE;
+            break;
         }
+        count++;
     }
+    if (status != MILENA_OK) { free(values); return status; }
     SstAdvancedStats stats;
-    MilenaStatus status = sst_advanced_compute(values, NULL, count, &stats, error);
+    status = sst_advanced_compute(values, NULL, count, &stats, error);
     if (status == MILENA_OK) {
         char path[2048];
         int written = snprintf(path, sizeof(path), "%s.sst.json", output_path);
@@ -567,9 +569,9 @@ static MilenaStatus runtime_write_sst_profile(const MilenaTable *table,
             FILE *out = fopen(path, "wb");
             if (!out) status = MILENA_ERR_IO;
             else {
-                fprintf(out, "{\"operacion\":\"perfil_avanzado\",\"variable\":\"");
-                for (const char *p = column_name; *p; p++) fputc(*p == '"' ? '\\' : *p, out);
-                fprintf(out, "\",\"n\":%zu,\"media\":%.10g,\"desviacion\":%.10g,\"p90\":%.10g,\"p95\":%.10g}\n",
+                fputs("{\"operacion\":\"perfil_avanzado\",\"variable\":", out);
+                milena_json_write_string(out, column_name);
+                fprintf(out, ",\"n\":%zu,\"media\":%.10g,\"desviacion\":%.10g,\"p90\":%.10g,\"p95\":%.10g}\n",
                         stats.count, stats.mean, stats.standard_deviation, stats.p90, stats.p95);
                 if (fclose(out) != 0) status = MILENA_ERR_IO;
             }
@@ -598,23 +600,24 @@ static MilenaStatus runtime_write_sst_histogram(const MilenaTable *table,
     }
     size_t count = 0;
     double minimum = DBL_MAX, maximum = -DBL_MAX;
+    MilenaStatus status = MILENA_OK;
     for (size_t row = 0; row < table->row_count; row++) {
         if (milena_table_is_null(table, (size_t)column, row)) continue;
         const void *raw = NULL;
-        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
-        double value;
-        switch (data->values.dtype) {
-            case MILENA_DTYPE_INT64: value = (double)*(const int64_t *)raw; break;
-            case MILENA_DTYPE_UINT64: value = (double)*(const uint64_t *)raw; break;
-            case MILENA_DTYPE_FLOAT32: value = (double)*(const float *)raw; break;
-            case MILENA_DTYPE_FLOAT64: value = *(const double *)raw; break;
-            default: value = 0.0; break;
+        status = milena_table_get_array_value(table, (size_t)column, row, &raw, error);
+        double value = 0.0;
+        if (status != MILENA_OK || !runtime_numeric_cell(data, raw, &value)) {
+            if (status == MILENA_OK)
+                runtime_error(error, MILENA_ERR_TYPE, "Dtype no numérico en histograma SST");
+            if (status == MILENA_OK) status = MILENA_ERR_TYPE;
+            break;
         }
         values[count++] = value;
         if (value < minimum) minimum = value;
         if (value > maximum) maximum = value;
     }
-    MilenaStatus status = count == 0 ? MILENA_ERR_DATA : MILENA_OK;
+    if (status != MILENA_OK) { free(values); return status; }
+    status = count == 0 ? MILENA_ERR_DATA : MILENA_OK;
     SstHistogram histogram;
     if (status == MILENA_OK) status = sst_histogram_init(&histogram, 5, minimum, maximum, error);
     if (status == MILENA_OK) {
@@ -631,9 +634,9 @@ static MilenaStatus runtime_write_sst_histogram(const MilenaTable *table,
             FILE *out = fopen(path, "wb");
             if (!out) status = MILENA_ERR_IO;
             else {
-                fprintf(out, "{\"operacion\":\"histograma\",\"variable\":\"");
-                fputs(column_name, out);
-                fputs("\",\"bins\":[", out);
+                fputs("{\"operacion\":\"histograma\",\"variable\":", out);
+                milena_json_write_string(out, column_name);
+                fputs(",\"bins\":[", out);
                 for (size_t i = 0; i < histogram.bin_count; i++) {
                     if (i) fputs(",", out);
                     fprintf(out, "%zu", histogram.counts[i]);
@@ -667,20 +670,22 @@ static MilenaStatus runtime_write_sst_normality(const MilenaTable *table,
         return MILENA_ERR_MEMORY;
     }
     size_t count = 0;
+    MilenaStatus status = MILENA_OK;
     for (size_t row = 0; row < table->row_count; row++) {
         if (milena_table_is_null(table, (size_t)column, row)) continue;
         const void *raw = NULL;
-        if (milena_table_get_array_value(table, (size_t)column, row, &raw, error) != MILENA_OK) break;
-        switch (data->values.dtype) {
-            case MILENA_DTYPE_INT64: values[count++] = (double)*(const int64_t *)raw; break;
-            case MILENA_DTYPE_UINT64: values[count++] = (double)*(const uint64_t *)raw; break;
-            case MILENA_DTYPE_FLOAT32: values[count++] = (double)*(const float *)raw; break;
-            case MILENA_DTYPE_FLOAT64: values[count++] = *(const double *)raw; break;
-            default: values[count++] = 0.0; break;
+        status = milena_table_get_array_value(table, (size_t)column, row, &raw, error);
+        if (status != MILENA_OK || !runtime_numeric_cell(data, raw, &values[count])) {
+            if (status == MILENA_OK)
+                runtime_error(error, MILENA_ERR_TYPE, "Dtype no numérico en normalidad SST");
+            if (status == MILENA_OK) status = MILENA_ERR_TYPE;
+            break;
         }
+        count++;
     }
+    if (status != MILENA_OK) { free(values); return status; }
     SstNormalityResult result;
-    MilenaStatus status = sst_normality_test(values, count, &result, error);
+    status = sst_normality_test(values, count, &result, error);
     if (status == MILENA_OK) {
         char path[2048];
         int written = snprintf(path, sizeof(path), "%s.normalidad.json", output_path);
@@ -689,10 +694,11 @@ static MilenaStatus runtime_write_sst_normality(const MilenaTable *table,
             FILE *out = fopen(path, "wb");
             if (!out) status = MILENA_ERR_IO;
             else {
-                fprintf(out, "{\"operacion\":\"normalidad\",\"variable\":\"");
-                fputs(column_name, out);
-                fprintf(out, "\",\"metodo\":\""); fputs(result.method, out);
-                fprintf(out, "\",\"estadistico\":%.10g,\"p\":%.10g,\"normal\":%s,\"aproximado\":%s}\n",
+                fputs("{\"operacion\":\"normalidad\",\"variable\":", out);
+                milena_json_write_string(out, column_name);
+                fputs(",\"metodo\":", out);
+                milena_json_write_string(out, result.method);
+                fprintf(out, ",\"estadistico\":%.10g,\"p\":%.10g,\"normal\":%s,\"aproximado\":%s}\n",
                         result.statistic, result.p_value,
                         result.normal ? "true" : "false",
                         result.approximate ? "true" : "false");
@@ -781,8 +787,12 @@ static MilenaStatus runtime_write_sst_rate(const MilenaTable *table,
             FILE *out = fopen(path, "wb");
             if (!out) status = MILENA_ERR_IO;
             else {
-                fprintf(out, "{\"operacion\":\"tasa\",\"evento\":\"%s\",\"exposicion\":\"%s\",\"incidentes\":%zu,\"tasa\":%.10g}\n",
-                        event_name, exposure_name, result.incident_count, result.rate);
+                fputs("{\"operacion\":\"tasa\",\"evento\":", out);
+                milena_json_write_string(out, event_name);
+                fputs(",\"exposicion\":", out);
+                milena_json_write_string(out, exposure_name);
+                fprintf(out, ",\"incidentes\":%zu,\"tasa\":%.10g}\n",
+                        result.incident_count, result.rate);
                 if (fclose(out) != 0) status = MILENA_ERR_IO;
             }
         }

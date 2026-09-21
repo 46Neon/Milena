@@ -44,6 +44,17 @@ bool parser_expect(Parser *parser, TokenType type, const char *msg) {
     return true;
 }
 
+/* AST construction is fallible. Centralize ownership/error handling so an
+ * allocation failure cannot silently produce a truncated program. On failure
+ * this function consumes child, just like ast_destroy does for an owned node. */
+static bool parser_add_child(Parser *parser, ASTNode *parent, ASTNode *child,
+                             const char *message) {
+    if (ast_add_child(parent, child)) return true;
+    ast_destroy(child);
+    parser_error(parser, message);
+    return false;
+}
+
 static ASTNode *parse_array_declaration(Parser *parser) {
     if (!parser || !parser_is_identifier(parser) ||
         (strcmp(parser->current.lexeme, "array") != 0 &&
@@ -238,8 +249,17 @@ static ASTNode *parse_expression(Parser *parser) {
             parser_error(parser, "No se pudo crear la expresión");
             return NULL;
         }
-        ast_add_child(operation, left);
-        ast_add_child(operation, right);
+        if (!parser_add_child(parser, operation, left,
+                              "Sin memoria para el operando izquierdo")) {
+            ast_destroy(right);
+            ast_destroy(operation);
+            return NULL;
+        }
+        if (!parser_add_child(parser, operation, right,
+                              "Sin memoria para el operando derecho")) {
+            ast_destroy(operation);
+            return NULL;
+        }
         left = operation;
     }
     return left;
@@ -333,7 +353,11 @@ static ASTNode *parse_assignment(Parser *parser) {
         parser_error(parser, "No se pudo crear la asignación");
         return NULL;
     }
-    ast_add_child(node, value);
+    if (!parser_add_child(parser, node, value,
+                          "Sin memoria para conectar la asignación")) {
+        ast_destroy(node);
+        return NULL;
+    }
     if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de la asignación")) {
         ast_destroy(node);
         return NULL;
@@ -501,7 +525,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
         if (parser_match(parser, TOKEN_KW_VARIABLE)) {
             ASTNode *declaration = parse_variable_declaration(parser);
-            if (declaration) ast_add_child(node, declaration);
+            if (declaration && !parser_add_child(parser, node, declaration,
+                                                   "Sin memoria para el AST")) break;
         } else if (parser_is_identifier(parser) &&
                    (strcmp(parser->current.lexeme, "entrada") == 0 ||
                     strcmp(parser->current.lexeme, "salida") == 0)) {
@@ -542,17 +567,19 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 continue;
             }
             if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
-            ast_add_child(node, role);
+            if (!parser_add_child(parser, node, role, "Sin memoria para el AST")) break;
         } else if (parser_is_identifier(parser) &&
                    strcmp(parser->current.lexeme, "array") != 0 &&
                    strcmp(parser->current.lexeme, "arreglo") != 0) {
             ASTNode *assignment = parse_assignment(parser);
-            if (assignment) ast_add_child(node, assignment);
+            if (assignment && !parser_add_child(parser, node, assignment,
+                                                   "Sin memoria para el AST")) break;
         } else if (parser_is_identifier(parser) &&
             (strcmp(parser->current.lexeme, "array") == 0 ||
              strcmp(parser->current.lexeme, "arreglo") == 0)) {
             ASTNode *declaration = parse_array_declaration(parser);
-            if (declaration) ast_add_child(node, declaration);
+            if (declaration && !parser_add_child(parser, node, declaration,
+                                                   "Sin memoria para el AST")) break;
         } else if (parser_is_statistical_token(parser->current.type)) {
             ASTNode *statistic = parse_statistical_call(parser, true);
             if (statistic) {
@@ -560,7 +587,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                    "Se esperaba ';' después de la operación estadística")) {
                     ast_destroy(statistic);
                 } else {
-                    ast_add_child(node, statistic);
+                    if (!parser_add_child(parser, node, statistic,
+                                           "Sin memoria para el AST")) break;
                 }
             }
         } else if (parser_match(parser, TOKEN_NUMERAL)) {
@@ -619,7 +647,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
                     ASTNode *limpiar = ast_create(AST_BLOQUE_LIMPIAR);
-                    while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
+                    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                         if (parser_match(parser, TOKEN_NUMERAL)) {
                             parser_advance(parser);
                             if (parser_match(parser, TOKEN_KW_NULOS)) {
@@ -640,18 +669,20 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 }
                             }
                         } else {
-                            parser_advance(parser);
+                            parser_error(parser, "Comando desconocido en limpiar");
                         }
                     }
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-                    ast_add_child(node, limpiar);
+                    if (limpiar) parser_add_child(parser, node, limpiar,
+                                                   "Sin memoria para el AST");
                 }
             } else if (parser_match(parser, TOKEN_KW_TRANSFORMAR)) {
                 parser_advance(parser);
                 if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
                     ASTNode *transformar = ast_create(AST_BLOQUE_TRANSFORMAR);
-                    while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
+                    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                         if (parser_match(parser, TOKEN_NUMERAL)) {
                             parser_advance(parser);
                             if (parser_match(parser, TOKEN_KW_TOTAL)) {
@@ -675,11 +706,12 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 }
                             }
                         } else {
-                            parser_advance(parser);
+                            parser_error(parser, "Comando desconocido en transformar");
                         }
                     }
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-                    ast_add_child(node, transformar);
+                    if (transformar) parser_add_child(parser, node, transformar,
+                                                       "Sin memoria para el AST");
                 }
             } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
                 parser_advance(parser);
@@ -820,7 +852,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
                         ast_destroy(exportar);
                     } else if (exportar) {
-                        ast_add_child(node, exportar);
+                        if (!parser_add_child(parser, node, exportar,
+                                               "Sin memoria para el AST")) break;
                     }
                 }
             } else {
@@ -897,7 +930,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 }
             }
         } else {
-            parser_advance(parser);
+            parser_error(parser, "Token inesperado en el bloque de análisis");
         }
     }
     
@@ -983,12 +1016,17 @@ ASTNode* parser_parse(Parser *parser) {
                !parser->has_error) {
             ASTNode *statistic = parse_statistical_call(parser, false);
             if (!statistic) break;
-            ast_add_child(program, statistic);
+            if (!parser_add_child(parser, program, statistic,
+                                  "Sin memoria para el AST")) break;
             if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
         }
     } else {
         ASTNode *analysis = parse_bloque_analisis(parser);
-        if (analysis) ast_add_child(program, analysis);
+        if (analysis && !parser_add_child(parser, program, analysis,
+                                          "Sin memoria para el AST")) {
+            ast_destroy(program);
+            return NULL;
+        }
     }
 
     if (!parser->has_error && !parser_match(parser, TOKEN_EOF)) {
