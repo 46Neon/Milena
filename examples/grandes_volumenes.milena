@@ -1,0 +1,16 @@
+.analisis ventas_masivas {
+    datos desde "datos/ventas_masivas.csv"
+        procesar por lotes de 4096 filas
+        con registros de hasta 8 MiB
+
+    resumir {
+        suma de "importe";
+        media de "importe";
+        minimo de "importe";
+        maximo de "importe";
+        contar de "importe";
+        varianza de "importe";
+    }
+
+    guardar resultado en "reporte_flujo.json"
+}

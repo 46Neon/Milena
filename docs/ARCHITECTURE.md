@@ -21,8 +21,8 @@ recibir funcionalidades nuevas ni competir con el pipeline canónico.
 
 | Capa | Implementación | Estado | Siguiente acción |
 |---|---|---|---|
-| CLI | `src/main.c` | integrada | Mantener un único punto de entrada |
-| Router de scripts | `src/script.c` | compatibilidad | Reducirlo y retirar el parseo textual |
+| CLI | `src/main.c` + `src/entrypoints.c` | adaptador canónico | Conservar formatos históricos y retirar backends duplicados gradualmente |
+| Router de scripts | `src/script.c` | frontend AST + compatibilidad explícita | Retirar solo fallback cuando exista paridad comprobada |
 | Lexer | `src/lexer.c` | integrada parcialmente | Validar límites y diagnósticos |
 | Parser | `src/parser.c` | integrada parcialmente | Cubrir datasets, arrays y exportación |
 | AST | `src/ast.c` | integrada parcialmente | Convertir todas las operaciones en nodos |
@@ -56,6 +56,13 @@ completa del lenguaje.
 - La VM, el bytecode y el GC quedan pospuestos hasta que el intérprete basado
   en AST tenga paridad funcional.
 - Cada cambio de integración debe añadir o actualizar una prueba end-to-end.
+
+La auditoría detallada de entradas, backends y fronteras pendientes está en
+[`UNIFICATION_AUDIT_PR24.md`](UNIFICATION_AUDIT_PR24.md). Las entradas CLI
+históricas pasan por `entrypoints.c`, que construye y valida un AST mínimo
+antes de delegar al backend que conserva el formato público. La prueba
+estructural `check_unification_architecture.py` impide que `main.c` vuelva a
+contener lógica de Dataset o análisis.
 
 La clasificación de fuentes se comprueba con:
 

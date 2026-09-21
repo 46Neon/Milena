@@ -7,12 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 CATEGORIES = {
     "producto": {
-        "analysis.c", "array.c", "common.c", "dataset.c", "finance.c",
+        "analysis.c", "array.c", "common.c", "dataset.c", "entrypoints.c", "finance.c",
         "language_runtime.c", "logger.c", "main.c", "metrics.c", "schema.c",
         "script.c", "interpreter.c", "sst_advanced.c", "sst_contingency.c", "sst_correlation.c",
         "sst_dates.c", "sst_histogram.c", "sst_inference.c", "sst_model.c",
         "sst_normality.c", "sst_rates.c", "sst_report.c",
-        "sst_report_advanced.c", "sst_stats.c", "table.c",
+        "sst_report_advanced.c", "sst_stats.c", "stream.c", "table.c",
     },
     "lenguaje": {
         "ast.c", "language_semantic.c", "lexer.c", "parser.c", "symbol_table.c",

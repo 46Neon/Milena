@@ -11,6 +11,10 @@ El código debe validarse con LLVM/Clang en Windows. No se debe asumir que un bi
 
 ## Validación y artefactos
 
+El script `build.ps1` compila también `src/entrypoints.c`: `milena.exe` conserva
+los comandos históricos, pero sus entradas `analizar`, `perfil` e `inspect`
+pasan por el frontend canónico antes de usar sus backends de salida.
+
 El workflow de Windows verifica:
 
 - ejecución desde PowerShell, CMD y `PATH`;
