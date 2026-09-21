@@ -28,7 +28,7 @@ recibir funcionalidades nuevas ni competir con el pipeline canónico.
 | AST | `src/ast.c` | integrada parcialmente | Convertir todas las operaciones en nodos |
 | Runtime de arrays | `src/language_runtime.c` | integración inicial | Añadir tablas y transformaciones |
 | Arrays numéricos | `src/array.c` | integrada | Mantener como backend numérico |
-| Tablas | `src/table.c` y `src/dataset.c` | dos APIs | Elegir un modelo canónico |
+| Tablas | `src/table.c` (canónica) y `src/dataset.c` (adaptador) | unificada con compatibilidad explícita | Mantener `Dataset` solo en las fronteras heredadas |
 | Estadística | `src/sst_*.c` | biblioteca | Exponerla mediante AST y builtins |
 | Frontera de compilador | `src/canonical_compiler.c` | adaptador canónico | Entrega AST + `MilenaTable` prestada sin enlazar IR/VM |
 | IR y VM | `src/ir.c`, `src/vm.c` | experimental | No usar hasta estabilizar el intérprete |

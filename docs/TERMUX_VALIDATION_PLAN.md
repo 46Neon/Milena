@@ -2,7 +2,7 @@
 
 ## Estado honesto en PR23
 
-La receta candidata consume exclusivamente el release estable `v0.2.0`, cuyo SHA-256 de fuente es `56e189bbd1e89aa25a7e8588e0606f0ea42d3bf5f1086fcfa3442d632d571153`. El binario expone la misma versión `0.2.0`; cambiar cualquiera de los dos exige publicar y verificar un nuevo release, nunca reutilizar `v0.1.1` (que contiene la historia anterior).
+La receta candidata consume exclusivamente el release estable `v0.2.0`, cuyo SHA-256 de fuente es `56e189bbd1e89aa25a7e8588e0606f0ea42d3bf5f1086fcfa3442d632d571153`. El binario expone la misma versión `0.2.0`; cambiar cualquiera de los dos exige publicar y verificar un nuevo release, no reutilizar una release anterior ni su checksum.
 
 No hay un dispositivo Termux/aarch64 registrado como runner de GitHub Actions en
 este proyecto. Un `runs-on: [self-hosted, termux, aarch64, milena]` no crea un dispositivo:

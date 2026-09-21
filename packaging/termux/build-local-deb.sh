@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${MILENA_VERSION:-0.1.1}"
+VERSION="${MILENA_VERSION:-0.2.0}"
 VERSION="${VERSION#v}"
 PREFIX_DIR="${PREFIX:-}"
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT_DIR" log -1 --format=%ct 2>/dev/null || printf '0')}"

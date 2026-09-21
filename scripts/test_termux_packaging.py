@@ -36,11 +36,11 @@ def make_package(directory: Path, architecture: str = "aarch64", debian_path: bo
     control = stage / "DEBIAN"
     control.mkdir()
     (control / "control").write_text(
-        "Package: milena\nVersion: 0.1.1\n"
+        "Package: milena\nVersion: 0.2.0\n"
         f"Architecture: {architecture}\nMaintainer: Milena Fixture <fixture@example.invalid>\nDescription: fixture\n",
         encoding="utf-8",
     )
-    package = directory / "milena_0.1.1_aarch64.deb"
+    package = directory / "milena_0.2.0_aarch64.deb"
     command("dpkg-deb", "--build", "--root-owner-group", str(stage), str(package))
     return package
 
@@ -102,7 +102,7 @@ def main() -> int:
         digest = hashlib.sha256(copied.read_bytes()).hexdigest()
         size = copied.stat().st_size
         index = (
-            "Package: milena\nVersion: 0.1.1\nArchitecture: aarch64\n"
+            "Package: milena\nVersion: 0.2.0\nArchitecture: aarch64\n"
             f"Filename: pool/main/m/milena/{package.name}\nSize: {size}\nSHA256: {digest}\n"
         )
         (index_dir / "Packages").write_text(index, encoding="utf-8")

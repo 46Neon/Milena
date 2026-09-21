@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$Version = if ($env:MILENA_VERSION) { $env:MILENA_VERSION.TrimStart('v') } else { '0.1.1' }
+$Version = if ($env:MILENA_VERSION) { $env:MILENA_VERSION.TrimStart('v') } else { '0.2.0' }
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
     throw "MILENA_VERSION no es una versión válida: $Version"
 }
