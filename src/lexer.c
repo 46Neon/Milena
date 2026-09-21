@@ -43,9 +43,9 @@ static bool is_keyword(const char *str) {
         "forma", "dimensiones", "tamaño", "suma", "media", "minimo",
         "maximo", "varianza", "desviacion_estandar", "mediana", "percentil",
         "eje", "conservar", "sin", "variable", "funcion", "función", "retornar", "si", "sino",
-        "desde", "procesar", "por", "lotes", "filas", "guardar", "resultado", "en", "de", "con", "registros", "hasta", "MiB", "contar"
+        "desde", "procesar", "por", "lotes", "filas", "guardar", "registros", "hasta", "MiB", "contar"
     };
-    static const int num_keywords = 54;
+    static const int num_keywords = 50;
     
     for (int i = 0; i < num_keywords; i++) {
         if (strcmp(str, keywords[i]) == 0) return true;
@@ -97,10 +97,6 @@ static TokenType keyword_type(const char *str) {
     if (strcmp(str, "lotes") == 0) return TOKEN_KW_LOTES;
     if (strcmp(str, "filas") == 0) return TOKEN_KW_FILAS;
     if (strcmp(str, "guardar") == 0) return TOKEN_KW_GUARDAR;
-    if (strcmp(str, "resultado") == 0) return TOKEN_KW_RESULTADO;
-    if (strcmp(str, "en") == 0) return TOKEN_KW_EN;
-    if (strcmp(str, "de") == 0) return TOKEN_KW_DE;
-    if (strcmp(str, "con") == 0) return TOKEN_KW_CON;
     if (strcmp(str, "registros") == 0) return TOKEN_KW_REGISTROS;
     if (strcmp(str, "hasta") == 0) return TOKEN_KW_HASTA;
     if (strcmp(str, "MiB") == 0) return TOKEN_KW_MIB;

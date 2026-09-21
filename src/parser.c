@@ -512,6 +512,16 @@ static ASTNode *parse_statistical_call(Parser *parser,
     return ast_create_statistic(operation, argument, axis, keepdims, percentile);
 }
 
+static bool parser_expect_word(Parser *parser, const char *word, const char *msg) {
+    if (!parser || !word || !parser_is_identifier(parser) ||
+        strcmp(parser->current.lexeme, word) != 0) {
+        if (parser) parser_error(parser, msg);
+        return false;
+    }
+    parser_advance(parser);
+    return true;
+}
+
 static bool parser_is_stream_metric(Parser *parser) {
     if (!parser) return false;
     return parser_match(parser, TOKEN_FUNCION_SUMA) ||
@@ -543,8 +553,8 @@ static ASTNode *parse_stream_summary(Parser *parser) {
         strncpy(metric_copy, metric, sizeof(metric_copy) - 1);
         metric_copy[sizeof(metric_copy) - 1] = '\0';
         parser_advance(parser);
-        if (!parser_expect(parser, TOKEN_KW_DE,
-                           "Se esperaba 'de' después de la métrica")) break;
+        if (!parser_expect_word(parser, "de",
+                                "Se esperaba 'de' después de la métrica")) break;
         if (!parser_expect(parser, TOKEN_CADENA,
                            "Se esperaba el nombre de columna entre comillas")) break;
         char specification[MAX_TOKEN_LEN * 2];
@@ -585,7 +595,7 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
         parser_advance(parser);
         if (!parser_expect(parser, TOKEN_KW_POR, "Se esperaba 'por' en 'procesar por lotes'")) goto fail;
         if (!parser_expect(parser, TOKEN_KW_LOTES, "Se esperaba 'lotes'")) goto fail;
-        if (!parser_expect(parser, TOKEN_KW_DE, "Se esperaba 'de' antes del tamaño del lote")) goto fail;
+        if (!parser_expect_word(parser, "de", "Se esperaba 'de' antes del tamaño del lote")) goto fail;
         if (!parser_expect(parser, TOKEN_NUMERO, "El tamaño del lote debe ser numérico")) goto fail;
         double chunk = parser->previous.number_value;
         if (!isfinite(chunk) || chunk < 1.0 || chunk > 1000000.0 || floor(chunk) != chunk) {
@@ -596,10 +606,10 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
     }
     /* Opcional y explícito: con registros de hasta N MiB. Mantiene un tope
      * duro de 64 MiB en el runtime para no convertir el modo flujo en carga. */
-    if (parser_match(parser, TOKEN_KW_CON)) {
+    if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "con") == 0) {
         parser_advance(parser);
         if (!parser_expect(parser, TOKEN_KW_REGISTROS, "Se esperaba 'registros'")) goto fail;
-        if (!parser_expect(parser, TOKEN_KW_DE, "Se esperaba 'de'")) goto fail;
+        if (!parser_expect_word(parser, "de", "Se esperaba 'de'")) goto fail;
         if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta'")) goto fail;
         if (!parser_expect(parser, TOKEN_NUMERO, "El límite del registro debe ser numérico")) goto fail;
         double limit = parser->previous.number_value;
@@ -619,8 +629,8 @@ fail:
 
 static ASTNode *parse_human_stream_export(Parser *parser) {
     parser_advance(parser);
-    if (!parser_expect(parser, TOKEN_KW_RESULTADO, "Se esperaba 'resultado'")) return NULL;
-    if (!parser_expect(parser, TOKEN_KW_EN, "Se esperaba 'en'")) return NULL;
+    if (!parser_expect_word(parser, "resultado", "Se esperaba 'resultado'")) return NULL;
+    if (!parser_expect_word(parser, "en", "Se esperaba 'en'")) return NULL;
     if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba la ruta de salida entre comillas")) return NULL;
     ASTNode *export_node = ast_create_leaf(AST_BLOQUE_EXPORTAR, parser->previous.lexeme);
     if (!export_node) parser_error(parser, "Sin memoria para guardar resultado");
