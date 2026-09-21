@@ -18,7 +18,7 @@ def require(path: str, *fragments: str) -> None:
 require('.github/workflows/termux-aarch64-contract.yml',
         'concurrency:', 'cancel-in-progress: false', 'confirm_device:',
         'if: inputs.confirm_device == true', 'timeout-minutes:',
-        'termux-install-smoke.sh', 'artifacts/termux-runner/toolchain.txt',
+        'termux-real-smoke.sh', 'artifacts/termux-runner/toolchain.txt',
         'if-no-files-found: error')
 require('.github/workflows/publish-apt.yml',
         'concurrency:', 'confirm_publish:', 'if: inputs.confirm_publish == true',

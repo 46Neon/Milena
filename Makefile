@@ -26,7 +26,7 @@ SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all clean termux-build termux-install test check-termux-packaging test-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation debug
+.PHONY: all benchmark clean termux-build termux-install test check-termux-packaging test-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -178,6 +178,10 @@ test-termux-packaging: check-termux-packaging
 	python3 scripts/test_termux_packaging.py
 
 all: $(TARGET)
+
+# Reproducible compile/runtime measurements; see benchmarks/README.md.
+benchmark: all
+	python3 benchmarks/benchmark.py
 
 # Build targets consumed by the Termux recipe. They never build tests or the
 # experimental compiler/IR/VM sources and never assume a Debian filesystem.
