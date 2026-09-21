@@ -74,3 +74,13 @@ La sintaxis se revisará después de estabilizar el modelo de datos y la lógica
 3. Separar el núcleo general de los módulos SST y financiero.
 4. No incluir visualización en el núcleo durante esta etapa.
 5. Mantener compatibilidad documentada durante las migraciones.
+
+## Empaquetado Termux y APT (PR23)
+
+- Mantener el nombre Milena en scripts, workflows, secretos, artefactos y documentación de empaquetado.
+- Conservar una sola fuente ejecutable para publicación: `.github/workflows/publish-apt.yml`.
+- Publicar por ahora únicamente un `.deb` Termux/aarch64 construido y probado en Termux; no declarar arquitecturas sin artefacto real.
+- Rechazar explícitamente paquetes Debian/Ubuntu en el generador APT y verificar rutas bajo `$PREFIX`.
+- Fijar timestamps mediante `SOURCE_DATE_EPOCH`, publicar SHA-256 y firmar `Release`, `InRelease` y `Release.gpg` sin exponer secretos.
+- Tratar el repositorio APT y cualquier hosting como preparación: no anunciar instalación desde un gestor hasta probar una instalación real desde el repositorio remoto.
+- Completar la checklist de construcción, instalación, actualización, eliminación, claves, hashes y revisión de Termux antes de enviar una nueva solicitud oficial.

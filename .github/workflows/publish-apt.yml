@@ -1,21 +1,24 @@
-name: Publish Mano APT repository
+name: Publish Milena Termux APT repository
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag de la Release que contiene los paquetes .deb'
+        description: 'Tag de la Release que contiene el paquete Termux aarch64'
         required: true
-        default: 'v0.1.0'
+        default: 'v0.1.1'
   push:
     tags:
       - 'v*'
 
+# Este es el único workflow de publicación APT. La definición anterior que vivía
+# en packaging/ci fue eliminada para que no existan dos fuentes ejecutables.
 permissions:
   contents: read
 
 env:
   GH_TOKEN: ${{ github.token }}
+  NETLIFY_CLI_VERSION: '23.6.0'
 
 jobs:
   publish-apt:
@@ -37,50 +40,73 @@ jobs:
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download Debian packages from Release
+      - name: Download the Termux package only
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist/inputs
+          # Debian artifacts are deliberately not downloaded by this workflow.
           gh release download "${{ steps.release.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern '*.deb' \
+            --pattern 'milena_*_aarch64.deb' \
             --dir dist/inputs \
             --clobber
-          test -n "$(find dist/inputs -maxdepth 1 -name '*.deb' -print -quit)"
+          mapfile -t packages < <(find dist/inputs -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print)
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+          test "$(dpkg-deb -f "$package" Package)" = milena
+          test "$(dpkg-deb -f "$package" Architecture)" = aarch64
+          test -n "$(dpkg-deb -f "$package" Version)"
+          # A Termux package must not contain Debian filesystem destinations.
+          if dpkg-deb --contents "$package" | grep -Eq '(^|[[:space:]])(usr|bin|lib|etc)/'; then
+            echo 'El paquete Termux contiene una ruta Debian; publicación detenida.' >&2
+            exit 1
+          fi
+          sha256sum "$package" > "$package.sha256"
 
-      - name: Import signing key
+      - name: Import Milena signing key
         shell: bash
         env:
-          MANO_GPG_PRIVATE_KEY: ${{ secrets.MANO_GPG_PRIVATE_KEY }}
+          MILENA_GPG_PRIVATE_KEY: ${{ secrets.MILENA_GPG_PRIVATE_KEY }}
         run: |
-          test -n "$MANO_GPG_PRIVATE_KEY"
-          printf '%s\n' "$MANO_GPG_PRIVATE_KEY" | gpg --batch --import
+          set -euo pipefail
+          test -n "$MILENA_GPG_PRIVATE_KEY"
+          printf '%s\n' "$MILENA_GPG_PRIVATE_KEY" | gpg --batch --import
 
-      - name: Generate signed repository
+      - name: Generate and verify signed repository
         shell: bash
         env:
-          MANO_GPG_KEY_ID: ${{ secrets.MANO_GPG_KEY_ID }}
-          MANO_GPG_PASSPHRASE: ${{ secrets.MANO_GPG_PASSPHRASE }}
+          MILENA_GPG_KEY_ID: ${{ secrets.MILENA_GPG_KEY_ID }}
+          MILENA_GPG_PASSPHRASE: ${{ secrets.MILENA_GPG_PASSPHRASE }}
         run: |
-          test -n "$MANO_GPG_KEY_ID"
-          test -n "$MANO_GPG_PASSPHRASE"
-          KEY_ID="$(printf '%s' "$MANO_GPG_KEY_ID" | tr -d '[:space:]')"
+          set -euo pipefail
+          test -n "$MILENA_GPG_KEY_ID"
+          test -n "$MILENA_GPG_PASSPHRASE"
+          package="$(find dist/inputs -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print -quit)"
+          export MILENA_VERSION="$(dpkg-deb -f "$package" Version)"
+          KEY_ID="$(printf '%s' "$MILENA_GPG_KEY_ID" | tr -d '[:space:]')"
           KEY_ID="${KEY_ID#rsa3072/}"
           KEY_ID="${KEY_ID#0x}"
-          export MANO_GPG_KEY_ID="$KEY_ID"
+          export MILENA_GPG_KEY_ID="$KEY_ID"
           ./packaging/termux/generate-apt-repo.sh dist/inputs dist/apt
-          gpg --batch --armor --export "$KEY_ID" > dist/apt/mano-archive-keyring.asc
-          test -s dist/apt/mano-archive-keyring.asc
+          gpg --batch --armor --export "$KEY_ID" > dist/apt/milena-archive-keyring.asc
+          test -s dist/apt/milena-archive-keyring.asc
+          test -s dist/apt/dists/stable/Release
+          test -s dist/apt/dists/stable/InRelease
+          test -s dist/apt/dists/stable/Release.gpg
+          test -s dist/apt/dists/stable/main/binary-aarch64/Packages.gz
+          test ! -e dist/apt/dists/stable/main/binary-amd64
 
-      - name: Install Netlify CLI
-        run: npm install --global netlify-cli
+      - name: Install pinned Netlify CLI
+        run: npm install --global "netlify-cli@${NETLIFY_CLI_VERSION}"
 
-      - name: Publish APT repository to Netlify
+      - name: Publish the single APT channel to Netlify
         shell: bash
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
         run: |
+          set -euo pipefail
           test -n "$NETLIFY_AUTH_TOKEN"
           test -n "$NETLIFY_SITE_ID"
-          netlify deploy --dir=dist/apt --prod --site="$NETLIFY_SITE_ID" --message="Mano ${{ steps.release.outputs.tag }}"
+          netlify deploy --dir=dist/apt --prod --site="$NETLIFY_SITE_ID" --message="Milena ${{ steps.release.outputs.tag }}"

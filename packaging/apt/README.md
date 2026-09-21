@@ -1,43 +1,48 @@
 # Repositorio APT de Milena
 
-Este canal publica los paquetes `.deb` de Milena para que los usuarios puedan instalar desde APT. Termux y Debian/Ubuntu usan índices separados por arquitectura, aunque los paquetes se sirvan desde el mismo sitio.
+Este directorio documenta el formato del repositorio Termux que el workflow único `.github/workflows/publish-apt.yml` puede generar. El canal todavía no es oficial ni debe anunciarse como disponible: falta una prueba real desde un dispositivo Termux y desde el repositorio remoto publicado.
 
-## Qué necesita el repositorio
+## Fuente única de publicación
+
+La única definición ejecutable es `.github/workflows/publish-apt.yml`. `packaging/ci/publish-apt.yml` fue eliminado para impedir que dos workflows diverjan. El generador reutilizable es `packaging/termux/generate-apt-repo.sh`.
+
+## Estructura mínima actual
+
+Mientras solo exista un build Termux real, el repositorio debe contener exactamente el objetivo `aarch64`:
 
 ```text
 dists/stable/Release
 dists/stable/InRelease
 dists/stable/Release.gpg
 dists/stable/main/binary-aarch64/Packages.gz
-dists/stable/main/binary-amd64/Packages.gz
-pool/main/m/milena/*.deb
+pool/main/m/milena/milena_VERSION_aarch64.deb
 milena-archive-keyring.asc
 ```
 
-El paquete `aarch64` debe ser el construido para Termux. El paquete `amd64` debe ser el construido para Debian/Ubuntu. No se intercambian.
+No se declaran índices para otras arquitecturas. Un `.deb` Debian/Ubuntu (`amd64`, por ejemplo) no puede ocupar el lugar del paquete Termux.
 
 ## Secretos de GitHub Actions
 
-Configura en el repositorio:
+Configura únicamente como secretos del repositorio, nunca en archivos versionados:
 
 ```text
-MANO_GPG_PRIVATE_KEY
-MANO_GPG_KEY_ID
-MANO_GPG_PASSPHRASE
+MILENA_GPG_PRIVATE_KEY
+MILENA_GPG_KEY_ID
+MILENA_GPG_PASSPHRASE
 NETLIFY_SITE_ID
 NETLIFY_AUTH_TOKEN
 ```
 
-La clave privada no debe entrar al repositorio. La clave pública se publica como `milena-archive-keyring.asc` para que los usuarios puedan verificar el repositorio.
+La clave privada y la contraseña se pasan solo al proceso de CI. La clave pública se publica como `milena-archive-keyring.asc`; antes de una publicación oficial debe comprobarse su huella digital en un dispositivo limpio.
 
-## Flujo
+## Flujo y validaciones
 
-1. Crear una Release con los archivos `.deb`.
-2. Ejecutar el workflow `publish-apt.yml` sobre la etiqueta.
-3. Descargar los `.deb` de la Release.
-4. Generar índices y firmas.
-5. Publicar `dist/apt` en la rama `gh-pages`.
-6. Activar GitHub Pages para servir esa rama.
-7. Probar el repositorio desde Termux antes de anunciarlo.
+1. Crear una Release que contenga un `.deb` Termux/aarch64 real y su checksum.
+2. Ejecutar manualmente el workflow con la etiqueta.
+3. Descargar exclusivamente `milena_*_aarch64.deb`.
+4. Validar nombre, versión, arquitectura y rutas bajo `$PREFIX`.
+5. Generar `Packages.gz`, `Release`, `InRelease` y `Release.gpg`.
+6. Verificar estructura, firma, checksum y ausencia de índices no construidos.
+7. Publicar en el único hosting configurado y realizar la prueba real desde Termux.
 
-La plantilla está en `packaging/ci/publish-apt.yml`. Primero debe copiarse a `.github/workflows/publish-apt.yml` y publicarse con permisos de workflow.
+Hasta completar el último paso, este es un artefacto de preparación y no una instrucción de instalación para usuarios.

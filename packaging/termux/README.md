@@ -1,33 +1,33 @@
 # Paquete Termux de Milena
 
-## Estado
+## Estado actual
 
-Este directorio contiene un flujo reproducible para construir un `.deb` nativo de Termux/aarch64. No publica todavía un repositorio APT.
+Este directorio construye un `.deb` nativo de Termux para **aarch64**, sin root y bajo `$PREFIX`. El resultado local es verificable; todavía no existe un repositorio APT oficial ni una afirmación de instalación para terceros.
 
-El flujo correcto es:
+La secuencia que aún debe completarse antes de una solicitud oficial es:
 
 ```text
 fuente Milena
   ↓
 clang + make + pruebas
   ↓
-paquete .deb para una arquitectura Termux
+.deb Termux/aarch64 + SHA-256
   ↓
-prueba con dpkg/apt local
+instalación y ejecución en un dispositivo Termux real
   ↓
-repositorio APT firmado
+índices APT y firmas Release/InRelease
   ↓
-pkg install milena
+prueba de instalación, actualización y eliminación desde el repositorio publicado
 ```
 
 ## Requisitos en Termux
 
 ```bash
 pkg update
-pkg install clang make dpkg
+pkg install -y git clang make dpkg
 ```
 
-El compilador principal de Termux es Clang. La validación adicional con GCC debe ejecutarse en otro entorno Linux o en CI, porque un binario de Termux no debe mezclarse con un binario Debian/Ubuntu.
+El compilador es Clang. La validación con GCC se ejecuta en otro entorno Linux o en CI; un binario Termux no se mezcla con un binario Debian/Ubuntu.
 
 ## Construcción local
 
@@ -39,74 +39,49 @@ Desde la raíz del proyecto:
 
 El script:
 
-1. compila Milena con Clang;
-2. ejecuta las pruebas;
-3. obtiene la arquitectura de Termux;
-4. instala el binario y la documentación bajo `$PREFIX` dentro del staging;
-5. genera `dist/termux/milena_VERSION_aarch64.deb`.
+1. compila Milena con Clang y ejecuta las pruebas;
+2. exige que `dpkg --print-architecture` sea `aarch64`;
+3. instala el binario y la documentación bajo el prefijo real de Termux;
+4. normaliza timestamps y permisos mediante `SOURCE_DATE_EPOCH`;
+5. genera `dist/termux/milena_VERSION_aarch64.deb` y su `.sha256`.
 
-La instalación local de prueba puede hacerse con:
+Prueba local (en un dispositivo Termux, sin confundirla con una prueba APT):
 
 ```bash
 dpkg -i dist/termux/milena_*.deb
-# Verifique que el binario instalado es ejecutable:
 command -v milena
 milena --help
+sha256sum -c dist/termux/*.deb.sha256
 ```
 
-Para desinstalar:
+La instalación se debe revertir con el gestor local después de la prueba. Esta instrucción no demuestra que exista un repositorio remoto.
 
-```bash
-apt remove milena
-```
+## Repositorio APT preparado, pero no oficial
 
-## Repositorio APT
-
-Para que un usuario pueda ejecutar `pkg install milena`, no basta con publicar el `.deb` en GitHub. El servidor debe contener la estructura APT completa:
+`generate-apt-repo.sh` se ejecuta en Linux/CI y acepta exactamente un paquete `milena` de arquitectura `aarch64`. Rechaza artefactos Debian, genera solo:
 
 ```text
 dists/stable/Release
 dists/stable/InRelease
+dists/stable/Release.gpg
 dists/stable/main/binary-aarch64/Packages.gz
-dists/stable/main/binary-arm/Packages.gz
-dists/stable/main/binary-i686/Packages.gz
-dists/stable/main/binary-x86_64/Packages.gz
-pool/main/m/milena/*.deb
+pool/main/m/milena/milena_VERSION_aarch64.deb
+milena-archive-keyring.asc
 ```
 
-Los índices deben generarse en CI y el repositorio debe firmarse. El usuario debe instalar o confiar en la clave pública mediante un keyring; firmar sin distribuir la clave no elimina las advertencias de confianza.
+El workflow descarga únicamente el artefacto Termux con ese nombre, valida su arquitectura y sus rutas bajo `$PREFIX`, y nunca declara `arm`, `i686`, `x86_64` ni `amd64` sin paquetes construidos. Netlify es solo el hosting opcional documentado en el workflow; no es una dependencia de Milena.
 
-GitHub Pages puede servir archivos estáticos, pero no genera por sí mismo `Packages.gz`, `Release` ni las firmas. Esas tareas deben ejecutarse antes del despliegue.
+## Arquitecturas y rutas
 
-## Arquitecturas
+`aarch64` es el único objetivo Termux activo hasta contar con builds y pruebas reales para otras arquitecturas. El paquete usa rutas bajo `$PREFIX`, no `/usr/local/bin`, `/usr/bin` ni `sudo`. Debian/Ubuntu tiene un constructor separado y no se puede reutilizar aquí.
 
-Este script exige que `dpkg --print-architecture` sea `aarch64`; no crea por accidente un paquete Debian/Ubuntu ni uno para otra ABI. El control declara sin dependencias adicionales: Milena es un binario C enlazado con la libc de Termux.
+## Pendientes antes de la solicitud oficial
 
-Cada arquitectura necesita su propio binario y paquete:
-
-```text
-aarch64
-arm
-x86_64
-i686
-```
-
-La matriz real debe ajustarse a las arquitecturas soportadas por Termux y a las que Milena decida publicar.
-
-## Rutas
-
-El paquete usa `$PREFIX`, no `/usr/local/bin` ni `sudo`. El script convierte el prefijo de Termux en rutas del archivo `.deb` durante el staging.
-
-## Pendientes antes de publicar
-
-- ejecutar compilación real en Termux/aarch64;
-- instalar y probar el `.deb` con `dpkg -i` antes de publicarlo;
-- compilar con Clang y validar con GCC en CI o Linux;
-- ejecutar pruebas unitarias e integración;
-- ejecutar ASan, UBSan y LeakSanitizer/Valgrind donde estén disponibles;
-- revisar dependencias dinámicas;
-- construir todas las arquitecturas objetivo;
-- generar índices APT;
-- firmar `Release`/`InRelease`;
-- probar instalación, actualización y eliminación;
-- publicar instrucciones de recuperación y verificación de hashes.
+- construir en un dispositivo o runner Termux/aarch64 real;
+- instalar, ejecutar, actualizar y eliminar el paquete local;
+- comprobar checksum y dependencias dinámicas;
+- generar y revisar `Packages.gz`, `Release`, `InRelease` y `Release.gpg`;
+- publicar el repositorio en el único hosting configurado y probarlo desde Termux;
+- verificar la clave pública y la instalación desde APT en una sesión limpia;
+- documentar commit, versión de Termux, arquitectura y resultados;
+- solo después, preparar la solicitud oficial a los repositorios de Termux.
