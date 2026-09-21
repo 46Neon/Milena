@@ -242,6 +242,20 @@ Estos controles convierten el runtime en un componente orquestable: una capa
 superior puede imponer límites sin matar el proceso de forma abrupta ni
 confundir un resultado parcial con éxito.
 
+## Séptimo hito implementado en PR #27
+
+Se añadió un adaptador de workers aislados por proceso para POSIX. Cada
+partición se ejecuta en un proceso hijo y devuelve por un pipe un resultado
+estructurado con su identificador y estado. El padre valida el mensaje, espera
+el proceso y no publica la partición como completada si el canal, el proceso o
+el identificador fallan. En Windows el contrato devuelve explícitamente
+`MILENA_ERR_UNSUPPORTED` hasta implementar el adaptador Win32 equivalente.
+
+Esta etapa valida IPC local y aislamiento antes de introducir sockets. Los
+resultados de datos reales deberán viajar posteriormente mediante artefactos
+de partición o un protocolo versionado; no se serializa memoria arbitraria del
+proceso padre.
+
 ## Estado honesto del proyecto
 
 PR #27 implementa el primer componente distribuible: el planner físico local y
