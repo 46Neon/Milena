@@ -31,7 +31,7 @@ BUILD_CFLAGS="$BASE_CFLAGS $VERSION_DEFINE"
 export DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:-reproducible}"
 make clean
 CC=clang make CFLAGS="$BUILD_CFLAGS"
-CC=clang make CFLAGS="$BUILD_CFLAGS" test
+CC=clang make CFLAGS="$BUILD_CFLAGS" termux-test
 ./milena --self-check
 ./milena --version | grep -Fxq "$VERSION"
 # Check the produced ELF before it is copied into a package.
