@@ -28,6 +28,7 @@ int main(void) {
     assert(report.rows_read == 4);
     assert(report.rows_with_valid_values == 3);
     assert(report.malformed_rows == 0);
+    assert(report.bytes_read > 0);
     FILE *json = fopen(output, "rb");
     assert(json != NULL);
     char buffer[2048] = {0};
@@ -35,6 +36,7 @@ int main(void) {
     assert(fclose(json) == 0);
     assert(strstr(buffer, "\"modo\":\"flujo\"") != NULL);
     assert(strstr(buffer, "\"importe_suma\"") != NULL);
+    assert(strstr(buffer, "\"bytes_leidos\"") != NULL);
     remove(input);
     remove(output);
 

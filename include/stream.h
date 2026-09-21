@@ -39,6 +39,7 @@ typedef struct {
     size_t header_columns;
     size_t max_record_bytes;
     size_t max_columns;
+    size_t bytes_read;
 } MilenaStreamReport;
 
 /*
