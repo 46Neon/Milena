@@ -51,3 +51,36 @@ El benchmark rechaza `--large-rows` negativo; los casos grandes siguen siendo
 opt-in. Los resultados son observaciones acotadas, no una promesa industrial.
 La agrupación con estado acotado y spill-to-disk permanece como siguiente
 incremento; aún no forma parte de este contrato publicado.
+
+## Agrupación acotada (contrato PR25)
+
+La sintaxis exacta es la forma canónica de compatibilidad del lenguaje:
+
+```milena
+dataset cargar flujo("datos/ventas.csv", 4096)
+.agrupar { #por("grupo") #suma("importe") #media("importe") #conteo("importe") }
+.exportar { ("reporte.json") }
+```
+
+`#por` identifica la columna de clave y cada métrica nombra una columna.
+El runtime conserva estado por grupo y rechaza superar el límite duro de
+**100.000 grupos** (el valor predeterminado del flujo es 1.000). El límite es
+validado antes de crecer el estado; no se ofrece estado ilimitado. Una fila con
+varias métricas puede aportar sus valores válidos de forma independiente: un
+valor inválido incrementa `valores_invalidos` solo para esa métrica y la fila
+se refleja en el conteo de malformadas. Una columna inexistente, una fila con
+número incorrecto de columnas o un CSV inválido rechaza la operación completa.
+
+`python3 benchmarks/grouped_stream_benchmark.py` genera fixtures deterministas
+pequeño (100 filas/4 grupos) y mediano (10.000/32), con valores inválidos
+repetibles. `--large-rows N` habilita explícitamente el fixture grande; no se
+ejecuta en CI. El target bounded `make benchmark-stream-grouped` ejecuta solo
+los dos casos pequeños y medianos, con conteo de grupos, valores inválidos,
+resultado y tiempo de pared verificables. La metodología mide la ejecución del
+programa completo por la ruta lexer → parser → AST → semántica → runtime →
+backend de flujo; son observaciones reproducibles, no una promesa de latencia,
+throughput o escala industrial.
+
+La agrupación sigue siendo de un proceso y mantiene el estado de grupos en
+memoria. Spill-to-disk, formatos columnares (Arrow/Parquet), paralelismo,
+particionado y distribución son trabajo futuro explícito.

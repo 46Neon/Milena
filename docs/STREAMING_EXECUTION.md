@@ -100,3 +100,32 @@ Las mejoras posteriores deben conservar:
 - mediciones reproducibles de filas, límites, tiempo y errores;
 - pruebas con archivos pequeños, filas inválidas, comillas y registros que
   superen el límite.
+
+## Agrupación streaming acotada
+
+La forma exacta disponible es:
+
+```milena
+dataset cargar flujo("datos.csv", 4096)
+.agrupar { #por("grupo") #suma("importe") #media("importe") #conteo("importe") }
+.exportar { ("reporte.json") }
+```
+
+El límite duro es 100.000 grupos; el valor predeterminado es 1.000 y la
+opción `grupos de N` no puede exceder 100.000. El estado es proporcional a
+`grupos × métricas`, además del registro acotado. Las métricas tienen semántica
+independiente: un valor numérico válido se acumula aunque otra métrica de la
+misma fila sea inválida; cada métrica informa `valores_invalidos`. Filas con
+columnas incorrectas se descartan para todas las métricas y errores de CSV o
+límites abortan la operación.
+
+El benchmark determinista `benchmarks/grouped_stream_benchmark.py` usa 100 y
+10.000 filas en CI (`make benchmark-stream-grouped`); el workload grande solo
+se ejecuta con `--large-rows N`. Mide pared del proceso completo y verifica
+filas, grupos y valores inválidos. No pretende representar hardware ni afirmar
+rendimiento industrial. La ruta continúa siendo lexer → parser → AST →
+semántica → runtime → backend `stream.c`; no es una herramienta ni parser
+paralelo.
+
+Spill-to-disk, formatos columnares, paralelismo y distribución permanecen
+fuera de alcance y son trabajo futuro.
