@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # scanned: a closed PR is history, not a runnable release definition.
 ACTIVE = [
     ROOT / '.github/workflows/publish-apt.yml',
+    ROOT / '.github/workflows/termux-aarch64-contract.yml',
     ROOT / 'packaging/termux/build-local-deb.sh',
     ROOT / 'packaging/termux/generate-apt-repo.sh',
     ROOT / 'packaging/README.md',

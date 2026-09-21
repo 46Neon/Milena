@@ -3,7 +3,7 @@
 ## Estado honesto en PR23
 
 No hay un dispositivo Termux/aarch64 registrado como runner de GitHub Actions en
-este proyecto. Un `runs-on: [self-hosted, termux, arm64]` no crea un dispositivo:
+este proyecto. Un `runs-on: [self-hosted, termux, aarch64, milena]` no crea un dispositivo:
 si se añade sin un runner registrado, el job queda en cola indefinidamente. Por
 eso PR23 **no añade ni simula un runner** y no declara una compilación, instalación
 o ejecución en Termux.
@@ -25,8 +25,13 @@ sustituye una prueba en Android.
 
 ## Contrato para un futuro runner
 
-Solo después de registrar un equipo administrado por el proyecto debe habilitarse
-un job con etiquetas explícitas, por ejemplo `self-hosted`, `termux` y `arm64`.
+PR23 incluye el contrato manual en
+`.github/workflows/termux-aarch64-contract.yml`, pero no crea ni registra un
+runner. El job solo puede ejecutarse con las etiquetas explícitas
+`self-hosted`, `termux`, `aarch64` y `milena`, y exige la confirmación manual
+`confirm_device=true`. Si no existe un runner registrado con esas etiquetas, el
+job no se presenta como una prueba exitosa ni como una compilación Termux.
+
 El equipo debe documentar antes de habilitarlo:
 
 1. modelo, `aarch64`, versión de Android y versión de Termux;
@@ -35,8 +40,10 @@ El equipo debe documentar antes de habilitarlo:
 4. commit exacto, `PREFIX`, `dpkg --print-architecture` y `clang --version`;
 5. limpieza del workspace entre ejecuciones y ausencia de secretos persistentes.
 
-La primera ejecución debe ser manual y no publicar nada: ejecutar
-`packaging/termux/build-local-deb.sh`, validar el checksum y conservar logs del
+La primera ejecución debe ser manual y no publicar nada: el workflow ejecuta
+`scripts/termux-runner-preflight.sh`, exige `uname -m=aarch64` y
+`dpkg --print-architecture=aarch64`, luego ejecuta
+`packaging/termux/build-local-deb.sh`, valida el checksum y conserva logs del
 build. Después debe probarse en el mismo dispositivo la instalación local,
 `command -v milena`, `milena --help`, actualización, ejecución de un script y
 eliminación. La prueba APT requiere además un repositorio publicado, una sesión
