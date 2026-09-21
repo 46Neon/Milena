@@ -31,6 +31,13 @@ if "sscanf(summary->value" in stream_runtime:
     raise SystemExit("natural stream metrics still use textual scanning")
 if "src/stream.c" not in make or '"stream.c"' not in manifest:
     raise SystemExit("stream.c is not classified as official product")
+# Related analysis, SST, and finance remain language-runtime capabilities.
+for marker in ("AST_COMANDO_SST", "runtime_write_sst", "milena_simple_interest", "src/finance.c"):
+    if marker not in runtime + make:
+        raise SystemExit(f"canonical analysis capability missing: {marker}")
+for experimental in ("compiler.c", "ir.c", "vm.c", "gc.c", "arena.c"):
+    if experimental in make:
+        raise SystemExit(f"experimental module leaked into product build: {experimental}")
 if re.search(r"stream[^\n]*main\s*\(", (ROOT / "src/stream.c").read_text()):
     raise SystemExit("stream.c contains a standalone entry point")
 print("OK: streaming architecture is typed, canonical, and product-classified")

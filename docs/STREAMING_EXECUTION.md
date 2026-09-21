@@ -57,7 +57,8 @@ La sintaxis humana conserva en el AST la operación, columna, tamaño de lote,
 límite de registro y límite de columnas; `stream.c` recibe únicamente ese
 contrato tipado. Las pruebas directas del backend son pruebas unitarias, no una
 segunda interfaz de usuario. SST, finanzas y análisis siguen siendo comandos
-AST del mismo runtime y no se incluyen módulos experimentales.
+AST del mismo runtime (`AST_COMANDO_SST`, tablas y `finance.c`); el manifiesto
+mantiene fuera del producto los módulos experimentales de VM/IR/GC.
 
 ## Qué hace
 
