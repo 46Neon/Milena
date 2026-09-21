@@ -74,6 +74,8 @@ typedef struct ASTNode {
     int axis;
     bool keepdims;
     bool zeros_constructor;
+    /* Límites explícitos del modo de flujo; cero significa valor predeterminado. */
+    size_t stream_record_limit;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;

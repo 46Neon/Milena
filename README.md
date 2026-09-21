@@ -140,31 +140,32 @@ una ruta de memoria acotada:
 
 ```milena
 .analisis ventas_masivas {
-    variable importe numerica
-    dataset cargar flujo("datos/ventas_masivas.csv", 4096)
+    datos desde "datos/ventas_masivas.csv"
+        procesar por lotes de 4096 filas
+        con registros de hasta 8 MiB
 
-    .resumir dataset {
-        #suma("importe")
-        #media("importe")
-        #conteo("importe")
-        #varianza("importe")
+    resumir {
+        suma de "importe";
+        media de "importe";
+        contar de "importe";
+        varianza de "importe";
     }
 
-    .exportar {
-        ("reporte_flujo.json")
-    }
+    guardar resultado en "reporte_flujo.json"
 }
 ```
 
 El flujo lee el archivo secuencialmente, usa acumuladores de una pasada y no
-crea un `Dataset` o `MilenaTable` con todas las filas. El reporte incluye el
-tiempo medido en milisegundos. El tiempo real depende del tamaño del archivo y
-del almacenamiento: no existe una garantía universal de responder en
-milisegundos para cualquier volumen.
+crea un `Dataset` o `MilenaTable` con todas las filas. `con registros de hasta
+8 MiB` es opcional y el runtime impone un tope duro de 64 MiB por registro.
+El reporte expone límites, pico de búfer, filas y tiempo observado. El tiempo
+real depende del tamaño del archivo y del almacenamiento: no es una garantía
+de latencia fija.
 
-La ruta inicial admite `suma`, `media`, `minimo`, `maximo`, `conteo`, `varianza`
-y `desviacion_estandar`, sin agrupaciones, joins, medianas ni percentiles.
-Consulta [la documentación del modo flujo](docs/STREAMING_EXECUTION.md).
+La ruta admite `suma`, `media`, `minimo`, `maximo`, `conteo`, `varianza` y
+`desviacion_estandar`, sin agrupaciones ilimitadas, joins, medianas, percentiles,
+spill a disco ni procesamiento distribuido. La sintaxis legacy de PR24 sigue
+siendo compatible. Consulta [la documentación del modo flujo](docs/STREAMING_EXECUTION.md).
 
 ## Instalación y uso
 

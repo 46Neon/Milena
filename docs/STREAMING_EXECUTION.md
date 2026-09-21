@@ -1,69 +1,88 @@
 # Ejecución en flujo para grandes CSV
 
-PR24 añade una ruta de ejecución acotada para análisis de resúmenes sobre CSV
-que no necesitan materializar todo el dataset.
+PR24 ofrece una ruta canónica y acotada para resumir CSV grandes sin
+materializar el dataset completo. La entrada sigue el recorrido lexer → parser
+→ AST → semántica → runtime; no hay un intérprete textual paralelo.
 
-## Sintaxis
+## Sintaxis humana recomendada
 
 ```milena
 .analisis ventas_masivas {
-    variable importe numerica
-    dataset cargar flujo("datos/ventas.csv", 4096)
+    datos desde "datos/ventas.csv"
+        procesar por lotes de 4096 filas
+        con registros de hasta 8 MiB
 
-    .resumir dataset {
-        #suma("importe")
-        #media("importe")
-        #minimo("importe")
-        #maximo("importe")
-        #conteo("importe")
-        #varianza("importe")
-        #desviacion_estandar("importe")
+    resumir {
+        suma de "importe";
+        media de "importe";
+        minimo de "importe";
+        maximo de "importe";
+        contar de "importe";
+        varianza de "importe";
+        desviacion_estandar de "importe";
     }
 
-    .exportar {
-        ("reporte_flujo.json")
-    }
+    guardar resultado en "reporte_flujo.json"
 }
 ```
 
-El segundo argumento es el tamaño lógico del lote y es opcional. Si se omite,
-se utiliza `4096`. El lote no se conserva completo: el motor mantiene un
-registro CSV reutilizable y acumuladores numéricos. Por eso el uso de memoria
-es acotado por el tamaño del registro, el encabezado y las métricas solicitadas,
-no por el número de filas.
+`procesar por lotes de N filas` expresa el tamaño de lectura lógico. El motor
+no conserva el lote completo: reutiliza un registro CSV, la cabecera, los
+punteros de campos y un acumulador por métrica. `con registros de hasta N MiB`
+es opcional; el límite duro del runtime es 64 MiB por registro y el valor
+predeterminado también es 64 MiB. El tamaño mínimo aceptado es 4096 bytes.
+Estos límites permiten fallar pronto con un diagnóstico explícito en lugar de
+reservar memoria sin cota. La salida incluye el límite configurado, el número
+de columnas de la cabecera y el pico de búfer observado.
+
+La forma anterior de PR24 continúa funcionando:
+
+```milena
+dataset cargar flujo("datos/ventas.csv", 4096)
+.resumir dataset { #suma("importe") #media("importe") #conteo("importe") }
+.exportar { ("reporte_flujo.json") }
+```
+
+En la forma legacy, el segundo argumento es opcional y el valor predeterminado
+es 4096 filas.
 
 ## Qué hace
 
 - Lee el CSV secuencialmente con un búfer de E/S de 64 KiB.
+- Soporta registros entrecomillados, comillas escapadas y registros grandes
+  hasta el límite configurado.
 - Mantiene acumuladores de suma compensada, media, mínimo, máximo, conteo y
-  varianza en una pasada.
-- Rechaza columnas inexistentes y reporta filas con campos no numéricos.
-- Escribe un JSON con filas procesadas, filas válidas, filas malformadas,
-  tamaño de lote, tiempo medido y resultados.
+  varianza/desviación estándar en una pasada.
+- Rechaza columnas inexistentes, demasiadas columnas (máximo 4096), registros
+  que exceden el límite y CSV con comillas sin cerrar.
+- Reporta filas leídas, filas válidas, filas malformadas, límite de registro,
+  límite de columnas, pico de búfer y tiempo observado.
 - No crea `Dataset`, `MilenaTable` ni una copia de todas las filas.
 
 ## Límites deliberados
 
-La primera ruta de flujo admite resúmenes numéricos sin agrupación. No admite
-mediana, percentiles, joins, limpieza que necesite observar todo el conjunto,
-ni transformaciones que generen columnas materializadas. Es preferible rechazar
-esas operaciones que fingir que son streaming y volver a consumir memoria sin
-control.
+El flujo actual admite resúmenes numéricos globales. No admite mediana,
+percentiles, joins, limpieza que necesite observar todo el conjunto,
+transformaciones materializadas ni agrupaciones ilimitadas. Es preferible
+rechazar esas operaciones antes que fingir que son streaming y desbordar la
+memoria. Tampoco ofrece procesamiento distribuido, spill a disco, reanudación,
+compresión ni garantías de latencia fija.
 
-El tiempo en milisegundos se mide y se informa, pero no se promete una latencia
-fija: leer un archivo grande siempre tiene un coste proporcional a sus filas y
-depende del disco, el sistema operativo, el tamaño de los registros y el
-hardware. La optimización de PR24 consiste en una sola pasada, poca memoria,
-bajo overhead de asignación y acumuladores O(1), no en una garantía física de
-milisegundos para cualquier volumen.
+El tiempo en milisegundos se mide y se informa únicamente como observabilidad;
+no se promete una latencia fija. Leer un archivo grande cuesta en proporción a
+sus filas y depende del disco, sistema operativo, tamaño de los registros y
+hardware. La garantía práctica de esta ruta es memoria acotada por
+`O(columnas + métricas + registro máximo)` y una sola pasada, no una cifra de
+milisegundos.
 
 ## Contrato de rendimiento
 
-Para mantener esta ruta honesta, las mejoras posteriores deben conservar:
+Las mejoras posteriores deben conservar:
 
-- memoria O(columnas + métricas + registro máximo);
 - cero copias del dataset completo;
 - una pasada cuando la operación lo permita;
 - acumuladores numéricamente estables;
-- mediciones reproducibles de filas, tiempo y errores;
-- pruebas con archivos pequeños, filas inválidas y registros CSV entrecomillados.
+- límites configurables con tope duro y errores accionables;
+- mediciones reproducibles de filas, límites, tiempo y errores;
+- pruebas con archivos pequeños, filas inválidas, comillas y registros que
+  superen el límite.

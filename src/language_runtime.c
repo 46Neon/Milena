@@ -1393,13 +1393,14 @@ static MilenaStatus runtime_write_sst_model(const MilenaTable *table,
 }
 
 
-static MilenaStatus run_stream_dataset(const ASTNode *analysis,
+static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
                                        const char *input_path,
                                        const char *output_path,
-                                       size_t chunk_rows,
+                                       const MilenaStreamOptions *options,
                                        FILE *output,
                                        MilenaError *error) {
-    if (!analysis || !input_path || !output_path || chunk_rows == 0)
+    if (!analysis || !input_path || !output_path || !options ||
+        options->chunk_rows == 0)
         return MILENA_ERR_ARGUMENT;
     MilenaStreamMetric metrics[64];
     char columns[64][128];
@@ -1458,14 +1459,16 @@ static MilenaStatus run_stream_dataset(const ASTNode *analysis,
         return MILENA_ERR_PARSE;
     }
     MilenaStreamReport report = {0};
-    MilenaStatus status = milena_stream_csv_summary(input_path, output_path,
-                                                     metrics, metric_count,
-                                                     chunk_rows, &report, error);
+    MilenaStatus status = milena_stream_csv_summary_with_options(input_path,
+                                                     output_path, metrics,
+                                                     metric_count, options,
+                                                     &report, error);
     if (status == MILENA_OK && output) {
         fprintf(output, "Programa de flujo ejecutado: %s\n", input_path);
-        fprintf(output, "Filas: %zu | Válidas: %zu | Lote: %zu | Tiempo: %.3f ms\n",
+        fprintf(output, "Filas: %zu | Válidas: %zu | Lote: %zu | Registro máximo observado: %zu bytes | Tiempo medido: %.3f ms\n",
                 report.rows_read, report.rows_with_valid_values,
-                report.chunk_rows, report.elapsed_milliseconds);
+                report.chunk_rows, report.peak_record_bytes,
+                report.elapsed_milliseconds);
         fprintf(output, "Salida: %s\n", output_path);
     }
     return status;
@@ -1513,7 +1516,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
         ast_destroy(program);
         parser_release(&parser);
         runtime_error(error, MILENA_ERR_PARSE,
-                      "El análisis necesita dataset cargar datos(\"...\")");
+                      "El análisis necesita una fuente de datos (por ejemplo, datos desde \"...\")");
         return MILENA_ERR_PARSE;
     }
 
@@ -1537,8 +1540,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
         if (status == MILENA_OK) {
             size_t chunk_rows = load->number_value > 0.0
                 ? (size_t)load->number_value : 4096u;
-            status = run_stream_dataset(analysis, input, output_path,
-                                        chunk_rows, output, error);
+            /* La sintaxis humana conserva los límites en el AST; el motor
+             * recibe opciones, no una ruta textual paralela. */
+            MilenaStreamOptions options = milena_stream_options_default();
+            options.chunk_rows = chunk_rows;
+            if (load->stream_record_limit > 0)
+                options.max_record_bytes = load->stream_record_limit;
+            status = run_stream_dataset_with_options(analysis, input, output_path,
+                                                     &options, output, error);
         }
         ast_destroy(program);
         parser_release(&parser);

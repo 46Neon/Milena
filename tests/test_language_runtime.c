@@ -277,12 +277,41 @@ static int run_stream_pipeline(void) {
     return 0;
 }
 
+static int run_human_stream_pipeline(void) {
+    const char *csv = "test-language-runtime-human-stream.csv";
+    const char *output = "test-language-runtime-human-stream.json";
+    const char *content = "importe\n10\n20\n30\n";
+    CHECK(write_file(csv, content), "flujo humano: no se pudo crear el CSV");
+    const char *source =
+        ".analisis ventas_grandes {\n"
+        "  datos desde \"test-language-runtime-human-stream.csv\" procesar por lotes de 2 filas con registros de hasta 1 MiB\n"
+        "  resumir { suma de \"importe\"; media de \"importe\"; contar de \"importe\"; }\n"
+        "  guardar resultado en \"test-language-runtime-human-stream.json\"\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(source,
+                                     "test-language-runtime-human-stream.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    char text[4096];
+    CHECK(read_file(output, text, sizeof(text)), "flujo humano: no se creó el JSON");
+    CHECK(strstr(text, "\"modo\":\"flujo\"") != NULL &&
+          strstr(text, "importe_suma") != NULL &&
+          strstr(text, "\"tamano_lote\":2") != NULL &&
+          strstr(text, "\"limite_registro_bytes\":1048576") != NULL,
+          "flujo humano: sintaxis o límites no llegaron al runtime");
+    remove(csv); remove(output);
+    return 0;
+}
+
 int main(void) {
     CHECK(run_arrays() == 0, "falló la fase de arrays");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
     CHECK(run_inference_pipeline() == 0, "falló la fase de inferencia");
     CHECK(run_summary_pipeline() == 0, "falló la fase de resumen");
     CHECK(run_stream_pipeline() == 0, "falló la fase de flujo");
+    CHECK(run_human_stream_pipeline() == 0, "falló la fase de flujo humano");
     puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo OK");
     return 0;
 }

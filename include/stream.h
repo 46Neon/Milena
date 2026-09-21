@@ -18,6 +18,12 @@ typedef enum {
 } MilenaStreamOperation;
 
 typedef struct {
+    size_t chunk_rows;
+    size_t max_record_bytes;
+    size_t max_columns;
+} MilenaStreamOptions;
+
+typedef struct {
     const char *column;
     const char *name;
     MilenaStreamOperation operation;
@@ -29,12 +35,26 @@ typedef struct {
     size_t malformed_rows;
     size_t chunk_rows;
     double elapsed_milliseconds;
+    size_t peak_record_bytes;
+    size_t header_columns;
+    size_t max_record_bytes;
+    size_t max_columns;
 } MilenaStreamReport;
 
 /*
  * Summarizes a CSV without materializing it as Dataset or MilenaTable.
  * The output is a JSON report. Memory is O(columns + metrics + max_record).
  */
+MilenaStreamOptions milena_stream_options_default(void);
+
+MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
+                                       const char *output_path,
+                                       const MilenaStreamMetric *metrics,
+                                       size_t metric_count,
+                                       const MilenaStreamOptions *options,
+                                       MilenaStreamReport *report,
+                                       MilenaError *error);
+
 MilenaStatus milena_stream_csv_summary(const char *input_path,
                                        const char *output_path,
                                        const MilenaStreamMetric *metrics,

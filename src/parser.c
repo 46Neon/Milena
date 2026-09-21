@@ -512,6 +512,121 @@ static ASTNode *parse_statistical_call(Parser *parser,
     return ast_create_statistic(operation, argument, axis, keepdims, percentile);
 }
 
+static bool parser_is_stream_metric(Parser *parser) {
+    if (!parser) return false;
+    return parser_match(parser, TOKEN_FUNCION_SUMA) ||
+           parser_match(parser, TOKEN_FUNCION_MEDIA) ||
+           parser_match(parser, TOKEN_FUNCION_MINIMO) ||
+           parser_match(parser, TOKEN_FUNCION_MAXIMO) ||
+           parser_match(parser, TOKEN_FUNCION_VARIANZA) ||
+           parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
+           (parser_match(parser, TOKEN_KW_CONTAR));
+}
+
+/* Forma legible: resumir { suma de "importe"; contar de "importe"; }.
+ * El resultado sigue siendo AST_RESUMEN_METRICA, igual que la forma legacy. */
+static ASTNode *parse_stream_summary(Parser *parser) {
+    if (!parser_expect(parser, TOKEN_LLAVE_IZQ,
+                       "Se esperaba '{' después de resumir")) return NULL;
+    ASTNode *summary = ast_create(AST_BLOQUE_RESUMIR);
+    if (!summary) { parser_error(parser, "Sin memoria para resumir"); return NULL; }
+    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+        if (!parser_is_stream_metric(parser)) {
+            parser_error(parser, "Se esperaba una métrica como 'suma de \\\"columna\\\"'");
+            break;
+        }
+        const char *metric = parser->current.type == TOKEN_KW_CONTAR
+            ? "conteo" : parser->current.lexeme;
+        char metric_copy[MAX_TOKEN_LEN];
+        strncpy(metric_copy, metric, sizeof(metric_copy) - 1);
+        metric_copy[sizeof(metric_copy) - 1] = '\0';
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_KW_DE,
+                           "Se esperaba 'de' después de la métrica")) break;
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "Se esperaba el nombre de columna entre comillas")) break;
+        char specification[MAX_TOKEN_LEN * 2];
+        int written = snprintf(specification, sizeof(specification), "%s:%s",
+                               metric_copy, parser->previous.lexeme);
+        if (written < 0 || (size_t)written >= sizeof(specification)) {
+            parser_error(parser, "La especificación de resumen es demasiado larga");
+            break;
+        }
+        ASTNode *metric_node = ast_create_leaf(AST_RESUMEN_METRICA, specification);
+        if (!metric_node) {
+            parser_error(parser, "Sin memoria para métrica de resumen");
+            break;
+        }
+        if (!parser_add_child(parser, summary, metric_node,
+                              "Sin memoria para métrica de resumen")) break;
+        if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+    }
+    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}' después del resumen") ||
+        summary->child_count == 0) {
+        if (!parser->has_error) parser_error(parser, "El resumen debe tener al menos una métrica");
+        ast_destroy(summary);
+        return NULL;
+    }
+    return summary;
+}
+
+static ASTNode *parse_human_stream_load(Parser *parser) {
+    if (!parser_expect(parser, TOKEN_KW_DATOS, "Se esperaba 'datos'")) return NULL;
+    if (!parser_expect(parser, TOKEN_KW_DESDE, "Se esperaba 'desde' después de datos")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba la ruta del CSV entre comillas")) return NULL;
+    ASTNode *load = ast_create_leaf(AST_LLAMADA_CARGAR, parser->previous.lexeme);
+    if (!load) { parser_error(parser, "Sin memoria para cargar datos"); return NULL; }
+    load->type_name = milena_strdup("flujo");
+    load->number_value = 4096.0;
+    if (!load->type_name) { ast_destroy(load); parser_error(parser, "Sin memoria para modo flujo"); return NULL; }
+    if (parser_match(parser, TOKEN_KW_PROCESAR)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_KW_POR, "Se esperaba 'por' en 'procesar por lotes'")) goto fail;
+        if (!parser_expect(parser, TOKEN_KW_LOTES, "Se esperaba 'lotes'")) goto fail;
+        if (!parser_expect(parser, TOKEN_KW_DE, "Se esperaba 'de' antes del tamaño del lote")) goto fail;
+        if (!parser_expect(parser, TOKEN_NUMERO, "El tamaño del lote debe ser numérico")) goto fail;
+        double chunk = parser->previous.number_value;
+        if (!isfinite(chunk) || chunk < 1.0 || chunk > 1000000.0 || floor(chunk) != chunk) {
+            parser_error(parser, "El tamaño del lote debe ser un entero entre 1 y 1000000"); goto fail;
+        }
+        load->number_value = chunk;
+        if (!parser_expect(parser, TOKEN_KW_FILAS, "Se esperaba 'filas' después del tamaño del lote")) goto fail;
+    }
+    /* Opcional y explícito: con registros de hasta N MiB. Mantiene un tope
+     * duro de 64 MiB en el runtime para no convertir el modo flujo en carga. */
+    if (parser_match(parser, TOKEN_KW_CON)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_KW_REGISTROS, "Se esperaba 'registros'")) goto fail;
+        if (!parser_expect(parser, TOKEN_KW_DE, "Se esperaba 'de'")) goto fail;
+        if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta'")) goto fail;
+        if (!parser_expect(parser, TOKEN_NUMERO, "El límite del registro debe ser numérico")) goto fail;
+        double limit = parser->previous.number_value;
+        if (!isfinite(limit) || limit < 0.004 || limit > 64.0 || floor(limit * 1024.0) != limit * 1024.0) {
+            parser_error(parser, "El límite debe estar entre 0.004 y 64 MiB"); goto fail;
+        }
+        if (parser_match(parser, TOKEN_KW_MIB)) parser_advance(parser);
+        else { parser_error(parser, "Se esperaba la unidad 'MiB'"); goto fail; }
+        load->stream_record_limit = (size_t)(limit * 1024.0 * 1024.0);
+    }
+    if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+    return load;
+fail:
+    ast_destroy(load);
+    return NULL;
+}
+
+static ASTNode *parse_human_stream_export(Parser *parser) {
+    parser_advance(parser);
+    if (!parser_expect(parser, TOKEN_KW_RESULTADO, "Se esperaba 'resultado'")) return NULL;
+    if (!parser_expect(parser, TOKEN_KW_EN, "Se esperaba 'en'")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba la ruta de salida entre comillas")) return NULL;
+    ASTNode *export_node = ast_create_leaf(AST_BLOQUE_EXPORTAR, parser->previous.lexeme);
+    if (!export_node) parser_error(parser, "Sin memoria para guardar resultado");
+    if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+    return export_node;
+}
+
 static ASTNode* parse_bloque_analisis(Parser *parser) {
     if (!parser_expect(parser, TOKEN_PUNTO, "Se esperaba '.'")) return NULL;
     if (!parser_expect(parser, TOKEN_KW_ANALISIS, "Se esperaba 'analisis'")) return NULL;
@@ -529,7 +644,19 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
     // Parsear contenido del bloque
     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
-        if (parser_match(parser, TOKEN_KW_VARIABLE)) {
+        if (parser_match(parser, TOKEN_KW_DATOS)) {
+            ASTNode *load = parse_human_stream_load(parser);
+            if (load && !parser_add_child(parser, node, load,
+                                           "Sin memoria para cargar datos")) break;
+        } else if (parser_match(parser, TOKEN_KW_RESUMIR)) {
+            ASTNode *summary = parse_stream_summary(parser);
+            if (summary && !parser_add_child(parser, node, summary,
+                                               "Sin memoria para bloque resumir")) break;
+        } else if (parser_match(parser, TOKEN_KW_GUARDAR)) {
+            ASTNode *export_node = parse_human_stream_export(parser);
+            if (export_node && !parser_add_child(parser, node, export_node,
+                                                  "Sin memoria para guardar resultado")) break;
+        } else if (parser_match(parser, TOKEN_KW_VARIABLE)) {
             ASTNode *declaration = parse_variable_declaration(parser);
             if (declaration && !parser_add_child(parser, node, declaration,
                                                    "Sin memoria para el AST")) break;

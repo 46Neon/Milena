@@ -37,6 +37,26 @@ int main(void) {
     assert(strstr(buffer, "\"importe_suma\"") != NULL);
     remove(input);
     remove(output);
+
+    const char *large_input = "tests/.stream_large_record.csv";
+    const char *large_output = "tests/.stream_large_record.json";
+    FILE *large = fopen(large_input, "wb");
+    assert(large != NULL);
+    fputs("importe\n", large);
+    for (size_t i = 0; i < 5000; i++) fputc('x', large);
+    fputc('\n', large);
+    assert(fclose(large) == 0);
+    MilenaStreamOptions options = milena_stream_options_default();
+    options.chunk_rows = 2;
+    options.max_record_bytes = 4096;
+    MilenaError limited_error;
+    milena_error_clear(&limited_error);
+    assert(milena_stream_csv_summary_with_options(
+        large_input, large_output, metrics, 1, &options, NULL,
+        &limited_error) == MILENA_ERR_OVERFLOW);
+    assert(strstr(limited_error.message, "límite") != NULL);
+    remove(large_input);
+    remove(large_output);
     puts("stream tests passed");
     return 0;
 }
