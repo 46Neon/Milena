@@ -25,7 +25,10 @@ def run_case(label: str, rows: int, malformed_every: int, groups: int, large: bo
         if p.returncode: raise SystemExit(p.stderr or p.stdout)
         report = json.loads(output.read_text(encoding="utf-8")); assert report["grupos"] == groups and report["filas"] == rows and report["limite_grupos"] == 1000
         invalid = sum(m["valores_invalidos"] for r in report["resultados"] for m in r["metricas"])
-        assert invalid == expected_bad
+        # Each malformed importe is evaluated independently by suma, media and
+        # conteo, so the metric-level invalid counter records it three times.
+        expected_invalid_metrics = expected_bad * 3
+        assert invalid == expected_invalid_metrics
         return {"fixture": label, "rows_requested": rows, "groups_expected": groups, "groups": report["grupos"], "rows": report["filas"], "expected_malformed": expected_bad, "invalid_metric_values": invalid, "elapsed_seconds_process": elapsed, "group_cap": report["limite_grupos"], "large_opt_in": large}
 
 def main() -> int:
