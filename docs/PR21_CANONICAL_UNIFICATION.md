@@ -18,6 +18,13 @@ realiza una conversión explícita y reemplaza el destino solo después de
 construir una conversión completa. El destino debe estar inicializado por el
 llamante, como en el resto de la API `Dataset`.
 
+Una fuente con bloques de dataset canónicos (`dataset cargar`, `.limpiar` o
+`.transformar`) o con delimitadores truncados se rechaza con el diagnóstico del
+parser y nunca cae a la ruta histórica. Las fixtures completas de arrays que
+preceden a la gramática AST se conservan como compatibilidad explícita; esa
+ruta no añade capacidades y sus errores de ejecución siguen siendo reportados
+por el ejecutor de arrays.
+
 ## Contrato de ownership verificable
 
 - `dataset_init` y `milena_table_init` establecen el estado que debe recibir
