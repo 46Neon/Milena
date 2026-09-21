@@ -13,7 +13,7 @@ PREFIX_DIR="${PREFIX:-}"
     echo 'PREFIX must point to the Termux .../usr directory' >&2
     exit 1
 }
-for command in clang make dpkg dpkg-deb python3 sha256sum; do
+for command in clang make dpkg dpkg-deb python3 sha256sum readelf; do
     command -v "$command" >/dev/null 2>&1 || {
         echo "Missing required Termux command: $command" >&2
         exit 1
@@ -31,4 +31,7 @@ mkdir -p "$EVIDENCE_DIR"
     printf 'clang='; clang --version | head -n 1
     printf 'commit='; git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || printf 'unknown'
 } > "$EVIDENCE_DIR/preflight.txt"
+{ clang --version; readelf --version 2>/dev/null | head -n 1; dpkg-deb --version | head -n 1; } > "$EVIDENCE_DIR/toolchain.txt"
+( cd "$ROOT_DIR" && find . -type f -not -path './.git/*' -print0 | sort -z | xargs -0 sha256sum ) > "$EVIDENCE_DIR/workspace-sha256.txt"
 printf 'Termux runner preflight: OK (aarch64, PREFIX=%s)\n' "$PREFIX_DIR"
+

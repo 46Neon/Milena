@@ -24,3 +24,4 @@ dpkg-query -W -f='${Status}' milena | grep -q 'install ok installed'
 dpkg --purge milena
 ! dpkg-query -W -f='${Status}' milena 2>/dev/null | grep -q 'install ok installed'
 printf '%s\n' 'Termux install/upgrade/remove smoke: OK'
+

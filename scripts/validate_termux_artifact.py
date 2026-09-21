@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PREFIX = "data/data/com.termux/files/usr/"
@@ -52,6 +53,43 @@ def package_entries(package: Path) -> list[tuple[str, bool]]:
         entries.append((path, parts[0].startswith("-")))
     return entries
 
+
+def validate_provenance(package: Path, provenance: Path) -> None:
+    if not provenance.is_file():
+        fail(f"provenance does not exist: {provenance}")
+    try:
+        record = __import__("json").loads(provenance.read_text(encoding="utf-8"))
+    except Exception as exc:
+        fail(f"invalid provenance JSON: {exc}")
+    expected = run("dpkg-deb", "-f", str(package), "Version").strip()
+    if record.get("schema") != "milena-termux-provenance-v1":
+        fail("provenance schema is missing or unsupported")
+    if record.get("package") != package.name or record.get("architecture") != "aarch64":
+        fail("provenance package or architecture does not match")
+    if record.get("version") != expected:
+        fail("provenance version does not match package")
+    if record.get("sha256") != hashlib.sha256(package.read_bytes()).hexdigest():
+        fail("provenance SHA-256 does not match package")
+    if not record.get("source_commit") or record.get("source_commit") == "unknown":
+        fail("provenance has no source commit")
+
+def validate_elf_from_package(package: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="milena-elf-") as raw:
+        binary = Path(raw) / "milena"
+        try:
+            data = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", str(package)])
+            import tarfile, io
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+                member = archive.extractfile("./data/data/com.termux/files/usr/bin/milena")
+                if member is None:
+                    fail("package ELF entry is missing")
+                binary.write_bytes(member.read())
+        except (OSError, subprocess.CalledProcessError, tarfile.TarError) as exc:
+            fail(f"cannot extract package ELF: {exc}")
+        checker = Path(__file__).with_name("validate_termux_elf.py")
+        result = subprocess.run([sys.executable, str(checker), str(binary)], text=True, capture_output=True)
+        if result.returncode:
+            fail(result.stderr.strip() or "Termux ELF validation failed")
 
 def validate_package(package: Path) -> dict[str, str]:
     if not package.is_file():
@@ -174,9 +212,21 @@ def main() -> int:
     parser.add_argument("--checksum", type=Path)
     parser.add_argument("--apt-root", type=Path)
     parser.add_argument("--keyring", type=Path)
+    parser.add_argument("--provenance", type=Path)
+    parser.add_argument("--require-provenance", action="store_true")
+    parser.add_argument("--require-elf", action="store_true")
+    parser.add_argument("--expected-filename")
     args = parser.parse_args()
     try:
         validate_package(args.package)
+        if args.expected_filename and args.package.name != args.expected_filename:
+            fail("package filename does not match expected_filename")
+        if args.require_provenance and not args.provenance:
+            fail("--require-provenance requires --provenance")
+        if args.provenance:
+            validate_provenance(args.package, args.provenance)
+        if args.require_elf:
+            validate_elf_from_package(args.package)
         if args.checksum:
             validate_checksum(args.package, args.checksum)
         if args.keyring and not args.apt_root:
@@ -194,3 +244,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

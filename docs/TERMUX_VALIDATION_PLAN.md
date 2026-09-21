@@ -19,6 +19,11 @@ La CI reproducible que sí puede ejecutarse sin Android valida:
 - firmas `Release.gpg` e `InRelease` cuando se proporciona la clave pública a
   `gpgv` en el workflow de publicación.
 
+La procedencia JSON y el `workspace-sha256.txt` cumplen el papel de un SBOM mínimo
+para este entregable: registran commit, toolchain, arquitectura, `$PREFIX` y
+hashes sin incluir secretos. No sustituyen una auditoría de dependencias del
+ecosistema Termux.
+
 `python3 scripts/test_termux_packaging.py` usa un paquete sintético para probar
 los rechazos de metadatos, rutas y arquitectura. No es un binario Termux y no
 sustituye una prueba en Android.
@@ -77,3 +82,4 @@ podría crear un runtime paralelo. La siguiente fase segura es especificar una
 IR que represente operaciones de `MilenaTable`, añadir pruebas AST→IR→ejecución
 con resultados comparados contra el runtime canónico y solo entonces evaluar
 cada módulo para inclusión.
+

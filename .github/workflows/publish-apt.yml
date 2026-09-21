@@ -7,13 +7,18 @@ on:
         description: 'Tag de la Release que contiene el paquete Termux aarch64'
         required: true
         default: 'v0.1.1'
-  push:
-    tags:
-      - 'v*'
+      confirm_publish:
+        description: 'Confirmar publicación manual del repositorio APT'
+        required: true
+        type: boolean
+        default: false
 
-# Este es el único workflow de publicación APT.
 permissions:
   contents: read
+
+concurrency:
+  group: milena-termux-apt-publication
+  cancel-in-progress: false
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -21,13 +26,17 @@ env:
 
 jobs:
   publish-apt:
+    if: inputs.confirm_publish == true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install APT tooling
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev apt-utils gnupg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils gnupg
+          gpgv --version
 
       - name: Select release tag
         id: release
@@ -60,7 +69,9 @@ jobs:
           test -n "$(dpkg-deb -f "$package" Version)"
           test -f "$package.sha256"
           test -f "$package.provenance.json"
-          python3 scripts/validate_termux_artifact.py "$package" --checksum "$package.sha256"
+          python3 scripts/validate_termux_artifact.py "$package" \
+            --checksum "$package.sha256" --provenance "$package.provenance.json" \
+            --require-provenance --require-elf
           python3 - "$package" "$package.provenance.json" <<'PY'
 import hashlib, json, pathlib, subprocess, sys
 package, provenance = map(pathlib.Path, sys.argv[1:])
@@ -113,8 +124,24 @@ PY
           test ! -e dist/apt/dists/stable/main/binary-amd64
           python3 scripts/validate_termux_artifact.py "$package" \
             --checksum "dist/inputs/$(basename "$package").sha256" \
+            --provenance "dist/inputs/$(basename "$package").provenance.json" \
+            --require-provenance --require-elf \
             --apt-root dist/apt \
             --keyring dist/apt/milena-archive-keyring.asc
+
+      - name: Preserve publication provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: milena-termux-apt-provenance-${{ github.run_id }}
+          path: |
+            dist/inputs/*.deb
+            dist/inputs/*.sha256
+            dist/inputs/*.provenance.json
+            dist/apt/dists/stable/Release
+            dist/apt/dists/stable/InRelease
+            dist/apt/dists/stable/Release.gpg
+            dist/apt/milena-archive-keyring.asc
+          if-no-files-found: error
 
       - name: Install pinned Netlify CLI
         run: npm install --global "netlify-cli@${NETLIFY_CLI_VERSION}"
@@ -129,3 +156,4 @@ PY
           test -n "$NETLIFY_AUTH_TOKEN"
           test -n "$NETLIFY_SITE_ID"
           netlify deploy --dir=dist/apt --prod --site="$NETLIFY_SITE_ID" --message="Milena ${{ steps.release.outputs.tag }}"
+

@@ -22,6 +22,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: termux-aarch64-contract
+  cancel-in-progress: false
+
 # This is deliberately manual. The labels select an already registered device;
 # GitHub Actions cannot emulate Termux by assigning labels to an Ubuntu runner.
 jobs:
@@ -62,6 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           package="$(find dist/termux -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print -quit)"
+          ./scripts/termux-install-smoke.sh "$package"
           ./scripts/termux-real-smoke.sh "$package" "${MILENA_APT_REPOSITORY:-}"
 
       - name: Upload real-runner evidence
@@ -70,6 +75,8 @@ jobs:
           name: milena-termux-aarch64-contract-${{ github.run_id }}
           path: |
             artifacts/termux-runner/preflight.txt
+            artifacts/termux-runner/toolchain.txt
+            artifacts/termux-runner/workspace-sha256.txt
             artifacts/termux-runner/smoke.txt
             dist/termux/*.deb
             dist/termux/*.sha256
@@ -90,3 +97,4 @@ jobs:
           gh release upload "${{ inputs.release_tag }}" \
             dist/termux/*.deb dist/termux/*.sha256 dist/termux/*.provenance.json \
             --repo "$GITHUB_REPOSITORY" --clobber
+

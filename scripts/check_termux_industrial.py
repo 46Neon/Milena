@@ -46,3 +46,4 @@ if errors:
     print('\n'.join('ERROR: ' + e for e in errors), file=sys.stderr)
     raise SystemExit(1)
 print('Termux industrial static contract: OK')
+
