@@ -15,7 +15,7 @@ CATEGORIES = {
         "sst_report_advanced.c", "sst_stats.c", "stream.c", "execution_contract.c", "table.c",
     },
     "lenguaje": {
-        "ast.c", "language_semantic.c", "lexer.c", "parser.c", "symbol_table.c",
+        "ast.c", "canonical_compiler.c", "language_semantic.c", "lexer.c", "parser.c", "symbol_table.c",
     },
     "funciones": {
         "function_parser.c", "user_functions.c", "symbol.c",
