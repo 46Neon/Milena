@@ -21,6 +21,7 @@ typedef struct {
     size_t chunk_rows;
     size_t max_record_bytes;
     size_t max_columns;
+    size_t max_groups;
 } MilenaStreamOptions;
 
 typedef struct {
@@ -68,6 +69,18 @@ MilenaStatus milena_stream_csv_summary(const char *input_path,
                                        MilenaError *error);
 
 const char *milena_stream_operation_name(MilenaStreamOperation operation);
+
+MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
+    const char *output_path, const char *group_column,
+    const MilenaStreamMetric *metrics, size_t metric_count,
+    const MilenaStreamOptions *options, MilenaStreamReport *report,
+    MilenaError *error);
+
+MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
+    const char *output_path, const char *group_column,
+    const MilenaStreamMetric *metrics, size_t metric_count,
+    const MilenaStreamOptions *options, MilenaStreamReport *report,
+    MilenaError *error);
 
 #endif
 
