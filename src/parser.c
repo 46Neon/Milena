@@ -526,6 +526,7 @@ static bool parser_is_stream_metric(Parser *parser) {
 /* Forma legible: resumir { suma de "importe"; contar de "importe"; }.
  * El resultado sigue siendo AST_RESUMEN_METRICA, igual que la forma legacy. */
 static ASTNode *parse_stream_summary(Parser *parser) {
+    parser_advance(parser); /* consume the natural keyword 'resumir' */
     if (!parser_expect(parser, TOKEN_LLAVE_IZQ,
                        "Se esperaba '{' después de resumir")) return NULL;
     ASTNode *summary = ast_create(AST_BLOQUE_RESUMIR);
