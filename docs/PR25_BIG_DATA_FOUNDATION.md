@@ -31,3 +31,23 @@ No incluido: agrupaciones streaming, estado ilimitado, spill-to-disk,
 Arrow/Parquet ni paralelismo. Esas fases requieren contratos de partición,
 orden, memoria, formatos y equivalencia antes de implementarse; no deben
 bypassear el runtime canónico.
+
+
+## Incremento de contrato de flujo (PR25)
+
+El reporte distingue `pico_registro_bytes` (máximo payload observado, sin NUL) de
+`capacidad_buffer_registro_bytes` (capacidad reservada y potencialmente mayor).
+La capacidad configurada sigue siendo `limite_registro_bytes`.
+
+Cada métrica se acumula de forma independiente: un valor numérico válido
+contribuye a esa métrica aunque otra métrica de la misma fila sea inválida.
+`filas_malformadas` cuenta filas con al menos un valor métrico inválido y cada
+resultado incluye `valores_invalidos` para hacer visible la validez por métrica.
+Las filas con columnas incorrectas siguen siendo descartadas para todas las
+métricas. Esta semántica no implica tolerancia silenciosa: los contadores quedan
+en el JSON determinista.
+
+El benchmark rechaza `--large-rows` negativo; los casos grandes siguen siendo
+opt-in. Los resultados son observaciones acotadas, no una promesa industrial.
+La agrupación con estado acotado y spill-to-disk permanece como siguiente
+incremento; aún no forma parte de este contrato publicado.

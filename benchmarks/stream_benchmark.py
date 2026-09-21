@@ -41,7 +41,8 @@ def one(label: str, rows: int, malformed_every: int, large: bool) -> dict:
                 "rows_malformed": report["filas_malformadas"], "bytes": report["bytes_entrada"],
                 "elapsed_seconds_process": elapsed, "rows_per_second": report["filas_por_segundo"],
                 "megabytes_per_second": report["megabytes_por_segundo"],
-                "observed_record_buffer_bytes": report["pico_registro_bytes"],
+                "observed_record_bytes": report["pico_registro_bytes"],
+                "record_buffer_capacity_bytes": report.get("capacidad_buffer_registro_bytes", report["pico_registro_bytes"]),
                 "configured_record_limit_bytes": report["limite_registro_bytes"],
                 "chunk_rows": report["tamano_lote"], "large_opt_in": large}
 
@@ -50,8 +51,9 @@ def main() -> int:
     p.add_argument("--output", type=Path); args = p.parse_args()
     if not BINARY.is_file(): raise SystemExit("build ./milena first (make all)")
     cases = [("small", 100, 17), ("medium", 10000, 997)]
-    if args.large_rows:
-        if args.large_rows < 1: raise SystemExit("--large-rows must be positive")
+    if args.large_rows < 0:
+        raise SystemExit("--large-rows must be non-negative")
+    if args.large_rows > 0:
         cases.append(("large-opt-in", args.large_rows, 100003))
     result = {"schema": "milena-stream-benchmark-v1", "workloads": [one(n, r, m, n.startswith("large")) for n, r, m in cases],
               "environment": {"platform": platform.platform(), "machine": platform.machine(),
@@ -63,3 +65,4 @@ def main() -> int:
     if args.output: args.output.write_text(rendered, encoding="utf-8")
     print(rendered, end=""); return 0
 if __name__ == "__main__": raise SystemExit(main())
+

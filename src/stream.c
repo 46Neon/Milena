@@ -70,8 +70,9 @@ static MilenaStatus grow_record(char **record, size_t *capacity,
 /* Reads one complete CSV record and reuses the same bounded buffer. */
 static MilenaStatus stream_read_record(FILE *file, char **record,
                                        size_t *capacity, size_t max_record_bytes,
+                                       size_t *record_length,
                                        MilenaError *error) {
-    if (!file || !record || !capacity) return MILENA_ERR_ARGUMENT;
+    if (!file || !record || !capacity || !record_length) return MILENA_ERR_ARGUMENT;
     size_t length = 0;
     bool in_quotes = false;
     int ch;
@@ -115,6 +116,7 @@ static MilenaStatus stream_read_record(FILE *file, char **record,
         return MILENA_ERR_PARSE;
     }
     (*record)[length] = '\0';
+    *record_length = length;
     return MILENA_OK;
 }
 
@@ -279,9 +281,12 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
     char **headers = NULL;
     size_t column_count = 0;
     StreamAccumulator accumulators[STREAM_MAX_METRICS] = {{0}};
+    size_t invalid_values[STREAM_MAX_METRICS] = {0};
     size_t rows_read = 0, rows_valid = 0, malformed = 0;
+    size_t record_length = 0, observed_record_bytes = 0;
     size_t input_bytes = 0;
-    MilenaStatus status = stream_read_record(input, &record, &record_capacity, options->max_record_bytes, error);
+    MilenaStatus status = stream_read_record(input, &record, &record_capacity, options->max_record_bytes,
+                       &record_length, error);
     if (status != MILENA_OK) {
         if (status == MILENA_ERR_IO && feof(input)) {
             milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0, "El CSV no tiene cabecera");
@@ -291,6 +296,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
     }
     fields = (char **)calloc(options->max_columns, sizeof(*fields));
     if (!fields) { status = MILENA_ERR_MEMORY; goto finish; }
+    if (record_length > observed_record_bytes) observed_record_bytes = record_length;
     status = stream_split(record, ',', fields, options->max_columns, &column_count, error);
     if (status != MILENA_OK || column_count == 0) goto finish;
     headers = (char **)calloc(column_count, sizeof(*headers));
@@ -311,8 +317,10 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
             status = MILENA_ERR_DATA; goto finish;
         }
     }
-    while ((status = stream_read_record(input, &record, &record_capacity, options->max_record_bytes, error)) == MILENA_OK) {
+    while ((status = stream_read_record(input, &record, &record_capacity, options->max_record_bytes,
+                                       &record_length, error)) == MILENA_OK) {
         rows_read++;
+        if (record_length > observed_record_bytes) observed_record_bytes = record_length;
         size_t field_count = 0;
         status = stream_split(record, ',', fields, options->max_columns, &field_count, error);
         if (status != MILENA_OK) break;
@@ -322,6 +330,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
             double value = 0.0;
             if (!stream_parse_number(fields[indexes[i]], &value)) {
                 row_valid = false;
+                invalid_values[i]++;
                 continue;
             }
             stream_accumulate(&accumulators[i], value);
@@ -345,7 +354,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         double seconds = elapsed > 0.0 ? elapsed / 1000.0 : 0.0;
         double rows_per_second = seconds > 0.0 ? (double)rows_read / seconds : 0.0;
         double megabytes_per_second = seconds > 0.0 ? ((double)input_bytes / (1024.0 * 1024.0)) / seconds : 0.0;
-        fprintf(output, "{\"modo\":\"flujo\",\"filas\":%zu,\"filas_validas\":%zu,\"filas_malformadas\":%zu,\"bytes_entrada\":%zu,\"filas_por_segundo\":%.6f,\"megabytes_por_segundo\":%.6f,\"tamano_lote\":%zu,\"limite_registro_bytes\":%zu,\"limite_columnas\":%zu,\"pico_registro_bytes\":%zu,\"tiempo_ms\":%.3f,\"resultados\":[", rows_read, rows_valid, malformed, input_bytes, rows_per_second, megabytes_per_second, options->chunk_rows, options->max_record_bytes, options->max_columns, record_capacity, elapsed);
+        fprintf(output, "{\"modo\":\"flujo\",\"filas\":%zu,\"filas_validas\":%zu,\"filas_malformadas\":%zu,\"bytes_entrada\":%zu,\"filas_por_segundo\":%.6f,\"megabytes_por_segundo\":%.6f,\"tamano_lote\":%zu,\"limite_registro_bytes\":%zu,\"limite_columnas\":%zu,\"pico_registro_bytes\":%zu,\"capacidad_buffer_registro_bytes\":%zu,\"tiempo_ms\":%.3f,\"resultados\":[", rows_read, rows_valid, malformed, input_bytes, rows_per_second, megabytes_per_second, options->chunk_rows, options->max_record_bytes, options->max_columns, observed_record_bytes, record_capacity, elapsed);
         for (size_t i = 0; i < metric_count; i++) {
             if (i) fputc(',', output);
             char generated_name[256];
@@ -360,7 +369,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
             milena_json_write_string(output, milena_stream_operation_name(metrics[i].operation));
             fprintf(output, ",\"nombre\":");
             milena_json_write_string(output, name);
-            fprintf(output, ",\"valores_validos\":%zu,\"valor\":", accumulators[i].count);
+            fprintf(output, ",\"valores_validos\":%zu,\"valores_invalidos\":%zu,\"valor\":", accumulators[i].count, invalid_values[i]);
             double value = stream_value(&accumulators[i], metrics[i].operation);
             if (isnan(value)) fputs("null", output); else fprintf(output, "%.17g", value);
             fputc('}', output);
@@ -378,6 +387,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
             report->input_bytes = input_bytes;
             report->chunk_rows = options->chunk_rows;
             report->elapsed_milliseconds = elapsed;
+            report->observed_record_bytes = observed_record_bytes;
             report->peak_record_bytes = record_capacity;
             report->header_columns = column_count;
             report->max_record_bytes = options->max_record_bytes;
@@ -407,3 +417,4 @@ MilenaStatus milena_stream_csv_summary(const char *input_path,
                                                    metrics, metric_count,
                                                    &options, report, error);
 }
+

@@ -36,6 +36,9 @@ typedef struct {
     size_t input_bytes;
     size_t chunk_rows;
     double elapsed_milliseconds;
+    /* Maximum bytes observed in a complete record (payload, excluding NUL). */
+    size_t observed_record_bytes;
+    /* Allocated buffer capacity; may exceed observed_record_bytes. */
     size_t peak_record_bytes;
     size_t header_columns;
     size_t max_record_bytes;
@@ -67,3 +70,4 @@ MilenaStatus milena_stream_csv_summary(const char *input_path,
 const char *milena_stream_operation_name(MilenaStreamOperation operation);
 
 #endif
+

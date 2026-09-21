@@ -29,6 +29,8 @@ int main(void) {
     assert(report.rows_with_valid_values == 3);
     assert(report.malformed_rows == 1);
     assert(report.input_bytes > 0);
+    assert(report.observed_record_bytes > 0);
+    assert(report.peak_record_bytes >= report.observed_record_bytes);
     FILE *json = fopen(output, "rb");
     assert(json != NULL);
     char buffer[2048] = {0};
@@ -61,3 +63,4 @@ int main(void) {
     puts("stream tests passed");
     return 0;
 }
+
