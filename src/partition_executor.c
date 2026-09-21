@@ -8,7 +8,7 @@ static void executor_error(MilenaError *error, MilenaStatus status,
 }
 
 MilenaPartitionExecutorOptions milena_partition_executor_options_default(void) {
-    MilenaPartitionExecutorOptions options = {1u, true};
+    MilenaPartitionExecutorOptions options = {1u, true, 0u, NULL};
     return options;
 }
 
@@ -20,12 +20,19 @@ typedef struct {
     MilenaPartitionExecutionReport *report;
     MilenaError first_error;
     size_t next_index;
+    size_t bytes_per_worker[MILENA_PARTITION_MAX_COUNT];
     mtx_t lock;
     bool failed;
 } LocalExecution;
 
+typedef struct {
+    LocalExecution *execution;
+    size_t worker_index;
+} LocalThreadArgument;
+
 static int local_worker(void *opaque) {
-    LocalExecution *execution = (LocalExecution *)opaque;
+    LocalThreadArgument *argument = (LocalThreadArgument *)opaque;
+    LocalExecution *execution = argument->execution;
     for (;;) {
         size_t index;
         if (mtx_lock(&execution->lock) != thrd_success) return -1;
@@ -34,14 +41,35 @@ static int local_worker(void *opaque) {
             (void)mtx_unlock(&execution->lock);
             return 0;
         }
+        if (execution->options->cancel &&
+            execution->options->cancel(execution->context)) {
+            execution->report->cancelled = true;
+            execution->failed = true;
+            executor_error(&execution->first_error, MILENA_ERR_INTERNAL,
+                           "La ejecución fue cancelada por el consumidor");
+            (void)mtx_unlock(&execution->lock);
+            return 0;
+        }
         index = execution->next_index++;
+        const MilenaPartition *partition = &execution->plan->partitions[index];
+        if (execution->options->max_bytes_per_worker != 0 &&
+            (partition->length_bytes > execution->options->max_bytes_per_worker ||
+             execution->bytes_per_worker[argument->worker_index] >
+                 execution->options->max_bytes_per_worker - partition->length_bytes)) {
+            execution->failed = true;
+            executor_error(&execution->first_error, MILENA_ERR_OVERFLOW,
+                           "El worker superó su presupuesto de bytes");
+            (void)mtx_unlock(&execution->lock);
+            return 0;
+        }
+        execution->bytes_per_worker[argument->worker_index] += partition->length_bytes;
+        execution->report->bytes_assigned += partition->length_bytes;
         (void)mtx_unlock(&execution->lock);
 
         MilenaError worker_error;
         milena_error_clear(&worker_error);
         MilenaStatus status = execution->worker(
-            &execution->plan->partitions[index], index, execution->context,
-            &worker_error);
+            partition, argument->worker_index, execution->context, &worker_error);
         if (mtx_lock(&execution->lock) != thrd_success) return -1;
         if (status != MILENA_OK) {
             execution->failed = true;
@@ -91,12 +119,13 @@ MilenaStatus milena_partition_execute_local(
         return MILENA_ERR_UNSUPPORTED;
     }
     LocalExecution execution = {plan, options, worker, context, effective_report,
-                                {0}, 0, {0}, false};
+                                {0}, 0, {0}, {0}, false};
     milena_error_clear(&execution.first_error);
-    return local_worker(&execution) == 0 ? MILENA_OK : MILENA_ERR_INTERNAL;
+    LocalThreadArgument argument = {&execution, 0};
+    return local_worker(&argument) == 0 ? MILENA_OK : MILENA_ERR_INTERNAL;
 #else
     LocalExecution execution = {plan, options, worker, context, effective_report,
-                                {0}, 0, {0}, false};
+                                {0}, 0, {0}, {0}, false};
     milena_error_clear(&execution.first_error);
     if (mtx_init(&execution.lock, mtx_plain) != thrd_success) {
         executor_error(error, MILENA_ERR_INTERNAL,
@@ -105,9 +134,12 @@ MilenaStatus milena_partition_execute_local(
     }
     size_t worker_count = effective_report->workers_used;
     thrd_t threads[MILENA_PARTITION_MAX_COUNT];
+    LocalThreadArgument arguments[MILENA_PARTITION_MAX_COUNT];
     size_t created = 0;
     for (; created < worker_count; created++) {
-        if (thrd_create(&threads[created], local_worker, &execution) != thrd_success) {
+        arguments[created].execution = &execution;
+        arguments[created].worker_index = created;
+        if (thrd_create(&threads[created], local_worker, &arguments[created]) != thrd_success) {
             execution.failed = true;
             executor_error(error, MILENA_ERR_INTERNAL,
                            "No se pudo crear un worker local");
@@ -121,7 +153,7 @@ MilenaStatus milena_partition_execute_local(
         if (error && execution.first_error.code != MILENA_OK) *error = execution.first_error;
         else executor_error(error, MILENA_ERR_DATA,
                             "Una o más particiones no pudieron ejecutarse");
-        return MILENA_ERR_DATA;
+        return effective_report->cancelled ? MILENA_ERR_INTERNAL : MILENA_ERR_DATA;
     }
     return MILENA_OK;
 #endif

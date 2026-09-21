@@ -7,10 +7,13 @@ typedef MilenaStatus (*MilenaPartitionWorker)(const MilenaPartition *partition,
                                                size_t worker_index,
                                                void *context,
                                                MilenaError *error);
+typedef bool (*MilenaPartitionCancel)(void *context);
 
 typedef struct {
     size_t max_workers;
     bool fail_fast;
+    size_t max_bytes_per_worker;
+    MilenaPartitionCancel cancel;
 } MilenaPartitionExecutorOptions;
 
 typedef struct {
@@ -18,12 +21,14 @@ typedef struct {
     size_t partitions_completed;
     size_t partitions_failed;
     size_t workers_used;
+    size_t bytes_assigned;
+    bool cancelled;
     bool deterministic_order;
 } MilenaPartitionExecutionReport;
 
 MilenaPartitionExecutorOptions milena_partition_executor_options_default(void);
 
-/* Executes validated partitions locally in stable order before network workers exist. */
+/* Executes validated partitions locally before network workers exist. */
 MilenaStatus milena_partition_execute_local(
     const MilenaPhysicalPlan *plan,
     const MilenaPartitionExecutorOptions *options,

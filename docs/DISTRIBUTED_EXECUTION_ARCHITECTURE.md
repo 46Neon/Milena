@@ -230,6 +230,18 @@ compensada. La prueba cubre equivalencia, parciales ausentes y datos inválidos.
 La reducción permanece separada de los workers: los workers producen
 resultados parciales y una fase posterior los combina de manera reproducible.
 
+## Sexto hito implementado en PR #27
+
+El ejecutor local acepta ahora un presupuesto de bytes por worker y una
+función de cancelación cooperativa. Antes de entregar una partición se valida
+el presupuesto; la cancelación detiene la asignación de nuevas particiones y
+el reporte marca la ejecución como cancelada. Las pruebas cubren presupuesto
+insuficiente, bytes asignados y cancelación después de una asignación.
+
+Estos controles convierten el runtime en un componente orquestable: una capa
+superior puede imponer límites sin matar el proceso de forma abrupta ni
+confundir un resultado parcial con éxito.
+
 ## Estado honesto del proyecto
 
 PR #27 implementa el primer componente distribuible: el planner físico local y
