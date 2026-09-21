@@ -28,7 +28,8 @@ recibir funcionalidades nuevas ni competir con el pipeline canónico.
 | AST | `src/ast.c` | integrada parcialmente | Convertir todas las operaciones en nodos |
 | Runtime de arrays | `src/language_runtime.c` | integración inicial | Añadir tablas y transformaciones |
 | Arrays numéricos | `src/array.c` | integrada | Mantener como backend numérico |
-| Tablas | `src/table.c` y `src/dataset.c` | dos APIs | Elegir un modelo canónico |
+| Tablas | `src/table.c` (canónica) y `src/dataset.c` (adaptador) | unificada con compatibilidad explícita | Mantener `Dataset` solo en las fronteras heredadas |
+| Frontera de compilador | `src/canonical_compiler.c` | adaptador canónico | Entrega AST + `MilenaTable` prestada sin enlazar IR/VM |
 | Estadística | `src/sst_*.c` | biblioteca | Exponerla mediante AST y builtins |
 | IR y VM | `src/ir.c`, `src/vm.c` | experimental | No usar hasta estabilizar el intérprete |
 | Modelos | `src/forest.c` | experimental | Integrar solo con sintaxis y tests estables |
@@ -63,6 +64,14 @@ históricas pasan por `entrypoints.c`, que construye y valida un AST mínimo
 antes de delegar al backend que conserva el formato público. La prueba
 estructural `check_unification_architecture.py` impide que `main.c` vuelva a
 contener lógica de Dataset o análisis.
+
+`canonical_compiler.h` y `src/canonical_compiler.c` son la frontera segura para
+la siguiente fase. Parsean y validan mediante el pipeline oficial, comprueban
+las columnas SST contra `MilenaTable` y exponen una vista prestada
+`ASTNode + MilenaTable` para un backend futuro. No crean IR, no poseen la tabla
+y no enlazan `compiler.c`, `ir.c` ni `vm.c`; por tanto, esta frontera no se
+describe como un compilador integrado todavía. `tests/test_canonical_compiler.c`
+comprueba el contrato y que la tabla prestada sobrevive al liberar el adaptador.
 
 La clasificación de fuentes se comprueba con:
 

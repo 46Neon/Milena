@@ -13,7 +13,7 @@
 #include <math.h>
 
 #ifndef MILENA_VERSION
-#define MILENA_VERSION "0.2.0-identity"
+#define MILENA_VERSION "0.2.0"
 #endif
 #define MILENA_ERROR_TEXT 512
 

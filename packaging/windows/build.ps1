@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$Version = if ($env:MILENA_VERSION) { $env:MILENA_VERSION.TrimStart('v') } else { '0.1.1' }
+$Version = if ($env:MILENA_VERSION) { $env:MILENA_VERSION.TrimStart('v') } else { '0.2.0' }
 if ($Version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
     throw "MILENA_VERSION no es una versión válida: $Version"
 }
@@ -20,7 +20,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Falló el smoke test de portabilidad de Milena
 $SourceNames = @(
     'common.c', 'array.c', 'table.c', 'finance.c', 'schema.c', 'dataset.c',
     'analysis.c', 'script.c', 'entrypoints.c', 'main.c', 'lexer.c', 'ast.c', 'parser.c',
-    'symbol_table.c', 'symbol.c', 'language_semantic.c', 'language_runtime.c', 'stream.c', 'sst_dates.c', 'sst_model.c',
+    'symbol_table.c', 'symbol.c', 'language_semantic.c', 'language_runtime.c', 'canonical_compiler.c', 'stream.c', 'sst_dates.c', 'sst_model.c',
     'sst_stats.c', 'sst_histogram.c', 'sst_rates.c', 'sst_report.c',
     'sst_report_advanced.c', 'sst_advanced.c', 'sst_contingency.c',
     'sst_inference.c', 'sst_correlation.c', 'sst_normality.c',

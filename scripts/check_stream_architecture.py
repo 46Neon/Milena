@@ -37,7 +37,9 @@ for marker in ("AST_COMANDO_SST", "runtime_write_sst", "milena_simple_interest",
         raise SystemExit(f"canonical analysis capability missing: {marker}")
 product_sources = make.split("SOURCES =", 1)[1].split("OBJECTS", 1)[0]
 for experimental in ("compiler.c", "ir.c", "vm.c", "gc.c", "arena.c"):
-    if experimental in product_sources:
+    # Match complete source tokens: canonical_compiler.c is an intentional
+    # adapter and must not be mistaken for the experimental compiler.c.
+    if re.search(rf"(?<![A-Za-z0-9_]){re.escape(experimental)}(?![A-Za-z0-9_])", product_sources):
         raise SystemExit(f"experimental module leaked into product build: {experimental}")
 if re.search(r"stream[^\n]*main\s*\(", (ROOT / "src/stream.c").read_text()):
     raise SystemExit("stream.c contains a standalone entry point")

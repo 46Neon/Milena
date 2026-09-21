@@ -1,5 +1,30 @@
 #include "common.h"
 #include "entrypoints.h"
+#include <limits.h>
+
+static int runtime_self_check(void) {
+    /* This is deliberately dependency-free: it runs on bionic as well as glibc. */
+    if (CHAR_BIT != 8 || sizeof(void *) < 4 || sizeof(size_t) < sizeof(void *)) {
+        fprintf(stderr, "Milena self-check: unsupported C runtime data model\n");
+        return 1;
+    }
+    volatile double zero = 0.0;
+    char probe[4];
+    if (!isfinite(zero) || snprintf(probe, sizeof(probe), "%s", "ok") < 0) {
+        fprintf(stderr, "Milena self-check: C library/math contract failed\n");
+        return 1;
+    }
+    printf("Milena self-check: OK (%s, %zu-bit pointers)\n",
+#if defined(__ANDROID__)
+           "Android/bionic",
+#elif defined(_WIN32)
+           "Windows",
+#else
+           "POSIX",
+#endif
+           sizeof(void *) * CHAR_BIT);
+    return 0;
+}
 
 static void usage(const char *program) {
     printf("Milena %s\n", MILENA_VERSION);
@@ -12,6 +37,17 @@ static void usage(const char *program) {
 
 int main(int argc, char **argv) {
     if (argc < 2) { usage(argv[0]); return 2; }
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0) {
+        usage(argv[0]);
+        return 0;
+    }
+    if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0) {
+        printf("%s\n", MILENA_VERSION);
+        return 0;
+    }
+    if (strcmp(argv[1], "--self-check") == 0) {
+        return runtime_self_check();
+    }
     MilenaError error;
     milena_error_clear(&error);
     MilenaStatus status = MILENA_ERR_ARGUMENT;

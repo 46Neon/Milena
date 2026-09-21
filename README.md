@@ -275,7 +275,13 @@ winget install milena
 pkg install milena
 ```
 
-Estos comandos **todavía no se presentan como disponibles** porque los repositorios y manifiestos oficiales aún deben publicarse. Mientras tanto, las rutas verificadas son la compilación desde el repositorio, el paquete Debian local, el ejecutable portable de Windows y la compilación desde Termux.
+La instalación mediante un gestor de paquetes de Termux **todavía no se presenta como disponible**: falta publicar y probar un repositorio APT real. Mientras tanto, las rutas verificadas son la compilación desde el repositorio, el paquete Debian local, el ejecutable portable de Windows y la compilación desde Termux.
+
+## Empaquetado y distribución
+
+El paquete Termux se construye por separado del paquete Debian/Ubuntu y, por ahora, solo se prepara para `aarch64` mediante `packaging/termux/build-local-deb.sh`. La compilación local y la inspección del `.deb` son verificables; el repositorio APT todavía no es oficial. No se anuncia instalación desde un gestor de paquetes hasta completar una prueba real en Termux desde el repositorio publicado.
+
+La publicación APT preparada en `.github/workflows/publish-apt.yml` acepta únicamente un artefacto Termux real, genera índices para las arquitecturas que efectivamente tienen paquete y firma los metadatos con secretos de CI. El hosting no es una dependencia del lenguaje.
 
 ## Estado del proyecto
 

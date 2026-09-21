@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${MILENA_VERSION:-0.1.1}"
+VERSION="${MILENA_VERSION:-0.2.0}"
 VERSION="${VERSION#v}"
 CC_BIN="${CC:-cc}"
 ARCH="${MILENA_DEB_ARCH:-$(dpkg --print-architecture)}"

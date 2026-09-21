@@ -11,10 +11,6 @@ El código debe validarse con LLVM/Clang en Windows. No se debe asumir que un bi
 
 ## Validación y artefactos
 
-El script `build.ps1` compila también `src/entrypoints.c`: `milena.exe` conserva
-los comandos históricos, pero sus entradas `analizar`, `perfil` e `inspect`
-pasan por el frontend canónico antes de usar sus backends de salida.
-
 El workflow de Windows verifica:
 
 - ejecución desde PowerShell, CMD y `PATH`;
@@ -45,8 +41,8 @@ Para generar los manifiestos:
 ```powershell
 $hash = (Get-FileHash .\milena.exe -Algorithm SHA256).Hash
 .\generate-winget-manifest.ps1 `
-  -Version '0.1.1' `
-  -InstallerUrl 'https://github.com/46Neon/Milena/releases/download/v0.1.1/milena.exe' `
+  -Version '0.2.0' `
+  -InstallerUrl 'https://github.com/46Neon/Milena/releases/download/v0.2.0/milena.exe' `
   -InstallerSha256 $hash
 ```
 

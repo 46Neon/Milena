@@ -24,3 +24,11 @@ Incluye:
 - una posible corrección, si la tienes.
 
 No incluyas secretos reales en el informe.
+
+## Termux release boundary
+
+La distribución Termux/aarch64 usa el preflight fail-closed y la evidencia
+criptográfica descritos en `docs/TERMUX_SECURITY.md`. Para publicar o responder
+a un incidente se deben seguir `docs/TERMUX_RELEASE_CHECKLIST.md` y
+`docs/TERMUX_INCIDENT_RUNBOOK.md`; la ausencia de pruebas en un dispositivo
+real mantiene el canal en estado no oficial.
