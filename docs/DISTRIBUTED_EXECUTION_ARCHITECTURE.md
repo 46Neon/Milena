@@ -187,6 +187,18 @@ Este hito permite declarar implementada la primera etapa de procesamiento distri
 8. Ejecutar benchmarks reproducibles en hardware documentado.
 9. Publicar SLO únicamente para perfiles medidos.
 
+## Segundo hito implementado en PR #27
+
+Sobre el planner se añadió `partition_executor.c`, un ejecutor local de
+particiones en orden estable. Valida el plan, invoca un worker tipado por cada
+partición y devuelve un reporte de completadas, fallidas, workers utilizados y
+orden determinista. El contrato limita explícitamente esta fase a un worker
+local: no finge paralelismo ni introduce sockets antes de validar la
+semántica.
+
+Esto permite probar equivalencia y manejo de errores en un proceso único antes
+de añadir concurrencia o red.
+
 ## Estado honesto del proyecto
 
 PR #27 implementa el primer componente distribuible: el planner físico local y
