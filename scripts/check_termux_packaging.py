@@ -17,6 +17,10 @@ ACTIVE = [
     ROOT / 'packaging/apt/README.md',
     ROOT / 'PLAN_MILENA.md',
     ROOT / 'README.md',
+    ROOT / 'scripts/validate_termux_artifact.py',
+    ROOT / 'scripts/test_termux_packaging.py',
+    ROOT / 'scripts/check_compiler_boundary.py',
+    ROOT / 'docs/TERMUX_VALIDATION_PLAN.md',
 ]
 errors = []
 legacy_name = 'Ma' + 'no'
@@ -40,7 +44,9 @@ for forbidden in ("--pattern '*.deb'", legacy_upper + '_', legacy_name.lower() +
         errors.append(f'workflow de publicación contiene {forbidden!r}')
 for required in ('MILENA_GPG_PRIVATE_KEY', 'MILENA_GPG_KEY_ID',
                  'MILENA_GPG_PASSPHRASE', "--pattern 'milena_*_aarch64.deb'",
-                 'binary-aarch64/Packages.gz'):
+                 'binary-aarch64/Packages.gz',
+                 'scripts/validate_termux_artifact.py',
+                 '--apt-root dist/apt'):
     if required not in workflow:
         errors.append(f'workflow sin control requerido: {required}')
 for required in ('MILENA_GPG_KEY_ID', 'MILENA_GPG_PASSPHRASE',
@@ -67,3 +73,4 @@ if errors:
     print('\n'.join(f'ERROR: {error}' for error in errors), file=sys.stderr)
     raise SystemExit(1)
 print('Termux/APT packaging guardrails: OK')
+

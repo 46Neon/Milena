@@ -63,6 +63,10 @@ jobs:
             exit 1
           fi
           sha256sum "$package" > "$package.sha256"
+          python3 scripts/validate_termux_artifact.py "$package" --checksum "$package.sha256"
+
+      - name: Run reproducible Termux boundary fixture tests
+        run: python3 scripts/test_termux_packaging.py
 
       - name: Import Milena signing key
         shell: bash
@@ -96,6 +100,10 @@ jobs:
           test -s dist/apt/dists/stable/Release.gpg
           test -s dist/apt/dists/stable/main/binary-aarch64/Packages.gz
           test ! -e dist/apt/dists/stable/main/binary-amd64
+          python3 scripts/validate_termux_artifact.py "$package" \
+            --checksum "dist/inputs/$(basename "$package").sha256" \
+            --apt-root dist/apt \
+            --keyring dist/apt/milena-archive-keyring.asc
 
       - name: Install pinned Netlify CLI
         run: npm install --global "netlify-cli@${NETLIFY_CLI_VERSION}"
@@ -110,3 +118,4 @@ jobs:
           test -n "$NETLIFY_AUTH_TOKEN"
           test -n "$NETLIFY_SITE_ID"
           netlify deploy --dir=dist/apt --prod --site="$NETLIFY_SITE_ID" --message="Milena ${{ steps.release.outputs.tag }}"
+
