@@ -206,6 +206,19 @@ determinista por rangos y compara la reducción particionada con la reducción
 monolítica. La prueba verifica que la cobertura del planner no pierde ni
 duplica posiciones antes de añadir concurrencia o transporte de red.
 
+## Cuarto hito implementado en PR #27
+
+El ejecutor local ahora admite un número acotado de workers C11 y distribuye
+particiones entre ellos mediante un coordinador protegido. Cada partición se
+asigna una sola vez, el reporte contabiliza completadas y fallidas, y el
+contrato exige que el callback escriba resultados aislados por partición. La
+prueba de concurrencia verifica que todas las particiones se procesen con
+cuatro workers locales.
+
+La reducción no se realiza dentro de los workers: el caller debe combinar los
+resultados en un orden definido. Así se conserva la posibilidad de obtener un
+resultado determinista antes de añadir red.
+
 ## Estado honesto del proyecto
 
 PR #27 implementa el primer componente distribuible: el planner físico local y

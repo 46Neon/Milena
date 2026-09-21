@@ -34,7 +34,7 @@ int main(void) {
     assert(report.workers_used == 1);
     assert(report.deterministic_order);
 
-    options.max_workers = 2;
+    options.max_workers = MILENA_PARTITION_MAX_COUNT + 1;
     assert(milena_partition_execute_local(&plan, &options,
                                           collect_partition, &next,
                                           &report, &error) == MILENA_ERR_ARGUMENT);
