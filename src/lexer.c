@@ -42,9 +42,10 @@ static bool is_keyword(const char *str) {
         "extraer", "total", "periodo", "verdadero", "falso",
         "forma", "dimensiones", "tamaño", "suma", "media", "minimo",
         "maximo", "varianza", "desviacion_estandar", "mediana", "percentil",
-        "eje", "conservar", "sin", "variable", "funcion", "función", "retornar", "si", "sino"
+        "eje", "conservar", "sin", "variable", "funcion", "función", "retornar", "si", "sino",
+        "desde", "procesar", "por", "lotes", "filas", "guardar", "registros", "hasta", "MiB", "contar"
     };
-    static const int num_keywords = 40;
+    static const int num_keywords = 50;
     
     for (int i = 0; i < num_keywords; i++) {
         if (strcmp(str, keywords[i]) == 0) return true;
@@ -90,6 +91,16 @@ static TokenType keyword_type(const char *str) {
     if (strcmp(str, "retornar") == 0) return TOKEN_KW_RETORNAR;
     if (strcmp(str, "si") == 0) return TOKEN_KW_SI;
     if (strcmp(str, "sino") == 0) return TOKEN_KW_SINO;
+    if (strcmp(str, "desde") == 0) return TOKEN_KW_DESDE;
+    if (strcmp(str, "procesar") == 0) return TOKEN_KW_PROCESAR;
+    if (strcmp(str, "por") == 0) return TOKEN_KW_POR;
+    if (strcmp(str, "lotes") == 0) return TOKEN_KW_LOTES;
+    if (strcmp(str, "filas") == 0) return TOKEN_KW_FILAS;
+    if (strcmp(str, "guardar") == 0) return TOKEN_KW_GUARDAR;
+    if (strcmp(str, "registros") == 0) return TOKEN_KW_REGISTROS;
+    if (strcmp(str, "hasta") == 0) return TOKEN_KW_HASTA;
+    if (strcmp(str, "MiB") == 0) return TOKEN_KW_MIB;
+    if (strcmp(str, "contar") == 0) return TOKEN_KW_CONTAR;
     if (strcmp(str, "verdadero") == 0 || strcmp(str, "falso") == 0) return TOKEN_BOOLEANO;
     return TOKEN_IDENTIFICADOR;
 }
@@ -479,7 +490,9 @@ const char *token_type_name(TokenType type) {
         "FUNCION_VARIANZA", "FUNCION_DESVIACION", "FUNCION_MEDIANA",
         "FUNCION_PERCENTIL", "CONCEPTO_EJE", "CONCEPTO_CONSERVAR",
         "CONCEPTO_DIMENSIONES", "CONCEPTO_SIN", "VARIABLE", "FUNCION",
-        "RETORNAR", "SI", "SINO", "PUNTO", "NUMERAL", "LLAVE_IZQ",
+        "RETORNAR", "SI", "SINO", "DESDE", "PROCESAR", "POR", "LOTES",
+        "FILAS", "GUARDAR", "RESULTADO", "EN", "DE", "CON", "REGISTROS",
+        "HASTA", "MIB", "CONTAR", "PUNTO", "NUMERAL", "LLAVE_IZQ",
         "LLAVE_DER", "PAR_IZQ", "PAR_DER", "CORCHETE_IZQ",
         "CORCHETE_DER", "DOS_PUNTOS", "COMA", "PUNTO_Y_COMA", "IGUAL",
         "IGUAL_IGUAL", "DISTINTO", "MAYOR", "MAYOR_IGUAL", "MENOR",
@@ -491,7 +504,7 @@ const char *token_type_name(TokenType type) {
 }
 
 bool token_is_keyword(TokenType type) {
-    return type >= TOKEN_KW_ANALISIS && type <= TOKEN_KW_SINO;
+    return type >= TOKEN_KW_ANALISIS && type <= TOKEN_KW_CONTAR;
 }
 
 bool token_is_operator(TokenType type) {

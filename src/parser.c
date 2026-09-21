@@ -512,6 +512,147 @@ static ASTNode *parse_statistical_call(Parser *parser,
     return ast_create_statistic(operation, argument, axis, keepdims, percentile);
 }
 
+static bool parser_expect_word(Parser *parser, const char *word, const char *msg) {
+    if (!parser || !word || !parser_is_identifier(parser) ||
+        strcmp(parser->current.lexeme, word) != 0) {
+        if (parser) parser_error(parser, msg);
+        return false;
+    }
+    parser_advance(parser);
+    return true;
+}
+
+static bool parser_is_stream_metric(Parser *parser) {
+    if (!parser) return false;
+    return parser_match(parser, TOKEN_FUNCION_SUMA) ||
+           parser_match(parser, TOKEN_FUNCION_MEDIA) ||
+           parser_match(parser, TOKEN_FUNCION_MINIMO) ||
+           parser_match(parser, TOKEN_FUNCION_MAXIMO) ||
+           parser_match(parser, TOKEN_FUNCION_VARIANZA) ||
+           parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
+           (parser_match(parser, TOKEN_KW_CONTAR));
+}
+
+static ASTStreamOperation stream_operation_from_token(Parser *parser) {
+    if (!parser) return AST_STREAM_OPERATION_NONE;
+    if (parser_match(parser, TOKEN_FUNCION_SUMA)) return AST_STREAM_OPERATION_SUM;
+    if (parser_match(parser, TOKEN_FUNCION_MEDIA)) return AST_STREAM_OPERATION_MEAN;
+    if (parser_match(parser, TOKEN_FUNCION_MINIMO)) return AST_STREAM_OPERATION_MIN;
+    if (parser_match(parser, TOKEN_FUNCION_MAXIMO)) return AST_STREAM_OPERATION_MAX;
+    if (parser_match(parser, TOKEN_KW_CONTAR)) return AST_STREAM_OPERATION_COUNT;
+    if (parser_match(parser, TOKEN_FUNCION_VARIANZA)) return AST_STREAM_OPERATION_VARIANCE;
+    if (parser_match(parser, TOKEN_FUNCION_DESVIACION)) return AST_STREAM_OPERATION_STDDEV;
+    return AST_STREAM_OPERATION_NONE;
+}
+
+/* Forma legible: resumir { suma de "importe"; contar de "importe"; }.
+ * Cada métrica queda tipada en el AST; el runtime no vuelve a escanearla. */
+static ASTNode *parse_stream_summary(Parser *parser) {
+    parser_advance(parser); /* consume the natural keyword 'resumir' */
+    if (!parser_expect(parser, TOKEN_LLAVE_IZQ,
+                       "Se esperaba '{' después de resumir")) return NULL;
+    ASTNode *summary = ast_create(AST_BLOQUE_RESUMIR);
+    if (!summary) { parser_error(parser, "Sin memoria para resumir"); return NULL; }
+    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+        if (!parser_is_stream_metric(parser)) {
+            parser_error(parser, "Se esperaba una métrica como 'suma de \\\"columna\\\"'");
+            break;
+        }
+        ASTStreamOperation operation = stream_operation_from_token(parser);
+        parser_advance(parser);
+        if (!parser_expect_word(parser, "de",
+                                "Se esperaba 'de' después de la métrica")) break;
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "Se esperaba el nombre de columna entre comillas")) break;
+        ASTNode *metric_node = ast_create_leaf(AST_RESUMEN_METRICA,
+                                               parser->previous.lexeme);
+        if (metric_node) metric_node->stream_operation = operation;
+        if (!metric_node) {
+            parser_error(parser, "Sin memoria para métrica de resumen");
+            break;
+        }
+        if (!parser_add_child(parser, summary, metric_node,
+                              "Sin memoria para métrica de resumen")) break;
+        if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+    }
+    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}' después del resumen") ||
+        summary->child_count == 0) {
+        if (!parser->has_error) parser_error(parser, "El resumen debe tener al menos una métrica");
+        ast_destroy(summary);
+        return NULL;
+    }
+    return summary;
+}
+
+static ASTNode *parse_human_stream_load(Parser *parser) {
+    if (!parser_expect(parser, TOKEN_KW_DATOS, "Se esperaba 'datos'")) return NULL;
+    if (!parser_expect(parser, TOKEN_KW_DESDE, "Se esperaba 'desde' después de datos")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba la ruta del CSV entre comillas")) return NULL;
+    ASTNode *load = ast_create_leaf(AST_LLAMADA_CARGAR, parser->previous.lexeme);
+    if (!load) { parser_error(parser, "Sin memoria para cargar datos"); return NULL; }
+    load->type_name = milena_strdup("flujo");
+    load->stream_chunk_rows = 4096u;
+    if (!load->type_name) { ast_destroy(load); parser_error(parser, "Sin memoria para modo flujo"); return NULL; }
+    if (parser_match(parser, TOKEN_KW_PROCESAR)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_KW_POR, "Se esperaba 'por' en 'procesar por lotes'")) goto fail;
+        if (!parser_expect(parser, TOKEN_KW_LOTES, "Se esperaba 'lotes'")) goto fail;
+        if (!parser_expect_word(parser, "de", "Se esperaba 'de' antes del tamaño del lote")) goto fail;
+        if (!parser_expect(parser, TOKEN_NUMERO, "El tamaño del lote debe ser numérico")) goto fail;
+        double chunk = parser->previous.number_value;
+        if (!isfinite(chunk) || chunk < 1.0 || chunk > 1000000.0 || floor(chunk) != chunk) {
+            parser_error(parser, "El tamaño del lote debe ser un entero entre 1 y 1000000"); goto fail;
+        }
+        load->stream_chunk_rows = (size_t)chunk;
+        if (!parser_expect(parser, TOKEN_KW_FILAS, "Se esperaba 'filas' después del tamaño del lote")) goto fail;
+    }
+    /* Las opciones son parte del contrato AST, no texto interpretado por el backend. */
+    while (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "con") == 0) {
+        parser_advance(parser);
+        if (parser_match(parser, TOKEN_KW_REGISTROS)) {
+            parser_advance(parser);
+            if (!parser_expect_word(parser, "de", "Se esperaba 'de'")) goto fail;
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta'")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El límite del registro debe ser numérico")) goto fail;
+            double limit = parser->previous.number_value;
+            if (!isfinite(limit) || limit < 0.004 || limit > 64.0 || floor(limit * 1024.0) != limit * 1024.0) {
+                parser_error(parser, "El límite debe estar entre 0.004 y 64 MiB"); goto fail;
+            }
+            if (parser_match(parser, TOKEN_KW_MIB)) parser_advance(parser);
+            else { parser_error(parser, "Se esperaba la unidad 'MiB'"); goto fail; }
+            load->stream_record_limit = (size_t)(limit * 1024.0 * 1024.0);
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "columnas") == 0) {
+            parser_advance(parser);
+            if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de columnas")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El límite de columnas debe ser numérico")) goto fail;
+            double columns = parser->previous.number_value;
+            if (!isfinite(columns) || columns < 1.0 || columns > 4096.0 || floor(columns) != columns) {
+                parser_error(parser, "El límite de columnas debe ser un entero entre 1 y 4096"); goto fail;
+            }
+            load->stream_column_limit = (size_t)columns;
+        } else {
+            parser_error(parser, "Se esperaba 'registros' o 'columnas' después de 'con'"); goto fail;
+        }
+    }
+    if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+    return load;
+fail:
+    ast_destroy(load);
+    return NULL;
+}
+
+static ASTNode *parse_human_stream_export(Parser *parser) {
+    parser_advance(parser);
+    if (!parser_expect_word(parser, "resultado", "Se esperaba 'resultado'")) return NULL;
+    if (!parser_expect_word(parser, "en", "Se esperaba 'en'")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba la ruta de salida entre comillas")) return NULL;
+    ASTNode *export_node = ast_create_leaf(AST_BLOQUE_EXPORTAR, parser->previous.lexeme);
+    if (!export_node) parser_error(parser, "Sin memoria para guardar resultado");
+    if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+    return export_node;
+}
+
 static ASTNode* parse_bloque_analisis(Parser *parser) {
     if (!parser_expect(parser, TOKEN_PUNTO, "Se esperaba '.'")) return NULL;
     if (!parser_expect(parser, TOKEN_KW_ANALISIS, "Se esperaba 'analisis'")) return NULL;
@@ -529,7 +670,19 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
     // Parsear contenido del bloque
     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
-        if (parser_match(parser, TOKEN_KW_VARIABLE)) {
+        if (parser_match(parser, TOKEN_KW_DATOS)) {
+            ASTNode *load = parse_human_stream_load(parser);
+            if (load && !parser_add_child(parser, node, load,
+                                           "Sin memoria para cargar datos")) break;
+        } else if (parser_match(parser, TOKEN_KW_RESUMIR)) {
+            ASTNode *summary = parse_stream_summary(parser);
+            if (summary && !parser_add_child(parser, node, summary,
+                                               "Sin memoria para bloque resumir")) break;
+        } else if (parser_match(parser, TOKEN_KW_GUARDAR)) {
+            ASTNode *export_node = parse_human_stream_export(parser);
+            if (export_node && !parser_add_child(parser, node, export_node,
+                                                  "Sin memoria para guardar resultado")) break;
+        } else if (parser_match(parser, TOKEN_KW_VARIABLE)) {
             ASTNode *declaration = parse_variable_declaration(parser);
             if (declaration && !parser_add_child(parser, node, declaration,
                                                    "Sin memoria para el AST")) break;
@@ -638,10 +791,46 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 if (parser_match(parser, TOKEN_KW_DATOS)) {
                     parser_advance(parser);
                 }
-                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                bool streaming = false;
+                if (parser_is_identifier(parser) &&
+                    strcmp(parser->current.lexeme, "flujo") == 0) {
+                    streaming = true;
+                    parser_advance(parser);
+                }
+                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") ) {
                     if (parser_expect(parser, TOKEN_CADENA, "Se esperaba archivo")) {
                         ASTNode *cargar = ast_create_leaf(AST_LLAMADA_CARGAR, parser->previous.lexeme);
-                        if (cargar && !parser_add_child(parser, node, cargar, "Sin memoria para cargar")) break;
+                        if (streaming && cargar) {
+                            cargar->type_name = milena_strdup("flujo");
+                            if (!cargar->type_name) {
+                                ast_destroy(cargar);
+                                cargar = NULL;
+                                parser_error(parser, "Sin memoria para modo flujo");
+                            }
+                        }
+                        if (streaming && !parser_match(parser, TOKEN_PAR_DER)) {
+                            if (!parser_expect(parser, TOKEN_COMA,
+                                               "El modo flujo espera el tamaño del lote")) {
+                                ast_destroy(cargar);
+                                cargar = NULL;
+                            } else if (!parser_expect(parser, TOKEN_NUMERO,
+                                                      "El tamaño del lote debe ser numérico")) {
+                                ast_destroy(cargar);
+                                cargar = NULL;
+                            } else if (cargar) {
+                                double chunk = parser->previous.number_value;
+                                if (!isfinite(chunk) || chunk < 1.0 || chunk > 1000000.0 ||
+                                    floor(chunk) != chunk) {
+                                    ast_destroy(cargar);
+                                    cargar = NULL;
+                                    parser_error(parser, "El tamaño del lote debe ser un entero entre 1 y 1000000");
+                                } else {
+                                    cargar->number_value = chunk;
+                                }
+                            }
+                        }
+                        if (cargar && !parser_add_child(parser, node, cargar,
+                                                        "Sin memoria para cargar")) break;
                         parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
                     }
                 }
@@ -731,8 +920,9 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             continue;
                         }
                         parser_advance(parser);
-                        if (parser_is_identifier(parser) &&
-                            strcmp(parser->current.lexeme, "por") == 0) {
+                        if (parser_match(parser, TOKEN_KW_POR) ||
+                            (parser_is_identifier(parser) &&
+                             strcmp(parser->current.lexeme, "por") == 0)) {
                             parser_advance(parser);
                             if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                 if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de agrupación")) {

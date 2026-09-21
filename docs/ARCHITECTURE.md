@@ -21,16 +21,16 @@ recibir funcionalidades nuevas ni competir con el pipeline canónico.
 
 | Capa | Implementación | Estado | Siguiente acción |
 |---|---|---|---|
-| CLI | `src/main.c` | integrada | Mantener un único punto de entrada |
-| Router de scripts | `src/script.c` | compatibilidad | Reducirlo y retirar el parseo textual |
+| CLI | `src/main.c` + `src/entrypoints.c` | adaptador canónico | Conservar formatos históricos y retirar backends duplicados gradualmente |
+| Router de scripts | `src/script.c` | frontend AST + compatibilidad explícita | Retirar solo fallback cuando exista paridad comprobada |
 | Lexer | `src/lexer.c` | integrada parcialmente | Validar límites y diagnósticos |
 | Parser | `src/parser.c` | integrada parcialmente | Cubrir datasets, arrays y exportación |
 | AST | `src/ast.c` | integrada parcialmente | Convertir todas las operaciones en nodos |
 | Runtime de arrays | `src/language_runtime.c` | integración inicial | Añadir tablas y transformaciones |
 | Arrays numéricos | `src/array.c` | integrada | Mantener como backend numérico |
 | Tablas | `src/table.c` (canónica) y `src/dataset.c` (adaptador) | unificada con compatibilidad explícita | Mantener `Dataset` solo en las fronteras heredadas |
-| Estadística | `src/sst_*.c` | biblioteca | Exponerla mediante AST y builtins |
 | Frontera de compilador | `src/canonical_compiler.c` | adaptador canónico | Entrega AST + `MilenaTable` prestada sin enlazar IR/VM |
+| Estadística | `src/sst_*.c` | biblioteca | Exponerla mediante AST y builtins |
 | IR y VM | `src/ir.c`, `src/vm.c` | experimental | No usar hasta estabilizar el intérprete |
 | Modelos | `src/forest.c` | experimental | Integrar solo con sintaxis y tests estables |
 
@@ -58,6 +58,21 @@ completa del lenguaje.
   en AST tenga paridad funcional.
 - Cada cambio de integración debe añadir o actualizar una prueba end-to-end.
 
+La auditoría detallada de entradas, backends y fronteras pendientes está en
+[`UNIFICATION_AUDIT_PR24.md`](UNIFICATION_AUDIT_PR24.md). Las entradas CLI
+históricas pasan por `entrypoints.c`, que construye y valida un AST mínimo
+antes de delegar al backend que conserva el formato público. La prueba
+estructural `check_unification_architecture.py` impide que `main.c` vuelva a
+contener lógica de Dataset o análisis.
+
+`canonical_compiler.h` y `src/canonical_compiler.c` son la frontera segura para
+la siguiente fase. Parsean y validan mediante el pipeline oficial, comprueban
+las columnas SST contra `MilenaTable` y exponen una vista prestada
+`ASTNode + MilenaTable` para un backend futuro. No crean IR, no poseen la tabla
+y no enlazan `compiler.c`, `ir.c` ni `vm.c`; por tanto, esta frontera no se
+describe como un compilador integrado todavía. `tests/test_canonical_compiler.c`
+comprueba el contrato y que la tabla prestada sobrevive al liberar el adaptador.
+
 La clasificación de fuentes se comprueba con:
 
 ```bash
@@ -77,14 +92,6 @@ Esta validación garantiza que `SOURCES` no enlace arena, IR, compilador,
 ensamblador, VM, GC, módulos alternativos ni bosque, y que las capas del
 producto no incluyan sus headers. Estos módulos pueden compilarse en pruebas
 específicas, pero no pueden convertirse accidentalmente en una ruta oficial.
-
-`canonical_compiler.h` y `src/canonical_compiler.c` son la frontera segura para
-la siguiente fase. Parsean y validan mediante el pipeline oficial, comprueban
-las columnas SST contra `MilenaTable` y exponen una vista prestada
-`ASTNode + MilenaTable` para un backend futuro. No crean IR, no poseen la tabla
-y no enlazan `compiler.c`, `ir.c` ni `vm.c`; por tanto, esta frontera no se
-describe como un compilador integrado todavía. `tests/test_canonical_compiler.c`
-comprueba el contrato y que la tabla prestada sobrevive al liberar el adaptador.
 
 ## Puerta de unificación
 

@@ -20,13 +20,13 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
-          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c
+          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/entrypoints.c
 OBJECTS = $(SOURCES:.c=.o)
 SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all benchmark clean termux-build termux-install test check-termux-packaging test-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation debug
+.PHONY: all benchmark clean termux-build termux-install test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -76,6 +76,18 @@ test-pr21-regressions: tests/test_pr21_regressions
 tests/test_pr21_regressions: tests/test_pr21_regressions.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c
 	$(CC) $(CFLAGS) tests/test_pr21_regressions.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c $(LDFLAGS) -o $@
 
+test-stream: tests/test_stream
+	./tests/test_stream
+
+test-entrypoints: tests/test_entrypoints
+	./tests/test_entrypoints
+
+tests/test_entrypoints: tests/test_entrypoints.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+
+tests/test_stream: tests/test_stream.c src/stream.c src/common.c
+	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/common.c $(LDFLAGS) -o $@
+
 .PHONY: test-finance
 
 test-finance: tests/test_finance
@@ -101,7 +113,7 @@ tests/test_lexer_safety: tests/test_lexer_safety.c src/lexer.c src/common.c
 test-language-runtime: tests/test_language_runtime
 	timeout --signal=TERM --kill-after=5s 60s ./tests/test_language_runtime
 
-tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c
+tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 .PHONY: test-parser-array
@@ -155,6 +167,12 @@ check-source-manifest:
 
 check-experimental-isolation:
 	python3 scripts/check_experimental_isolation.py
+
+check-stream-architecture:
+	python3 scripts/check_stream_architecture.py
+
+check-unification-architecture:
+	python3 scripts/check_unification_architecture.py
 
 check-termux-packaging:
 	python3 scripts/check_termux_packaging.py
@@ -210,7 +228,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance \
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-entrypoints \
       test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics \
       test-parser-variables test-functions test-script-functions test-user-functions
 	./tests/run_tests.sh
@@ -218,7 +236,6 @@ test: check-source-manifest check-experimental-isolation check-termux-packaging 
 clean:
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
-		tests/test_finance tests/test_pr21_regressions tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
+		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
 		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
 		tests/test_script_functions tests/test_user_functions tests/test_canonical_compiler reporte.json resultado.json
-

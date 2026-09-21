@@ -64,6 +64,17 @@ typedef enum {
     AST_STAT_OPERATION_COUNT
 } ASTStatOperation;
 
+typedef enum {
+    AST_STREAM_OPERATION_NONE,
+    AST_STREAM_OPERATION_SUM,
+    AST_STREAM_OPERATION_MEAN,
+    AST_STREAM_OPERATION_MIN,
+    AST_STREAM_OPERATION_MAX,
+    AST_STREAM_OPERATION_COUNT,
+    AST_STREAM_OPERATION_VARIANCE,
+    AST_STREAM_OPERATION_STDDEV
+} ASTStreamOperation;
+
 typedef struct ASTNode {
     ASTNodeType type;
     ASTStatOperation statistical_operation;
@@ -74,6 +85,11 @@ typedef struct ASTNode {
     int axis;
     bool keepdims;
     bool zeros_constructor;
+    /* Contrato explícito de flujo; cero significa valor predeterminado. */
+    ASTStreamOperation stream_operation;
+    size_t stream_chunk_rows;
+    size_t stream_record_limit;
+    size_t stream_column_limit;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;
