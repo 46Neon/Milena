@@ -1,5 +1,7 @@
 # Paquete Termux de Milena
 
+Milena es un lenguaje de programación completo orientado al análisis de datos; su sintaxis española evoluciona hacia una forma cada vez más humana. La receta conserva una sola ruta lexer → parser → AST → semántica → runtime → MilenaTable.
+
 ## Estado de PR23
 
 El camino oficial candidato es `packaging/termux-packages/milena/build.sh`, que

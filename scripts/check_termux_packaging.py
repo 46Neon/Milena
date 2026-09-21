@@ -22,13 +22,13 @@ ACTIVE = [
     ROOT / "scripts/test_termux_packaging.py",
 ]
 errors = []
-legacy = "Ma" + "no"
+forbidden_name = "".join(map(chr, (109, 97, 110, 111)))
 for path in ACTIVE:
     if not path.is_file():
         errors.append(f"missing active packaging file: {path.relative_to(ROOT)}")
         continue
-    if legacy.lower() in path.read_text(encoding="utf-8").lower():
-        errors.append(f"active historical reference in {path.relative_to(ROOT)}")
+    if forbidden_name in path.name.lower() or forbidden_name in path.read_text(encoding="utf-8").lower():
+        errors.append(f"unrelated historical package residue in {path.relative_to(ROOT)}")
 
 recipe = ROOT / "packaging/termux-packages/milena/build.sh"
 if recipe.is_file():

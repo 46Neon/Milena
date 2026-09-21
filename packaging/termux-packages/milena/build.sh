@@ -4,7 +4,7 @@
 # into the official repositories.
 
 TERMUX_PKG_HOMEPAGE=https://github.com/46Neon/Milena
-TERMUX_PKG_DESCRIPTION="Milena SST data analysis language"
+TERMUX_PKG_DESCRIPTION="Milena programming language for data analysis"
 TERMUX_PKG_LICENSE="MIT"
 TERMUX_PKG_MAINTAINER="Milena contributors"
 TERMUX_PKG_VERSION=0.1.1

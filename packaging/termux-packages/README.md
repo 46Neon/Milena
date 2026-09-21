@@ -1,5 +1,7 @@
 # Candidata `termux-packages` para Milena
 
+Milena se presenta como un lenguaje de programación completo para análisis de datos, con sintaxis española cada vez más humana y una única ruta lexer → parser → AST → semántica → runtime → MilenaTable.
+
 `milena/build.sh` sigue la estructura oficial `packages/<name>/build.sh` y ya
 contiene una fuente versionada real (`v0.1.1`) y el SHA-256 del tarball exacto.
 Es una candidata en este PR, no una afirmación de que `milena` haya sido
