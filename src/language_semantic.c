@@ -69,6 +69,14 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
     }
     switch (node->type) {
         case AST_LLAMADA_CARGAR:
+            if (node->type_name && strcmp(node->type_name, "flujo") == 0 &&
+                node->number_value != 0.0 &&
+                (node->number_value < 1.0 || node->number_value > 1000000.0 ||
+                 floor(node->number_value) != node->number_value))
+                return semantic_error(node, error, "Tamaño de lote de flujo inválido");
+            if (!node->value || !node->value[0])
+                return semantic_error(node, error, "Carga de dataset sin archivo");
+            break;
         case AST_AGRUPACION_POR:
         case AST_RESUMEN_METRICA:
         case AST_COMANDO_COLUMNAS:

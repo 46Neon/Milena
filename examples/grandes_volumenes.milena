@@ -1,0 +1,17 @@
+.analisis ventas_masivas {
+    variable importe numerica
+    dataset cargar flujo("datos/ventas_masivas.csv", 4096)
+
+    .resumir dataset {
+        #suma("importe")
+        #media("importe")
+        #minimo("importe")
+        #maximo("importe")
+        #conteo("importe")
+        #varianza("importe")
+    }
+
+    .exportar {
+        ("reporte_flujo.json")
+    }
+}

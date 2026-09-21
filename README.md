@@ -90,7 +90,9 @@ Milena cuenta con una ruta canónica para:
 - ejecutar normalidad, tasas, Poisson, correlación, Wilcoxon y chi cuadrado;
 - calcular riesgo relativo y odds ratio;
 - generar modelos SST;
-- ejecutar interés simple desde el lenguaje.
+- ejecutar interés simple desde el lenguaje;
+- procesar resúmenes numéricos CSV en modo flujo, sin materializar todas las filas;
+- medir filas procesadas, filas válidas, errores y tiempo de la ejecución en flujo.
 
 ## Análisis de datasets
 
@@ -130,6 +132,39 @@ Ejecútalo con:
 ```bash
 ./milena run ventas.milena
 ```
+
+### Modo flujo para grandes CSV
+
+Para resúmenes numéricos que no necesitan conservar toda la tabla, Milena ofrece
+una ruta de memoria acotada:
+
+```milena
+.analisis ventas_masivas {
+    variable importe numerica
+    dataset cargar flujo("datos/ventas_masivas.csv", 4096)
+
+    .resumir dataset {
+        #suma("importe")
+        #media("importe")
+        #conteo("importe")
+        #varianza("importe")
+    }
+
+    .exportar {
+        ("reporte_flujo.json")
+    }
+}
+```
+
+El flujo lee el archivo secuencialmente, usa acumuladores de una pasada y no
+crea un `Dataset` o `MilenaTable` con todas las filas. El reporte incluye el
+tiempo medido en milisegundos. El tiempo real depende del tamaño del archivo y
+del almacenamiento: no existe una garantía universal de responder en
+milisegundos para cualquier volumen.
+
+La ruta inicial admite `suma`, `media`, `minimo`, `maximo`, `conteo`, `varianza`
+y `desviacion_estandar`, sin agrupaciones, joins, medianas ni percentiles.
+Consulta [la documentación del modo flujo](docs/STREAMING_EXECUTION.md).
 
 ## Instalación y uso
 
@@ -249,11 +284,11 @@ El proyecto se encuentra en una etapa de **consolidación avanzada del núcleo d
 
 ## Volumen de datos y alcance industrial
 
-Actualmente, Milena trabaja principalmente con datasets y tablas cargados en memoria. Esto la hace adecuada para análisis exploratorios, automatización de reportes, datasets medianos, análisis estadístico reproducible, herramientas internas, proyectos científicos y desarrollo de soluciones de datos.
+Milena trabaja principalmente con datasets y tablas cargados en memoria para transformaciones, joins y análisis completos. Además, PR24 incorpora una ruta de flujo para resúmenes numéricos CSV: esa ruta procesa el archivo secuencialmente y mantiene memoria acotada, sin materializar todas las filas.
 
-Milena todavía no afirma ofrecer procesamiento distribuido, ejecución out-of-core, clústeres ni garantías de rendimiento para volúmenes masivos de escala industrial.
+El modo flujo no convierte automáticamente cualquier operación en streaming. Todavía no ofrece procesamiento distribuido, clústeres, joins externos ni garantías de latencia fija para volúmenes masivos. Leer todas las filas tiene un coste proporcional al archivo; los milisegundos se miden como observabilidad, no como una promesa universal.
 
-Para convertirse en una plataforma preparada para grandes soluciones tecnológicas del mercado deberá incorporar y medir benchmarks de alto volumen, procesamiento por streaming, políticas de memoria, más formatos de datos, optimización, compatibilidad de APIs, observabilidad y empaquetado oficial.
+Para convertirse en una plataforma preparada para grandes soluciones tecnológicas del mercado deberá ampliar el streaming a agrupaciones y joins externos, incorporar más formatos, medir benchmarks de alto volumen, mejorar la planificación, mantener políticas de memoria, añadir observabilidad y completar el empaquetado oficial.
 
 La descripción más honesta es:
 

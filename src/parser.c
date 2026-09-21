@@ -638,10 +638,46 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 if (parser_match(parser, TOKEN_KW_DATOS)) {
                     parser_advance(parser);
                 }
-                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                bool streaming = false;
+                if (parser_is_identifier(parser) &&
+                    strcmp(parser->current.lexeme, "flujo") == 0) {
+                    streaming = true;
+                    parser_advance(parser);
+                }
+                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") ) {
                     if (parser_expect(parser, TOKEN_CADENA, "Se esperaba archivo")) {
                         ASTNode *cargar = ast_create_leaf(AST_LLAMADA_CARGAR, parser->previous.lexeme);
-                        if (cargar && !parser_add_child(parser, node, cargar, "Sin memoria para cargar")) break;
+                        if (streaming && cargar) {
+                            cargar->type_name = milena_strdup("flujo");
+                            if (!cargar->type_name) {
+                                ast_destroy(cargar);
+                                cargar = NULL;
+                                parser_error(parser, "Sin memoria para modo flujo");
+                            }
+                        }
+                        if (streaming && !parser_match(parser, TOKEN_PAR_DER)) {
+                            if (!parser_expect(parser, TOKEN_COMA,
+                                               "El modo flujo espera el tamaño del lote")) {
+                                ast_destroy(cargar);
+                                cargar = NULL;
+                            } else if (!parser_expect(parser, TOKEN_NUMERO,
+                                                      "El tamaño del lote debe ser numérico")) {
+                                ast_destroy(cargar);
+                                cargar = NULL;
+                            } else if (cargar) {
+                                double chunk = parser->previous.number_value;
+                                if (!isfinite(chunk) || chunk < 1.0 || chunk > 1000000.0 ||
+                                    floor(chunk) != chunk) {
+                                    ast_destroy(cargar);
+                                    cargar = NULL;
+                                    parser_error(parser, "El tamaño del lote debe ser un entero entre 1 y 1000000");
+                                } else {
+                                    cargar->number_value = chunk;
+                                }
+                            }
+                        }
+                        if (cargar && !parser_add_child(parser, node, cargar,
+                                                        "Sin memoria para cargar")) break;
                         parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
                     }
                 }
