@@ -894,8 +894,9 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             continue;
                         }
                         parser_advance(parser);
-                        if (parser_is_identifier(parser) &&
-                            strcmp(parser->current.lexeme, "por") == 0) {
+                        if (parser_match(parser, TOKEN_KW_POR) ||
+                            (parser_is_identifier(parser) &&
+                             strcmp(parser->current.lexeme, "por") == 0)) {
                             parser_advance(parser);
                             if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                 if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de agrupación")) {
