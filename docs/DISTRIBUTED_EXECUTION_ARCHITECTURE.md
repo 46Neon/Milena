@@ -199,6 +199,13 @@ semántica.
 Esto permite probar equivalencia y manejo de errores en un proceso único antes
 de añadir concurrencia o red.
 
+## Tercer hito implementado en PR #27
+
+Se añadió una prueba de equivalencia particionada que procesa un fixture
+determinista por rangos y compara la reducción particionada con la reducción
+monolítica. La prueba verifica que la cobertura del planner no pierde ni
+duplica posiciones antes de añadir concurrencia o transporte de red.
+
 ## Estado honesto del proyecto
 
 PR #27 implementa el primer componente distribuible: el planner físico local y
