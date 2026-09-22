@@ -8,8 +8,9 @@ Este documento separa el contrato arquitectónico verificable de la visión futu
 
 - Sintaxis de usuario en español y ejecución canónica de arrays, tablas, datasets, estadísticas SST, finanzas iniciales y funciones AST.
 - `MilenaExecutionPlan` común para tabla en memoria y CSV streaming, con reportes de ejecución y límites de memoria del flujo.
-- En PR25: metadatos de operadores lógicos (tipo y capacidades), validación del contrato y clasificación puramente local de URI. Se reconocen `s3://`, `gs://`, `az://` y `hdfs://` solo para rechazarlos claramente: no hay red ni backend cloud.
-- Pruebas deterministas de capacidades, fuentes y regresión de stream/table; Makefile integra ambas nuevas pruebas.
+- En PR25: metadatos de operadores lógicos (tipo, capacidades y backend), validación del contrato y clasificación puramente local de URI. Solo las rutas locales son ejecutables; `s3://`, `gs://`, `az://`, `hdfs://` y esquemas desconocidos se rechazan con un error accionable, sin red ni backend cloud.
+- El plan canónico ejecuta proyección de una columna y filtro numérico (`columna operador valor`) sobre `MilenaTable`, reutilizando los operadores tipados existentes (`milena_table_select_columns`/`milena_table_filter_numeric`). El backend streaming no finge equivalencia: esos planes se rechazan mediante validación de capacidades hasta contar con una salida acotada equivalente.
+- Pruebas deterministas de capacidades, fuentes, rechazo seguro de URI y regresión de stream/table; Makefile integra ambas nuevas pruebas y la guarda de contrato impide parsers/runtimes paralelos.
 
 ### En progreso (PR25)
 
@@ -19,7 +20,7 @@ Este documento separa el contrato arquitectónico verificable de la visión futu
 
 ### Futuro, no implementado
 
-- **Plan lógico completo:** filtros, proyecciones, joins, ventanas y ordenamiento como operadores AST/runtime canónicos. El contrato enumera sus propiedades, pero sus backends aún no existen.
+- **Plan lógico completo:** joins, ventanas, ordenamiento y composición ETL como operadores AST/runtime canónicos. Filtro numérico y proyección simple ya tienen backend de tabla; su equivalencia streaming, expresiones generales y composición aún no existen.
 - **Paralelismo automático:** particionamiento, planificación de tareas, ejecución concurrente y control de recursos. `parallelizable` describe una posibilidad; no activa hilos ni procesos.
 - **Distribución:** coordinador, workers, shuffle, tolerancia a fallos y observabilidad. No existe ejecución distribuida.
 - **Adaptadores Spark/Flink:** interfaces de integración futuras, sin dependencia ni integración Spark/Flink actual.
