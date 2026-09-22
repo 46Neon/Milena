@@ -90,3 +90,10 @@ Este documento convierte las limitaciones actuales en etapas implementables. Cad
 8. Añadir regresión, clasificación e IA bajo controles de validación.
 
 Cada commit debe indicar qué fase toca, qué API pública añade y qué pruebas la validan.
+
+
+## Estado PR25 (22/09/2026)
+
+La base de streaming agrupado local ya implementa derrame por particiones, combinación determinista por clave, límites de bytes/registros/grupos, checksum y limpieza de temporales. El formato de spill comparte la cabecera y la disciplina FNV-1a del contrato canónico `MLSP`; la variante agrupada está tipada por sus bytes de validez y valores `double`. La salida se ordena lexicográficamente para que memoria y spill sean reproducibles.
+
+Esto sigue siendo ejecución local out-of-core de un proceso. No es distribuido y no promete compatibilidad con Spark o Flink. Continúan pendientes la validación en hardware Termux/aarch64 y la ampliación de benchmarks de escala real.

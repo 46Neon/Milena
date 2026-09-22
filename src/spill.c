@@ -1,7 +1,7 @@
 #include "spill.h"
 #include <unistd.h>
 #include <sys/stat.h>
-#define SPILL_MAGIC "MLSPILL1"
+#define SPILL_MAGIC "MLSP"
 #define SPILL_DEFAULT_BYTES (64u*1024u*1024u)
 static uint64_t hash_bytes(uint64_t h,const unsigned char *p,size_t n){while(n--)h=(h^*p++)*UINT64_C(1099511628211);return h;}
 MilenaSpillPolicy milena_spill_policy_default(void){MilenaSpillPolicy p={0,SPILL_DEFAULT_BYTES,16};return p;}
@@ -18,3 +18,4 @@ MilenaStatus milena_spill_write(const MilenaSpillPolicy *requested,const char *p
 MilenaStatus milena_spill_read(const MilenaSpillPolicy *requested,const MilenaSpillMetadata *m,char **keys,double *values,size_t cap,size_t *count,MilenaError *e){
  MilenaSpillPolicy d=milena_spill_policy_default(),p=requested?*requested:d;if(!m||!keys||!values||!count)return bad(e,MILENA_ERR_ARGUMENT,"Lectura de spill inválida");FILE*f=fopen(m->path,"rb");if(!f)return bad(e,MILENA_ERR_IO,"No se pudo abrir el spill");char magic[sizeof(SPILL_MAGIC)-1];if(fread(magic,1,sizeof(magic),f)!=sizeof(magic)||memcmp(magic,SPILL_MAGIC,sizeof(magic))){fclose(f);return bad(e,MILENA_ERR_DATA,"Cabecera de spill inválida");}uint64_t h=UINT64_C(1469598103934665603);size_t n=0,bytes=sizeof(magic);while(n<cap){uint32_t len;if(fread(&len,1,sizeof(len),f)!=sizeof(len))break;if(len>p.max_bytes||bytes>p.max_bytes-(sizeof(len)+len+sizeof(double))||!keys[n]){fclose(f);return bad(e,MILENA_ERR_OVERFLOW,"Registro de spill fuera de límites");}if(fread(keys[n],1,len,f)!=len||fread(&values[n],1,sizeof(double),f)!=sizeof(double)){fclose(f);return bad(e,MILENA_ERR_DATA,"Registro de spill truncado");}keys[n][len]='\0';h=hash_bytes(h,(unsigned char*)&len,sizeof(len));h=hash_bytes(h,(unsigned char*)keys[n],len);h=hash_bytes(h,(unsigned char*)&values[n],sizeof(double));bytes+=sizeof(len)+len+sizeof(double);n++;}uint64_t stored;if(fread(&stored,1,sizeof(stored),f)!=sizeof(stored)||stored!=h||stored!=m->checksum){fclose(f);return bad(e,MILENA_ERR_DATA,"Checksum de spill inválido");}fclose(f);*count=n;return MILENA_OK;}
 MilenaStatus milena_spill_remove(MilenaSpillMetadata *m,MilenaError *e){if(!m||!m->path[0])return bad(e,MILENA_ERR_ARGUMENT,"Metadata de spill inválida");if(unlink(m->path)!=0&&errno!=ENOENT)return bad(e,MILENA_ERR_IO,"No se pudo limpiar spill");m->path[0]='\0';return MILENA_OK;}
+

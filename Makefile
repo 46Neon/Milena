@@ -20,7 +20,7 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
-          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/entrypoints.c
+          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/spill.c src/stream.c src/entrypoints.c
 OBJECTS = $(SOURCES:.c=.o)
 SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
@@ -239,4 +239,5 @@ clean:
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
 		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
 		tests/test_script_functions tests/test_user_functions tests/test_canonical_compiler reporte.json resultado.json
+
 
