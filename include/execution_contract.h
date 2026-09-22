@@ -28,6 +28,7 @@ typedef struct {
     MilenaStatus status;
     size_t rows_read, rows_emitted, malformed_rows, groups;
     size_t peak_record_bytes, input_bytes;
+    size_t spilled_bytes, spill_partitions, spill_temp_files, spill_rows;
     double elapsed_milliseconds;
     const char *backend;
 } MilenaExecutionReport;
@@ -38,3 +39,4 @@ MilenaStatus milena_execution_validate(const MilenaExecutionPlan *plan, MilenaEr
 MilenaStatus milena_stream_execute_plan(const MilenaExecutionPlan *plan, const char *input_path, const char *output_path, MilenaExecutionReport *report, MilenaError *error);
 MilenaStatus milena_table_execute_plan(MilenaTable *out, const MilenaTable *source, const MilenaExecutionPlan *plan, MilenaExecutionReport *report, MilenaError *error);
 #endif
+

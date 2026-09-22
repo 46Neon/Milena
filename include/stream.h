@@ -1,80 +1,23 @@
 #ifndef MILENA_STREAM_H
 #define MILENA_STREAM_H
-
 #include "common.h"
-
-/*
- * Bounded-memory execution for large CSV inputs. The stream path keeps only
- * the current record, the header and one accumulator per requested metric.
- */
-typedef enum {
-    MILENA_STREAM_SUM,
-    MILENA_STREAM_MEAN,
-    MILENA_STREAM_MIN,
-    MILENA_STREAM_MAX,
-    MILENA_STREAM_COUNT,
-    MILENA_STREAM_VARIANCE,
-    MILENA_STREAM_STDDEV
-} MilenaStreamOperation;
-
+typedef enum { MILENA_STREAM_SUM, MILENA_STREAM_MEAN, MILENA_STREAM_MIN, MILENA_STREAM_MAX, MILENA_STREAM_COUNT, MILENA_STREAM_VARIANCE, MILENA_STREAM_STDDEV } MilenaStreamOperation;
 typedef struct {
-    size_t chunk_rows;
-    size_t max_record_bytes;
-    size_t max_columns;
-    size_t max_groups;
+    size_t chunk_rows, max_record_bytes, max_columns, max_groups;
+    /* Optional local out-of-core grouped aggregation. Zero disables spill. */
+    const char *spill_directory;
+    size_t spill_partitions, spill_max_bytes, spill_max_records;
 } MilenaStreamOptions;
-
+typedef struct { const char *column; const char *name; MilenaStreamOperation operation; } MilenaStreamMetric;
 typedef struct {
-    const char *column;
-    const char *name;
-    MilenaStreamOperation operation;
-} MilenaStreamMetric;
-
-typedef struct {
-    size_t rows_read;
-    size_t rows_with_valid_values;
-    size_t malformed_rows;
-    size_t input_bytes;
-    size_t chunk_rows;
+    size_t rows_read, rows_with_valid_values, malformed_rows, input_bytes, chunk_rows;
     double elapsed_milliseconds;
-    /* Maximum bytes observed in a complete record (payload, excluding NUL). */
-    size_t observed_record_bytes;
-    /* Allocated buffer capacity; may exceed observed_record_bytes. */
-    size_t peak_record_bytes;
-    size_t header_columns;
-    size_t max_record_bytes;
-    size_t max_columns;
+    size_t observed_record_bytes, peak_record_bytes, header_columns, max_record_bytes, max_columns;
+    size_t spilled_bytes, spill_partitions, spill_temp_files, spill_rows;
 } MilenaStreamReport;
-
-/*
- * Summarizes a CSV without materializing it as Dataset or MilenaTable.
- * The output is a JSON report. Memory is O(columns + metrics + max_record).
- */
 MilenaStreamOptions milena_stream_options_default(void);
-
-MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
-                                       const char *output_path,
-                                       const MilenaStreamMetric *metrics,
-                                       size_t metric_count,
-                                       const MilenaStreamOptions *options,
-                                       MilenaStreamReport *report,
-                                       MilenaError *error);
-
-MilenaStatus milena_stream_csv_summary(const char *input_path,
-                                       const char *output_path,
-                                       const MilenaStreamMetric *metrics,
-                                       size_t metric_count,
-                                       size_t chunk_rows,
-                                       MilenaStreamReport *report,
-                                       MilenaError *error);
-
-const char *milena_stream_operation_name(MilenaStreamOperation operation);
-
-MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
-    const char *output_path, const char *group_column,
-    const MilenaStreamMetric *metrics, size_t metric_count,
-    const MilenaStreamOptions *options, MilenaStreamReport *report,
-    MilenaError *error);
-
+MilenaStatus milena_stream_csv_summary_with_options(const char *,const char *,const MilenaStreamMetric *,size_t,const MilenaStreamOptions *,MilenaStreamReport *,MilenaError *);
+MilenaStatus milena_stream_csv_summary(const char *,const char *,const MilenaStreamMetric *,size_t,size_t,MilenaStreamReport *,MilenaError *);
+const char *milena_stream_operation_name(MilenaStreamOperation);
+MilenaStatus milena_stream_csv_grouped_with_options(const char *,const char *,const char *,const MilenaStreamMetric *,size_t,const MilenaStreamOptions *,MilenaStreamReport *,MilenaError *);
 #endif
-
