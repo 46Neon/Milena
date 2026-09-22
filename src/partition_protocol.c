@@ -50,7 +50,8 @@ MilenaStatus milena_partition_result_encode(
     put_u64(buffer + 20, (uint64_t)result->status |
                          (result->valid ? UINT64_C(1) << 32 : 0));
     memcpy(buffer + 28, &result->value, sizeof(result->value));
-    put_u64(buffer + 36, checksum(buffer, 36));
+    uint32_t digest = (uint32_t)checksum(buffer, 36);
+    memcpy(buffer + 36, &digest, sizeof(digest));
     *written = MILENA_PARTITION_RESULT_WIRE_SIZE;
     if (error) milena_error_clear(error);
     return MILENA_OK;
@@ -70,7 +71,9 @@ MilenaStatus milena_partition_result_decode(
                        "Versión o firma de protocolo de partición inválida");
         return MILENA_ERR_PARSE;
     }
-    if (checksum(buffer, 36) != get_u64(buffer + 36)) {
+    uint32_t received = 0;
+    memcpy(&received, buffer + 36, sizeof(received));
+    if ((uint32_t)checksum(buffer, 36) != received) {
         protocol_error(error, MILENA_ERR_DATA,
                        "El checksum del resultado de partición no coincide");
         return MILENA_ERR_DATA;
