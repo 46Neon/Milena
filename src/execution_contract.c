@@ -1,19 +1,42 @@
 #include "execution_contract.h"
 #include <string.h>
 
+
+MilenaOperatorCapabilities milena_operator_capabilities(MilenaLogicalOperatorKind k) {
+    MilenaOperatorCapabilities c = {0,0,0,0,0,0};
+    switch (k) {
+    case MILENA_OPERATOR_AGGREGATE: c.streamable=1; c.associative=1; c.parallelizable=1; break;
+    case MILENA_OPERATOR_FILTER: c.streamable=1; c.parallelizable=1; break;
+    case MILENA_OPERATOR_PROJECT: c.streamable=1; c.parallelizable=1; break;
+    case MILENA_OPERATOR_SORT: c.requires_materialization=1; c.order_sensitive=1; c.parallelizable=1; c.requires_shuffle=1; break;
+    case MILENA_OPERATOR_JOIN: c.requires_materialization=1; c.parallelizable=1; c.requires_shuffle=1; break;
+    case MILENA_OPERATOR_WINDOW: c.requires_materialization=1; c.order_sensitive=1; c.requires_shuffle=1; break;
+    default: break;
+    } return c;
+}
+const char *milena_operator_kind_name(MilenaLogicalOperatorKind k) {
+    switch(k) { case MILENA_OPERATOR_AGGREGATE:return "agregacion"; case MILENA_OPERATOR_FILTER:return "filtro"; case MILENA_OPERATOR_PROJECT:return "proyeccion"; case MILENA_OPERATOR_SORT:return "ordenamiento"; case MILENA_OPERATOR_JOIN:return "union"; case MILENA_OPERATOR_WINDOW:return "ventana"; default:return "desconocido"; }
+}
+
 MilenaExecutionPlan milena_execution_plan_default(void) {
     MilenaExecutionPlan p;
     memset(&p, 0, sizeof(p));
     p.source = MILENA_EXEC_SOURCE_TABLE;
     p.options = milena_stream_options_default();
     p.sink = MILENA_EXEC_SINK_TABLE;
+    p.operator_kind = MILENA_OPERATOR_AGGREGATE;
+    p.capabilities = milena_operator_capabilities(p.operator_kind);
     return p;
 }
 
 MilenaStatus milena_execution_validate(const MilenaExecutionPlan *p, MilenaError *e) {
-    if (!p || !p->aggregates || p->aggregate_count == 0 || p->aggregate_count > 64) {
+    if (!p || p->operator_kind > MILENA_OPERATOR_WINDOW || !p->aggregates || p->aggregate_count == 0 || p->aggregate_count > 64) {
         milena_error_set(e, MILENA_ERR_ARGUMENT, 0, 0, 0, "Plan de ejecución sin agregaciones válidas");
         return MILENA_ERR_ARGUMENT;
+    }
+    if (p->operator_kind != MILENA_OPERATOR_AGGREGATE) {
+        milena_error_set(e, MILENA_ERR_UNSUPPORTED, 0, 0, 0, "Operador lógico aún no tiene backend canónico");
+        return MILENA_ERR_UNSUPPORTED;
     }
     if (p->projection_column || p->filter_expression) {
         milena_error_set(e, MILENA_ERR_UNSUPPORTED, 0, 0, 0, "Proyección/filtro aún no tienen backend común");
