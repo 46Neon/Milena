@@ -85,8 +85,8 @@ test-entrypoints: tests/test_entrypoints
 tests/test_entrypoints: tests/test_entrypoints.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-tests/test_stream: tests/test_stream.c src/stream.c src/common.c
-	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/common.c $(LDFLAGS) -o $@
+tests/test_stream: tests/test_stream.c src/stream.c src/spill.c src/common.c
+	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/spill.c src/common.c $(LDFLAGS) -o $@
 
 .PHONY: test-finance
 

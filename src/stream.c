@@ -3,7 +3,13 @@
 
 #include <float.h>
 #include <time.h>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#define unlink _unlink
+#else
 #include <unistd.h>
+#endif
 #include <stdint.h>
 
 #define STREAM_MAX_COLUMNS 4096u
