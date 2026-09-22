@@ -12,7 +12,7 @@ CATEGORIES = {
         "script.c", "interpreter.c", "sst_advanced.c", "sst_contingency.c", "sst_correlation.c",
         "sst_dates.c", "sst_histogram.c", "sst_inference.c", "sst_model.c",
         "sst_normality.c", "sst_rates.c", "sst_report.c",
-        "sst_report_advanced.c", "sst_stats.c", "stream.c", "execution_contract.c", "table.c",
+        "sst_report_advanced.c", "sst_stats.c", "stream.c", "execution_contract.c", "data_source.c", "table.c",
     },
     "lenguaje": {
         "ast.c", "canonical_compiler.c", "language_semantic.c", "lexer.c", "parser.c", "symbol_table.c",
