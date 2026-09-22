@@ -27,7 +27,7 @@ int main(void) {
     MilenaPartitionExecutorOptions options =
         milena_partition_executor_options_default();
     options.max_workers = 2;
-    options.max_bytes_per_worker = 512;
+    options.max_bytes_per_worker = 1024;
     MilenaPartitionExecutionReport report = {0};
     assert(milena_partition_execute_local(&plan, &options, noop_worker,
                                           NULL, &report, &error) == MILENA_OK);
