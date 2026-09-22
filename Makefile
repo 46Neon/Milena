@@ -1,262 +1,65 @@
-.DEFAULT_GOAL := all
-
-CC ?= cc
-# The canonical product is deliberately freestanding from libc implementation
-# details: Termux supplies Clang/Bionic and the same source list is used there.
-# Do not add glibc-only flags or Debian paths to this build contract.
-TERMUX ?= 0
-TERMUX_PREFIX ?= /data/data/com.termux/files/usr
-TERMUX_CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Oz -ffunction-sections -fdata-sections -Iinclude
-TERMUX_LDFLAGS ?= -lm -Wl,--gc-sections
-ifeq ($(TERMUX),1)
-CFLAGS ?= $(TERMUX_CFLAGS)
-LDFLAGS ?= $(TERMUX_LDFLAGS)
-else
-CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude
-LDFLAGS ?= -lm
-endif
-SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/dataset.c src/analysis.c src/script.c src/main.c \
-          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/language_runtime.c src/canonical_compiler.c src/interpreter.c \
-          src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
-          src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
-          src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
-          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/execution_contract.c src/entrypoints.c src/data_source.c
-OBJECTS = $(SOURCES:.c=.o)
-SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
-FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
-TARGET = milena
-
-.PHONY: all benchmark benchmark-stream benchmark-stream-grouped clean termux-build termux-install test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-data-source test-execution-contract test-script-functions test-user-functions check-source-manifest check-experimental-isolation check-stream-architecture check-execution-contract check-unification-architecture debug
-
-test-data-source: tests/test_data_source
-	./tests/test_data_source
-tests/test_data_source: tests/test_data_source.c src/data_source.c src/common.c
-	$(CC) $(CFLAGS) tests/test_data_source.c src/data_source.c src/common.c $(LDFLAGS) -o $@
-
-test-execution-contract: tests/test_execution_contract
-	./tests/test_execution_contract
-tests/test_execution_contract: tests/test_execution_contract.c src/execution_contract.c src/data_source.c src/stream.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c
-	$(CC) $(CFLAGS) tests/test_execution_contract.c src/execution_contract.c src/data_source.c src/stream.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c $(LDFLAGS) -o $@
-
-test-array: tests/test_array
-	./tests/test_array
-
-test-array-worker2: tests/test_array_worker2
-	./tests/test_array_worker2
-
-tests/test_array_worker2: tests/test_array_worker2.c src/array.c src/common.c
-	$(CC) $(CFLAGS) tests/test_array_worker2.c src/array.c src/common.c $(LDFLAGS) -o $@
-
-test-array-worker3: tests/test_array_worker3
-	./tests/test_array_worker3
-
-tests/test_array_worker3: tests/test_array_worker3.c src/array.c src/common.c
-	$(CC) $(CFLAGS) tests/test_array_worker3.c src/array.c src/common.c $(LDFLAGS) -o $@
-
-test-forest: tests/test_forest
-	./tests/test_forest
-
-test-arena: tests/test_arena
-	./tests/test_arena
-
-tests/test_arena: tests/test_arena.c src/arena.c src/temp_scope.c src/common.c
-	$(CC) $(CFLAGS) tests/test_arena.c src/arena.c src/temp_scope.c src/common.c $(LDFLAGS) -o $@
-
-tests/test_forest: tests/test_forest.c src/forest.c src/array.c src/common.c
-	$(CC) $(CFLAGS) tests/test_forest.c src/forest.c src/array.c src/common.c $(LDFLAGS) -o $@
-
-tests/test_array: tests/test_array.c src/array.c src/common.c
-	$(CC) $(CFLAGS) tests/test_array.c src/array.c src/common.c $(LDFLAGS) -o $@
-
-test-table: tests/test_table
-	./tests/test_table
-
-tests/test_table: tests/test_table.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c
-	$(CC) $(CFLAGS) tests/test_table.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c $(LDFLAGS) -o $@
-
-test-table-worker4: tests/test_table_worker4
-	./tests/test_table_worker4
-
-tests/test_table_worker4: tests/test_table_worker4.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c
-	$(CC) $(CFLAGS) tests/test_table_worker4.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c $(LDFLAGS) -o $@
-
-test-pr21-regressions: tests/test_pr21_regressions
-	./tests/test_pr21_regressions
-
-tests/test_pr21_regressions: tests/test_pr21_regressions.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c
-	$(CC) $(CFLAGS) tests/test_pr21_regressions.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c $(LDFLAGS) -o $@
-
-test-stream: tests/test_stream
-	./tests/test_stream
-
-test-entrypoints: tests/test_entrypoints
-	./tests/test_entrypoints
-
-tests/test_entrypoints: tests/test_entrypoints.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-tests/test_stream: tests/test_stream.c src/stream.c src/common.c
-	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/common.c $(LDFLAGS) -o $@
-
-.PHONY: test-finance
-
-test-finance: tests/test_finance
-	./tests/test_finance
-
-tests/test_finance: tests/test_finance.c src/finance.c src/common.c
-	$(CC) $(CFLAGS) tests/test_finance.c src/finance.c src/common.c $(LDFLAGS) -o $@
-
-.PHONY: test-language-array
-
-test-language-array: tests/test_language_array
-	./tests/test_language_array
-
-tests/test_language_array: tests/test_language_array.c src/lexer.c src/ast.c src/common.c
-	$(CC) $(CFLAGS) tests/test_language_array.c src/lexer.c src/ast.c src/common.c $(LDFLAGS) -o $@
-
-test-lexer-safety: tests/test_lexer_safety
-	./tests/test_lexer_safety
-
-tests/test_lexer_safety: tests/test_lexer_safety.c src/lexer.c src/common.c
-	$(CC) $(CFLAGS) tests/test_lexer_safety.c src/lexer.c src/common.c $(LDFLAGS) -o $@
-
-test-language-runtime: tests/test_language_runtime
-	timeout --signal=TERM --kill-after=5s 60s ./tests/test_language_runtime
-
-tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/execution_contract.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-.PHONY: test-parser-array
-
-test-parser-array: tests/test_parser_array
-	./tests/test_parser_array
-
-tests/test_parser_array: tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
-	$(CC) $(CFLAGS) tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
-
-.PHONY: test-parser-variables
-
-test-parser-variables: tests/test_parser_variables
-	./tests/test_parser_variables
-
-test-functions: tests/test_functions
-	./tests/test_functions
-
-tests/test_functions: tests/test_functions.c src/parser.c src/lexer.c src/ast.c src/interpreter.c src/symbol.c src/symbol_table.c src/dataset.c src/common.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-test-script-functions: tests/test_script_functions
-	./tests/test_script_functions
-
-tests/test_script_functions: tests/test_script_functions.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-test-user-functions: tests/test_user_functions
-	./tests/test_user_functions
-
-tests/test_user_functions: tests/test_user_functions.c src/function_parser.c src/user_functions.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-tests/test_parser_variables: tests/test_parser_variables.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
-	$(CC) $(CFLAGS) tests/test_parser_variables.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
-
-test-parser-statistics: tests/test_parser_statistics
-	./tests/test_parser_statistics
-
-tests/test_parser_statistics: tests/test_parser_statistics.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
-	$(CC) $(CFLAGS) tests/test_parser_statistics.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
-
-SST_TEST_SOURCES = src/common.c src/sst_dates.c src/sst_model.c \
-                   src/sst_stats.c src/sst_histogram.c src/sst_rates.c \
-                   src/sst_report.c src/sst_report_advanced.c \
-                   src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
-                   src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c
-
-check-source-manifest:
-	python3 scripts/check_source_manifest.py
-
-check-experimental-isolation:
-	python3 scripts/check_experimental_isolation.py
-
-check-stream-architecture:
-	python3 scripts/check_stream_architecture.py
-
-check-execution-contract:
-	python3 scripts/check_execution_contract.py
-
-check-unification-architecture:
-	python3 scripts/check_unification_architecture.py
-
-check-termux-packaging:
-	python3 scripts/check_termux_packaging.py
-
-check-termux-runner-contract:
-	python3 scripts/check_termux_runner_contract.py
-
-check-termux-industrial:
-	python3 scripts/check_termux_industrial.py
-
-check-compiler-boundary:
-	python3 scripts/check_compiler_boundary.py
-
-test-canonical-compiler: tests/test_canonical_compiler
-	./tests/test_canonical_compiler
-
-tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
-
-test-termux-packaging: check-termux-packaging
-	python3 scripts/test_termux_packaging.py
-
-all: $(TARGET)
-
-# Reproducible compile/runtime measurements; see benchmarks/README.md.
-benchmark:
-	python3 benchmarks/benchmark.py
-
-# Small and medium deterministic CSV workloads; large runs require --large-rows.
-benchmark-stream-grouped: $(TARGET)
-	python3 benchmarks/grouped_stream_benchmark.py
-
-benchmark-stream: $(TARGET)
-	python3 benchmarks/stream_benchmark.py
-
-# Build targets consumed by the Termux recipe. They never build tests or the
-# experimental compiler/IR/VM sources and never assume a Debian filesystem.
-termux-build:
-	$(MAKE) clean
-	$(MAKE) TERMUX=1 CC="$${CC:-clang}" CFLAGS="$${CFLAGS:-$(TERMUX_CFLAGS)}" LDFLAGS="$${LDFLAGS:-$(TERMUX_LDFLAGS)}" all
-
-termux-install: termux-build
-	test -n "$(TERMUX_PREFIX)"
-	install -Dm755 $(TARGET) "$(DESTDIR)$(TERMUX_PREFIX)/bin/$(TARGET)"
-	install -Dm644 README.md "$(DESTDIR)$(TERMUX_PREFIX)/share/doc/milena/README.md"
-
-$(TARGET): $(OBJECTS) $(FUNCTION_OBJECTS)
-	$(CC) $(CFLAGS) $(OBJECTS) $(FUNCTION_OBJECTS) $(LDFLAGS) -o $@
-
-test-sst: tests/test_sst_modules
-	./tests/test_sst_modules
-
-tests/test_sst_modules: tests/test_sst_modules.c $(SST_TEST_SOURCES)
-	$(CC) $(CFLAGS) tests/test_sst_modules.c $(SST_TEST_SOURCES) $(LDFLAGS) -o $@
-
-src/%.o: src/%.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-debug:
-	$(MAKE) clean
-	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
-
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-execution-contract check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-entrypoints \
-      test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics \
-      test-parser-variables test-functions test-data-source test-execution-contract test-script-functions test-user-functions
-	./tests/run_tests.sh
-
-clean:
-	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules tests/test_data_source tests/test_execution_contract \
-		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
-		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
-		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
-		tests/test_script_functions tests/test_user_functions tests/test_canonical_compiler reporte.json resultado.json
-
+#!/usr/bin/env python3
+"""Measure the canonical Spanish streaming path on deterministic CSV fixtures.
+
+The script generates fixtures, writes a human-language .milena program, and
+invokes ``milena run``. It reports observations only; it sets no performance
+claim or industrial target. Large workloads are opt-in.
+"""
+from __future__ import annotations
+import argparse, csv, json, os, platform, subprocess, tempfile, time
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+BINARY = ROOT / "milena"
+
+def make_csv(path: Path, rows: int, malformed_every: int) -> int:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["id", "importe", "grupo"])
+        malformed = 0
+        for i in range(rows):
+            if malformed_every and (i + 1) % malformed_every == 0:
+                w.writerow([i, "no-num", "invalida"]); malformed += 1
+            else:
+                w.writerow([i, f"{(i % 1000) / 10:.1f}", "A" if i % 2 else "B"])
+    return malformed
+
+def one(label: str, rows: int, malformed_every: int, large: bool) -> dict:
+    with tempfile.TemporaryDirectory(prefix="milena-stream-") as td:
+        root = Path(td); csv_path = root / "datos.csv"; script = root / "flujo.milena"
+        expected_bad = make_csv(csv_path, rows, malformed_every)
+        script.write_text(f'''.analisis benchmark {{\n    datos desde "{csv_path}"\n        procesar por lotes de 4096 filas\n        con registros de hasta 1 MiB\n        con columnas de 16\n    resumir {{ suma de "importe"; media de "importe"; contar de "importe"; }}\n    guardar resultado en "reporte.json"\n}}\n''', encoding="utf-8")
+        started = time.perf_counter()
+        result = subprocess.run([str(BINARY), "run", str(script)], cwd=ROOT, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        elapsed = time.perf_counter() - started
+        if result.returncode:
+            raise SystemExit(result.stderr or result.stdout)
+        report = json.loads((root / "reporte.json").read_text(encoding="utf-8"))
+        assert report["filas"] == rows and report["filas_malformadas"] == expected_bad
+        return {"fixture": label, "rows_requested": rows, "expected_malformed": expected_bad,
+                "rows": report["filas"], "rows_valid": report["filas_validas"],
+                "rows_malformed": report["filas_malformadas"], "bytes": report["bytes_entrada"],
+                "elapsed_seconds_process": elapsed, "rows_per_second": report["filas_por_segundo"],
+                "megabytes_per_second": report["megabytes_por_segundo"],
+                "observed_record_buffer_bytes": report["pico_registro_bytes"],
+                "configured_record_limit_bytes": report["limite_registro_bytes"],
+                "chunk_rows": report["tamano_lote"], "large_opt_in": large}
+
+def main() -> int:
+    p = argparse.ArgumentParser(); p.add_argument("--large-rows", type=int, default=0)
+    p.add_argument("--output", type=Path); args = p.parse_args()
+    if not BINARY.is_file(): raise SystemExit("build ./milena first (make all)")
+    cases = [("small", 100, 17), ("medium", 10000, 997)]
+    if args.large_rows:
+        if args.large_rows < 1: raise SystemExit("--large-rows must be positive")
+        cases.append(("large-opt-in", args.large_rows, 100003))
+    result = {"schema": "milena-stream-benchmark-v1", "workloads": [one(n, r, m, n.startswith("large")) for n, r, m in cases],
+              "environment": {"platform": platform.platform(), "machine": platform.machine(),
+                              "compiler": os.environ.get("CC", "make default CC"),
+                              "commit": os.environ.get("GITHUB_SHA", "unknown")},
+              "methodology": "Deterministic generated CSV; canonical lexer-parser-AST-semantic-runtime-backend; wall-clock observations; large is opt-in.",
+              "limitations": ["No grouping, spill-to-disk, Arrow/Parquet or parallel execution is measured.", "Results are not an industrial-scale claim."]}
+    rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+    if args.output: args.output.write_text(rendered, encoding="utf-8")
+    print(rendered, end=""); return 0
+if __name__ == "__main__": raise SystemExit(main())
