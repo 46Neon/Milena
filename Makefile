@@ -211,11 +211,12 @@ termux-install: termux-build
 	test -n "$(TERMUX_PREFIX)"
 	install -Dm755 $(TARGET) "$(DESTDIR)$(TERMUX_PREFIX)/bin/$(TARGET)"
 	install -Dm644 README.md "$(DESTDIR)$(TERMUX_PREFIX)/share/doc/milena/README.md"
+	install -Dm644 LICENSE "$(DESTDIR)$(TERMUX_PREFIX)/share/licenses/milena/LICENSE"
 
 # Host-side, reproducible contract. It checks the canonical binary and CLI
 # without pretending that a Linux runner is Android/Bionic hardware.
 termux-contract:
-	./scripts/termux-native-contract.sh
+	bash scripts/termux-native-contract.sh
 
 $(TARGET): $(OBJECTS) $(FUNCTION_OBJECTS)
 	$(CC) $(CFLAGS) $(OBJECTS) $(FUNCTION_OBJECTS) $(LDFLAGS) -o $@

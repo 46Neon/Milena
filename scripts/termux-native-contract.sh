@@ -9,6 +9,10 @@ cd "$root"
 make clean >/dev/null
 make TERMUX=1 CC="${CC:-clang}" all
 
+test -x ./milena
+test -f README.md
+test -f LICENSE
+
 version=$(./milena --version)
 test -n "$version"
 ./milena --help | grep -Fq 'Uso:'
