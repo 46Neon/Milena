@@ -65,8 +65,9 @@ for required in (
 ):
     if required not in workflow:
         errors.append(f"workflow missing required contract: {required}")
-if "ubuntu-latest" in workflow or "windows-latest" in workflow:
-    errors.append("Termux contract cannot use a hosted generic runner")
+device_workflow = workflow.split("  termux-aarch64-contract:", 1)[-1]
+if "ubuntu-latest" in device_workflow or "windows-latest" in device_workflow:
+    errors.append("Termux device contract cannot use a hosted generic runner")
 
 builder = (ROOT / "packaging/termux/build-local-deb.sh").read_text(encoding="utf-8")
 for required in ("validate_termux_elf.py", "README.md", "SOURCE_DATE_EPOCH", ".provenance.json", "TERMUX=1"):
