@@ -13,12 +13,12 @@ paralelo.
    resultados decodificados fuera de orden, rechazar duplicados/faltantes y
    conservar equivalencia monolítica.
 3. **Spill-to-disk básico** — implementado en esta rama: registros limitados, validación y replay incremental; no equivale a un motor de spill completo.
-4. **Agregaciones externas** — implementados estados globales mergeables, ordenamiento externo numérico y un primer agregador `GROUP BY` spillable con límites de memoria/scratch y salida determinista. En PR #28 el operador tiene cortes canónicos AST/semántica/runtime para tabla materializada y CSV streaming; el wire de agregación v3 conserva contadores separados de valores válidos, nulos e inválidos. El CSV spill emite esos contadores y representa `COUNT` como entero JSON exacto. La fusión externa usa fan-in fijo de dos y sus límites no equivalen a una cota de RSS global.
+4. **Agregaciones externas** — implementados estados globales mergeables, ordenamiento externo numérico y un primer agregador `GROUP BY` spillable con límites de memoria/scratch y salida determinista. En PR #28 el operador tiene cortes canónicos AST/semántica/runtime para tabla materializada y CSV streaming. El estado de agregado usa wire v4 little-endian de 96 bytes, con contadores separados de valores válidos/nulos/inválidos y suma `INT64` exacta; el CSV spill representa `COUNT` como entero JSON exacto. La fusión externa usa fan-in fijo de dos y sus límites no equivalen a una cota de RSS global. El contrato de corrida todavía no está ligado a un esquema completo y sigue limitado a una clave de texto y una métrica por operación spill.
 5. **Formatos masivos** — Parquet/Arrow, row groups, compresión y pushdown.
 6. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
 7. **Coordinador** — leases, heartbeats, reintentos, checkpoints y cancelación.
 8. **Transporte** — adaptar el mismo protocolo a IPC y red autenticada.
-9. **SLO medidos** — el PR añade benchmark determinista comparando streaming en memoria y spill por valor/tiempo de pared, además de un smoke de CI; p50/p95/p99, RSS, memoria real, scratch observado, shuffle y fallos siguen pendientes de mediciones instrumentadas.
+9. **SLO medidos** — el benchmark determinista incluye una validación de 1.000.000 de filas y 1.000 grupos con reducer configurado a 262.144 bytes. En una ejecución Linux x86_64 se observaron aproximadamente 0,460 s en memoria y 8,487 s con spill; es una única repetición, no un SLO. RSS, scratch máximo observado, p50/p95/p99, otras plataformas y pruebas de alta cardinalidad siguen pendientes de instrumentación.
 
 Una fase no se considera terminada solo porque compile: necesita contrato,
 prueba de integración, caso de error y comparación con el resultado local.
