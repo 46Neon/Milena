@@ -18,7 +18,7 @@ paralelo.
 6. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
 7. **Coordinador** — leases, heartbeats, reintentos, checkpoints y cancelación.
 8. **Transporte** — adaptar el mismo protocolo a IPC y red autenticada.
-9. **SLO medidos** — el benchmark determinista incluye una validación de 1.000.000 de filas y 1.000 grupos con reducer configurado a 262.144 bytes. En una ejecución Linux x86_64 se observaron aproximadamente 0,460 s en memoria y 8,487 s con spill; es una única repetición, no un SLO. RSS, scratch máximo observado, p50/p95/p99, otras plataformas y pruebas de alta cardinalidad siguen pendientes de instrumentación.
+9. **Mediciones observadas (no SLO)** — el workflow determinista valida 1.000.000 de filas y 1.000 grupos con el reducer configurado a 262.144 bytes, y ahora repite cada workload tres veces para mejorar la observación de variabilidad en CI. En el run 35868309796 (head PR `060497bf`, Linux x86_64), el artefacto de una sola repetición registró 0,314 s en memoria y 6,172 s con spill; `ru_maxrss` por proceso hijo fue 12.062.720 y 12.087.296 bytes, respectivamente, y el scratch máximo muestreado cada 10 ms fue 255.817.216 bytes. Son observaciones de una ejecución, no un SLO ni una cota global de RSS; las tres repeticiones nuevas aún deben ejecutarse en el head final. No se deriva p50/p95/p99 ni garantía para otras plataformas o cardinalidades.
 
 Una fase no se considera terminada solo porque compile: necesita contrato,
 prueba de integración, caso de error y comparación con el resultado local.
@@ -168,13 +168,14 @@ limpia en los caminos validados, pero todavía no ofrece nombres privados
 impredecibles ni coordinación de writers concurrentes. El plan físico disponible
 solo describe rangos por bytes; para hacer pushdown de group/sort falta un plan
 semántico conectado al lector/runtime que preserve los límites de registros y
-el orden requerido. La auditoría del join canónico actual (`milena_table_join`)
-confirma que materializa índices, vectores de pares y salida sin un presupuesto
-AST configurable; acotarlo exige un contrato tipado de filas/memoria/scratch y
-una estrategia de salida que preserve la semántica de join, no solo un cap
-externo en el backend. El benchmark reproducible de spill añadido valida
-resultados y tiempos de pared y corre como smoke de `make test`; aún faltan
-mediciones instrumentadas de RSS/scratch y campañas repetidas para definir SLOs.
+el orden requerido. El join canónico ahora tiene `#limites` tipados en AST y un
+preflight de filas/bytes para las asignaciones internas estimadas, pero sigue
+materializado en RAM: esa estimación no es un límite de RSS global y no añade
+spill, streaming ni pushdown. El benchmark reproducible de spill valida
+resultados y registra tiempos de pared, pico RSS por proceso hijo y scratch
+muestreado; la CI se amplía a tres repeticiones por workload, pero campañas
+repetidas multi-entorno, workload de cardinalidad más amplia y evaluación SLO
+siguen pendientes.
 Arrow/Parquet y una capa coordinador/workers remotos siguen como fases futuras,
 fuera de la evidencia implementada. Estos cortes locales no constituyen un
 clúster distribuido ni validación de rendimiento industrial o de Termux/aarch64.

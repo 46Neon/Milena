@@ -24,7 +24,7 @@ jobs:
           mkdir -p artifacts
           python3 benchmarks/grouped_spill_benchmark.py \
             --large-rows 1000000 \
-            --repetitions 1 \
+            --repetitions 3 \
             --output artifacts/grouped-spill-million-row.json
       - name: Upload reproducible workload observation
         if: always()
