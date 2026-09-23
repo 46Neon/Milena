@@ -30,7 +30,7 @@ cat > "$TMP_DIR/spill.milena" <<EOF_M
   variable grupo texto
   variable valor numerica
   datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo" #spill("$TMP_DIR/scratch.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
+  agrupar por "grupo" #spill("$TMP_DIR/scratch.bin", 4096, 1048576, 128, 100, 1048576) resumir { suma de "valor"; }
   guardar resultado en "spill.json"
 }
 EOF_M
@@ -52,11 +52,16 @@ assert sb['New, York\nMetro']==3.75
 assert sb['A'] is None
 assert [r['clave'] for r in b['resultados']]==sorted(sb, key=lambda x:x.encode())
 assert b['grupos']==len(sb)
+assert b['limite_salida_bytes']==1048576
 assert not (p/'scratch.bin').exists()
 PY
-# Repeating a successful run reuses no stale spill or staging file.
-rm -f "$TMP_DIR/spill.json"
+# Successful publication atomically replaces an existing destination.
+printf 'old-report' > "$TMP_DIR/spill.json"
 (cd "$TMP_DIR" && "$MILENA_BIN" run spill.milena)
+python3 - "$TMP_DIR/spill.json" <<'PY'
+import json,sys
+assert json.load(open(sys.argv[1]))['modo']=='flujo_agrupado_spill'
+PY
 [ ! -e "$TMP_DIR/scratch.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'spill.json.part.*' | grep -q .
 # Row quota, disk quota and group quota failures publish no report and clean spill state.
@@ -95,6 +100,22 @@ EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run group-limit.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/group-limit.json" ] && [ ! -e "$TMP_DIR/group-limit.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'group-limit.json.part.*' | grep -q .
+# Output report bytes are bounded before each complete JSON group is written;
+# a failed replacement must leave the prior destination untouched.
+printf 'old-report' > "$TMP_DIR/output-limit.json"
+cat > "$TMP_DIR/output-limit.milena" <<EOF_M
+.analisis salida_limitada {
+  variable grupo texto
+  variable valor numerica
+  datos desde "rows.csv" con filas hasta 1000 con tiempo hasta 30000 ms
+  agrupar por "grupo" #spill("$TMP_DIR/output-limit.bin", 4096, 1048576, 128, 100, 1024) resumir { suma de "valor"; }
+  guardar resultado en "output-limit.json"
+}
+EOF_M
+if (cd "$TMP_DIR" && "$MILENA_BIN" run output-limit.milena); then exit 1; fi
+[ "$(cat "$TMP_DIR/output-limit.json")" = 'old-report' ]
+[ ! -e "$TMP_DIR/output-limit.bin" ]
+! find "$TMP_DIR" -maxdepth 1 -name 'output-limit.json.part.*' | grep -q .
 # Time budget is checked during row ingestion and final callback.
 python3 - "$TMP_DIR" <<'PY'
 import csv,pathlib,sys

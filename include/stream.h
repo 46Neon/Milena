@@ -41,6 +41,8 @@ typedef struct {
     size_t spill_quota_bytes;
     size_t max_key_bytes;
     size_t max_output_groups;
+    /* Hard upper bound for the staged JSON result; zero selects 1 GiB. */
+    size_t max_output_bytes;
 } MilenaStreamSpillPolicy;
 
 typedef struct {

@@ -3,6 +3,12 @@
 
 #include <float.h>
 #include <time.h>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #define STREAM_MAX_COLUMNS 4096u
 #define STREAM_MAX_METRICS 64u
@@ -13,6 +19,7 @@
 #define STREAM_HARD_MAX_GROUPS 100000u
 #define STREAM_DEFAULT_MAX_GROUPS 1000u
 #define STREAM_MAX_GROUP_KEY_BYTES 4096u
+#define STREAM_DEFAULT_SPILL_OUTPUT_BYTES (1024u * 1024u * 1024u)
 #define STREAM_GROUP_STATE_BUDGET (64u * 1024u * 1024u)
 
 typedef struct {
@@ -913,10 +920,29 @@ typedef struct {
     const MilenaStreamMetric *metric;
     size_t max_groups;
     size_t groups;
+    size_t max_output_bytes;
     bool first;
     double started_ms;
     double max_elapsed_ms;
 } StreamSpillEmitter;
+
+static bool stream_spill_size_add(size_t *total, size_t value) {
+    if (value > SIZE_MAX - *total) return false;
+    *total += value;
+    return true;
+}
+
+static bool stream_spill_json_string_size(const char *text, size_t *size) {
+    size_t total = 2u;
+    const unsigned char *p = (const unsigned char *)(text ? text : "");
+    for (; *p; ++p) {
+        size_t amount = (*p == '"' || *p == '\\' || *p == '\n' ||
+                         *p == '\r' || *p == '\t') ? 2u : (*p < 0x20 ? 6u : 1u);
+        if (!stream_spill_size_add(&total, amount)) return false;
+    }
+    *size = total;
+    return true;
+}
 
 static MilenaStatus stream_spill_emit_group(
     const MilenaGroupedAggregateResult *result, void *opaque,
@@ -939,35 +965,26 @@ static MilenaStatus stream_spill_emit_group(
                          "La reducción agrupada superó el presupuesto de tiempo");
         return MILENA_ERR_OVERFLOW;
     }
-    FILE *output = emitter->output;
-    if (!emitter->first && fputc(',', output) == EOF) goto write_error;
-    emitter->first = false;
-    if (fputs("{\"clave\":", output) == EOF) goto write_error;
-    char *key = (char *)malloc(result->key_length);
+
+    size_t key_length = result->key_length - 1u;
+    char *key = (char *)malloc(key_length + 1u);
     if (!key) {
         milena_error_set(error, MILENA_ERR_MEMORY, 0, 0, 0,
                          "Sin memoria para escribir clave agrupada");
         return MILENA_ERR_MEMORY;
     }
-    size_t key_length = result->key_length - 1u;
     if (key_length) memcpy(key, result->key + 1u, key_length);
     key[key_length] = '\0';
-    milena_json_write_string(output, key);
-    free(key);
-    if (fputs(",\"metricas\":[{\"columna\":", output) == EOF) goto write_error;
-    milena_json_write_string(output, emitter->metric->column);
-    if (fputs(",\"operacion\":", output) == EOF) goto write_error;
-    milena_json_write_string(output,
-        milena_stream_operation_name(emitter->metric->operation));
-    if (fputs(",\"nombre\":", output) == EOF) goto write_error;
-    if (emitter->metric->name && emitter->metric->name[0])
-        milena_json_write_string(output, emitter->metric->name);
-    else {
-        char name[256];
-        (void)snprintf(name, sizeof(name), "%s_%s", emitter->metric->column,
+
+    char default_name[256];
+    const char *name = emitter->metric->name;
+    if (!name || !name[0]) {
+        (void)snprintf(default_name, sizeof(default_name), "%s_%s",
+            emitter->metric->column,
             milena_stream_operation_name(emitter->metric->operation));
-        milena_json_write_string(output, name);
+        name = default_name;
     }
+    const char *operation = milena_stream_operation_name(emitter->metric->operation);
     uint64_t valid = result->aggregate.count;
     double value = NAN;
     if (emitter->metric->operation == MILENA_STREAM_COUNT) {
@@ -981,18 +998,92 @@ static MilenaStatus stream_spill_emit_group(
         default: break;
         }
     }
-    if (fprintf(output, ",\"valores_validos\":%llu,\"valor\":",
-                (unsigned long long)valid) < 0) goto write_error;
-    if (isnan(value)) {
-        if (fputs("null", output) == EOF) goto write_error;
-    } else if (fprintf(output, "%.17g", value) < 0) goto write_error;
-    if (fputs("}]}", output) == EOF) goto write_error;
+    char valid_text[32], value_text[64];
+    int valid_chars = snprintf(valid_text, sizeof(valid_text), "%llu",
+                               (unsigned long long)valid);
+    int value_chars = isnan(value) ? 4 :
+        snprintf(value_text, sizeof(value_text), "%.17g", value);
+    if (valid_chars < 0 || (size_t)valid_chars >= sizeof(valid_text) ||
+        value_chars < 0 || (!isnan(value) && (size_t)value_chars >= sizeof(value_text))) {
+        free(key);
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "No se pudo dimensionar el resultado spill");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (isnan(value)) memcpy(value_text, "null", 5u);
+
+    size_t encoded = 0, part = 0;
+#define ADD_SPILL_LITERAL(literal) \
+    do { if (!stream_spill_size_add(&encoded, sizeof(literal) - 1u)) goto size_error; } while (0)
+    ADD_SPILL_LITERAL("{\"clave\":");
+    if (!stream_spill_json_string_size(key, &part) ||
+        !stream_spill_size_add(&encoded, part)) goto size_error;
+    ADD_SPILL_LITERAL(",\"metricas\":[{\"columna\":");
+    if (!stream_spill_json_string_size(emitter->metric->column, &part) ||
+        !stream_spill_size_add(&encoded, part)) goto size_error;
+    ADD_SPILL_LITERAL(",\"operacion\":");
+    if (!stream_spill_json_string_size(operation, &part) ||
+        !stream_spill_size_add(&encoded, part)) goto size_error;
+    ADD_SPILL_LITERAL(",\"nombre\":");
+    if (!stream_spill_json_string_size(name, &part) ||
+        !stream_spill_size_add(&encoded, part)) goto size_error;
+    ADD_SPILL_LITERAL(",\"valores_validos\":");
+    if (!stream_spill_size_add(&encoded, (size_t)valid_chars)) goto size_error;
+    ADD_SPILL_LITERAL(",\"valor\":");
+    if (!stream_spill_size_add(&encoded, (size_t)value_chars)) goto size_error;
+    ADD_SPILL_LITERAL("}]}");
+#undef ADD_SPILL_LITERAL
+
+    long position = ftell(emitter->output);
+    size_t comma = emitter->first ? 0u : 1u;
+    if (position < 0 || (size_t)position > emitter->max_output_bytes ||
+        comma > emitter->max_output_bytes - (size_t)position ||
+        encoded > emitter->max_output_bytes - (size_t)position - comma) {
+        free(key);
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "El reporte spill superaría el límite de bytes de salida");
+        return MILENA_ERR_OVERFLOW;
+    }
+
+    FILE *output = emitter->output;
+    if (!emitter->first && fputc(',', output) == EOF) goto write_error;
+    emitter->first = false;
+    if (fputs("{\"clave\":", output) == EOF) goto write_error;
+    milena_json_write_string(output, key);
+    if (fputs(",\"metricas\":[{\"columna\":", output) == EOF) goto write_error;
+    milena_json_write_string(output, emitter->metric->column);
+    if (fputs(",\"operacion\":", output) == EOF) goto write_error;
+    milena_json_write_string(output, operation);
+    if (fputs(",\"nombre\":", output) == EOF) goto write_error;
+    milena_json_write_string(output, name);
+    if (fprintf(output, ",\"valores_validos\":%s,\"valor\":%s}]}", valid_text, value_text) < 0)
+        goto write_error;
+    if (ferror(output)) goto write_error;
+    free(key);
     emitter->groups++;
     return MILENA_OK;
+
+size_error:
+#undef ADD_SPILL_LITERAL
+    free(key);
+    milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                     "Tamaño del resultado spill desbordado");
+    return MILENA_ERR_OVERFLOW;
 write_error:
+    free(key);
     milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
                      "No se pudo escribir el resultado spill agrupado");
     return MILENA_ERR_IO;
+}
+
+static bool stream_publish_staged(const char *staging_path,
+                                  const char *output_path) {
+#ifdef _WIN32
+    return MoveFileExA(staging_path, output_path,
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    return rename(staging_path, output_path) == 0;
+#endif
 }
 
 static FILE *stream_open_staging(const char *output_path, char **staging_path,
@@ -1057,11 +1148,14 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         policy->spill_quota_bytes > 4294967296u ||
         policy->max_key_bytes < 2u || policy->max_key_bytes > 1048576u ||
         policy->max_output_groups == 0 ||
-        policy->max_output_groups > 1000000u) {
+        policy->max_output_groups > 1000000u ||
+        policy->max_output_bytes > STREAM_DEFAULT_SPILL_OUTPUT_BYTES) {
         milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
                          "Política u operación inválida para spill agrupado CSV");
         return MILENA_ERR_ARGUMENT;
     }
+    size_t output_byte_limit = policy->max_output_bytes ?
+        policy->max_output_bytes : STREAM_DEFAULT_SPILL_OUTPUT_BYTES;
     if (report) memset(report, 0, sizeof(*report));
     if (error) milena_error_clear(error);
     double started = stream_now_ms();
@@ -1225,11 +1319,11 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         "\"pico_registro_bytes\":%zu,\"capacidad_buffer_registro_bytes\":%zu,"
         "\"limite_registro_bytes\":%zu,\"limite_columnas\":%zu,"
         "\"memoria_reductor_bytes\":%zu,\"cuota_spill_bytes\":%zu,"
-        "\"grupos\":", rows_read, rows_valid, malformed,
+        "\"limite_salida_bytes\":%zu,\"grupos\":", rows_read, rows_valid, malformed,
         options->max_rows, options->max_elapsed_milliseconds,
         observed_record_bytes, record_capacity, options->max_record_bytes,
         options->max_columns, policy->memory_budget_bytes,
-        policy->spill_quota_bytes) < 0) {
+        policy->spill_quota_bytes, output_byte_limit) < 0) {
         status = MILENA_ERR_IO; goto spill_finish;
     }
     long groups_position = ftell(staged);
@@ -1242,8 +1336,14 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         elapsed) < 0) {
         status = MILENA_ERR_IO; goto spill_finish;
     }
+    long prefix_end = ftell(staged);
+    if (prefix_end < 0 || (size_t)prefix_end > output_byte_limit) {
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "El encabezado supera el límite de bytes del reporte spill");
+        status = MILENA_ERR_OVERFLOW; goto spill_finish;
+    }
     StreamSpillEmitter emitter = {staged, metric, output_group_limit,
-        0, true, started, options->max_elapsed_milliseconds};
+        0, output_byte_limit, true, started, options->max_elapsed_milliseconds};
     size_t groups_emitted = 0;
     status = milena_grouped_aggregate_finalize(&reducer,
         stream_spill_emit_group, &emitter, &groups_emitted, error);
@@ -1263,7 +1363,9 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
                          "No se pudo completar el conteo de grupos del reporte");
         status = MILENA_ERR_IO; goto spill_finish;
     }
-    if (fputs("]}\n", staged) == EOF || fflush(staged) != 0) {
+    if (report_end < 0 || (size_t)report_end > output_byte_limit ||
+        output_byte_limit - (size_t)report_end < 3u ||
+        fputs("]}\n", staged) == EOF || fflush(staged) != 0) {
         milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
                          "No se pudo completar el reporte spill agrupado");
         status = MILENA_ERR_IO; goto spill_finish;
@@ -1284,7 +1386,7 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         status = MILENA_ERR_IO; goto spill_finish;
     }
     scratch_owned = false;
-    if (rename(staging_path, output_path) != 0) {
+    if (!stream_publish_staged(staging_path, output_path)) {
         milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
                          "No se pudo publicar atómicamente el reporte spill");
         status = MILENA_ERR_IO; goto spill_finish;
