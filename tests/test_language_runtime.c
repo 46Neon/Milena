@@ -324,6 +324,43 @@ static int run_human_stream_pipeline(void) {
     return 0;
 }
 
+static int run_grouped_human_stream_pipeline(void) {
+    const char *csv = "test-language-runtime-grouped-stream.csv";
+    const char *output = "test-language-runtime-grouped-stream.json";
+    const char *content =
+        "zona,importe,referencia\n"
+        "Norte,5,r1\n"
+        "Sur,1,r2\n"
+        "Norte,no-num,r3\n"
+        "Sur,4,\n";
+    CHECK(write_file(csv, content), "agrupación de flujo: no se pudo crear el CSV");
+    const char *source =
+        ".analisis ventas_agrupadas {\n"
+        "  datos desde \"test-language-runtime-grouped-stream.csv\" procesar por lotes de 2 filas con grupos de 4\n"
+        "  agrupar por \"zona\" resumir { suma de \"importe\"; contar de \"referencia\"; }\n"
+        "  guardar resultado en \"test-language-runtime-grouped-stream.json\"\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(source,
+        "test-language-runtime-grouped-stream.milena", NULL, &error) == MILENA_OK,
+        error.message);
+    char text[8192];
+    CHECK(read_file(output, text, sizeof(text)),
+          "agrupación de flujo: no se creó el reporte");
+    const char *north = strstr(text, "\"clave\":\"Norte\"");
+    const char *south = strstr(text, "\"clave\":\"Sur\"");
+    CHECK(strstr(text, "\"modo\":\"flujo_agrupado\"") != NULL &&
+          north != NULL && south != NULL && north < south &&
+          strstr(text, "\"limite_grupos\":4") != NULL &&
+          strstr(text, "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":5") != NULL &&
+          strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2") != NULL,
+          "agrupación de flujo: AST, orden o semántica de valores inválidos incorrectos");
+    remove(csv);
+    remove(output);
+    return 0;
+}
+
 int main(void) {
     CHECK(run_arrays() == 0, "falló la fase de arrays");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
@@ -331,6 +368,8 @@ int main(void) {
     CHECK(run_summary_pipeline() == 0, "falló la fase de resumen");
     CHECK(run_stream_pipeline() == 0, "falló la fase de flujo");
     CHECK(run_human_stream_pipeline() == 0, "falló la fase de flujo humano");
-    puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo OK");
+    CHECK(run_grouped_human_stream_pipeline() == 0,
+          "falló la fase de agrupación de flujo humano");
+    puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo agrupado OK");
     return 0;
 }

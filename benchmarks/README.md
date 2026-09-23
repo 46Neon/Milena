@@ -8,16 +8,18 @@ Estos benchmarks miden, sin prometer un umbral, dos operaciones observables:
    ruta canónica lexer → parser → AST → semántica → runtime. Esta fixture mide
    el programa de arreglos; no sustituye una medición de tablas o datasets.
 
-La fixture de arrays es deliberadamente pequeña. Para flujo CSV, PR25 añade
-`stream_benchmark.py`, que genera de forma determinista cargas `small` (100
-filas), `medium` (10.000) y una carga `large` configurable solo con
-`--large-rows N` (hasta 1.000.000 filas; la ejecución tiene timeout de 180 s).
-Cada ejecución pasa por `milena run` y por la sintaxis
-española del AST; no existe un ejecutable de datos paralelo. Se reportan filas,
-filas válidas/malformadas, bytes, tiempo de pared, filas/s, MB/s, lote, búfer
-observado, plataforma y commit. No hay umbrales ni tiempos fijos: los
-resultados no permiten extrapolar rendimiento industrial, Termux, Android,
-aarch64 o cualquier entorno no medido.
+La fixture de arrays es deliberadamente pequeña. Para CSV, PR25 ofrece
+`stream_benchmark.py` (resumen global) y `grouped_stream_benchmark.py`
+(agrupación acotada), ambos con cargas deterministas `small` (100 filas) y
+`medium` (10.000 filas). La carga `large` se habilita explícitamente con
+`--large-rows N` (hasta 1.000.000 filas; timeout de 180 s). Cada muestra se
+ejecuta con `milena run` y la sintaxis española del AST; no hay un ejecutable
+de datos paralelo. Se validan filas, grupos, datos inválidos y bytes, y se
+reportan tiempo de pared, filas/s, MB/s, límites de estado, búfer, plataforma
+y commit. No hay umbrales ni tiempos fijos: los resultados no permiten
+extrapolar rendimiento industrial, Termux, Android, aarch64 o un entorno no
+medido. La agrupación conserva estado en memoria; spill-to-disk y particionado
+CSV todavía no están implementados ni se miden aquí.
 
 ## Uso
 
@@ -28,10 +30,13 @@ python3 benchmarks/benchmark.py
 # Más muestras y un archivo JSON reproducible para adjuntar al informe:
 python3 benchmarks/benchmark.py --compile-repetitions 3 --run-repetitions 10 \
   --output benchmark-results.json
-# Flujo CSV (small + medium; CI usa este camino):
+# Resumen global CSV (small + medium; CI usa este camino):
 make benchmark-stream
-# Carga grande explícita y opt-in:
+# Agrupación streaming, memoria acotada (small + medium; CI la valida):
+make benchmark-stream-grouped
+# Cargas grandes explícitas y opt-in:
 python3 benchmarks/stream_benchmark.py --large-rows 1000000 --output stream-results.json
+python3 benchmarks/grouped_stream_benchmark.py --large-rows 1000000 --output grouped-results.json
 ```
 
 El resultado JSON incluye muestras, mínimo, mediana, media, máximo, fixture,

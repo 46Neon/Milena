@@ -102,6 +102,56 @@ int main(void) {
         budget_input, budget_output, metrics, 1, &budget, &budget_report,
         &budget_error) == MILENA_ERR_ARGUMENT);
     remove(budget_input);
+
+    const char *group_input = "tests/.stream_group_fixture.csv";
+    const char *group_output = "tests/.stream_group_report.json";
+    FILE *group_file = fopen(group_input, "wb");
+    assert(group_file != NULL);
+    fputs("zona,importe,referencia\nZ,4,r1\nA,7,r2\nZ,1,\nA,no-num,r3\n",
+          group_file);
+    assert(fclose(group_file) == 0);
+    MilenaStreamMetric grouped_metrics[] = {
+        {"importe", "importe_suma", MILENA_STREAM_SUM},
+        {"referencia", "referencia_conteo", MILENA_STREAM_COUNT}
+    };
+    MilenaStreamOptions grouped_options = milena_stream_options_default();
+    grouped_options.max_groups = 10;
+    MilenaStreamReport grouped_report = {0};
+    MilenaError grouped_error;
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_with_options(group_input, group_output,
+        "zona", grouped_metrics, 2, &grouped_options, &grouped_report,
+        &grouped_error) == MILENA_OK);
+    assert(grouped_report.rows_read == 4);
+    assert(grouped_report.rows_with_valid_values == 4);
+    assert(grouped_report.malformed_rows == 2);
+    assert(grouped_report.input_bytes > 0);
+    assert(grouped_report.groups == 2);
+    assert(grouped_report.max_groups == 10);
+    json = fopen(group_output, "rb");
+    assert(json != NULL);
+    memset(buffer, 0, sizeof(buffer));
+    assert(fread(buffer, 1, sizeof(buffer) - 1, json) > 0);
+    assert(fclose(json) == 0);
+    const char *alpha = strstr(buffer, "\"clave\":\"A\"");
+    const char *zeta = strstr(buffer, "\"clave\":\"Z\"");
+    assert(alpha != NULL && zeta != NULL && alpha < zeta);
+    assert(strstr(buffer,
+        "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":7") != NULL);
+    assert(strstr(buffer,
+        "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2") != NULL);
+    assert(strstr(buffer, "\"limite_grupos\":10") != NULL);
+    remove(group_output);
+    grouped_options.max_groups = 1;
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_with_options(group_input, group_output,
+        "zona", grouped_metrics, 2, &grouped_options, &grouped_report,
+        &grouped_error) == MILENA_ERR_OVERFLOW);
+    assert(strstr(grouped_error.message, "límite") != NULL);
+    assert(fopen(group_output, "rb") == NULL);
+    remove(group_input);
+    remove(group_output);
+
     puts("stream tests passed");
     return 0;
 }

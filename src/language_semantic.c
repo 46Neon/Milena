@@ -88,10 +88,42 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                 (node->stream_record_limit != 0 &&
                  node->stream_record_limit < 4096u))
                 return semantic_error(node, error, "Límite de registro de flujo inválido");
-            if (node->stream_column_limit > 4096u)
-                return semantic_error(node, error, "Límite de columnas de flujo inválido");
+            if (node->stream_column_limit > 4096u ||
+                node->stream_group_limit > 100000u)
+                return semantic_error(node, error,
+                    "Límite de columnas o grupos de flujo inválido");
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Carga de dataset sin archivo");
+            break;
+        case AST_BLOQUE_AGRUPAR:
+            if (node->type_name && strcmp(node->type_name, "flujo") == 0) {
+                size_t keys = 0, summaries = 0;
+                const ASTNode *summary = NULL;
+                for (size_t i = 0; i < node->child_count; i++) {
+                    const ASTNode *child = node->children[i];
+                    if (!child) return semantic_error(node, error,
+                        "Agrupación de flujo con nodo AST nulo");
+                    if (child->type == AST_AGRUPACION_POR) keys++;
+                    else if (child->type == AST_BLOQUE_RESUMIR) {
+                        summaries++;
+                        summary = child;
+                    } else return semantic_error(node, error,
+                        "La agrupación de flujo solo admite clave y resumen tipado");
+                }
+                if (keys != 1 || summaries != 1 || !summary ||
+                    summary->child_count == 0 || summary->child_count > 64)
+                    return semantic_error(node, error,
+                        "La agrupación de flujo requiere una clave y entre 1 y 64 métricas");
+                for (size_t i = 0; i < summary->child_count; i++) {
+                    const ASTNode *metric = summary->children[i];
+                    if (!metric || metric->type != AST_RESUMEN_METRICA ||
+                        !metric->value || !metric->value[0] ||
+                        !known_stream_operation(metric->stream_operation) ||
+                        metric->stream_operation == AST_STREAM_OPERATION_NONE)
+                        return semantic_error(metric, error,
+                            "La métrica agrupada debe usar una operación de flujo tipada");
+                }
+            }
             break;
         case AST_AGRUPACION_POR:
         case AST_RESUMEN_METRICA:
