@@ -394,7 +394,7 @@ static int run_int64_grouped_spill_adapter(void) {
     ASTNode policy = {0};
     policy.type = AST_AGRUPACION_SPILL;
     policy.value = (char *)scratch;
-    policy.group_memory_budget_bytes = 2048;
+    policy.group_memory_budget_bytes = 4096;
     policy.group_spill_quota_bytes = 1024 * 1024;
     policy.group_max_key_bytes = 128;
     policy.group_max_output_groups = 32;
