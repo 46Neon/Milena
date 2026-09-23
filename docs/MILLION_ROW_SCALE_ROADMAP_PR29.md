@@ -23,10 +23,13 @@ universal.
 PR #28 sigue abierto y no forma parte de la base `main` de este PR. No se copia
 ni se rehace aquí su implementación. Su head incluye protocolo de resultados,
 spill append-only y replay, agregados mergeables, ordenamiento externo y una
-primera agrupación con spill conectada al `.agrupar` existente; la propia rama
-marca como pendientes la reducción externa agrupada conectada al planner, la
-integración de la agrupación streaming con spill, guardas end-to-end y CI
-verificada. Esos cambios deben pasar revisión/CI y fusionarse antes de que PR
+primera sección vertical de agrupación con spill conectada al `.agrupar`
+existente (con pruebas `milena run` para los casos cubiertos). La propia rama
+marca como pendientes optimizar/conectar la reducción externa agrupada al
+planner, integrar el spill con la agrupación streaming y completar guardas y
+benchmarks/SLO end-to-end. En la consulta de PR #29, la CI activa del head actual
+de PR #28 está verde, pero la rama sigue abierta y no está en `main`; sus cambios
+se deben revalidar tras cualquier actualización antes de depender de ellos. Esos cambios deben pasar revisión/CI y fusionarse antes de que PR
 #29 pueda apoyarse en ellos. El millón de filas de este PR usa el resumen global
 CSV streaming que ya existe en `main`; no reivindica cobertura del trabajo de
 spill/particionado local de PR #28 ni usa sus APIs nuevas.
