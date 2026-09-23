@@ -92,3 +92,15 @@ configurado. Esto permite construir reducción de runs, merge sort externo y
 replay de agregados sin materializar el spill completo en RAM. Los tests de
 spill forman parte de `make test` y cubren recorrido, cuota, truncamiento y
 corrupción de payload/checksum.
+## Estados de agregación mergeables
+
+Esta fase incorpora un estado numérico mergeable con conteo, suma,
+media, M2 de Welford/Chan, mínimo y máximo. Puede actualizarse por filas,
+combinarse en orden determinista entre particiones y serializarse con versión,
+IEEE-754 binary64 canónico, endianness little-endian y checksum. Los estados
+parciales se almacenan como registros del spill y se reproducen de uno en uno
+para combinarlos sin materializar el conjunto de runs.
+
+El contrato es un bloque de agregación global (no `GROUP BY` ilimitado). La
+agregación agrupada requerirá claves, particionado/hash y posterior merge
+externo; no se declara implementada en esta fase.
