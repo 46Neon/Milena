@@ -150,8 +150,6 @@ int main(void) {
     memset(buffer, 0, sizeof(buffer));
     assert(fread(buffer, 1, sizeof(buffer) - 1, json) > 0);
     assert(fclose(json) == 0);
-    char grouped_reference[2048];
-    snprintf(grouped_reference, sizeof(grouped_reference), "%s", buffer);
     const char *alpha = strstr(buffer, "\"clave\":\"A\"");
     const char *zeta = strstr(buffer, "\"clave\":\"Z\"");
     assert(alpha != NULL && zeta != NULL && alpha < zeta);
@@ -171,72 +169,17 @@ int main(void) {
         &grouped_error) == MILENA_ERR_OVERFLOW);
     assert(strstr(grouped_error.message, "límite") != NULL);
     assert(fopen(group_output, "rb") == NULL);
-
-    /* Force repeated sorted runs with duplicate keys split across runs. */
-    grouped_options.spill_enabled = true;
-    grouped_options.max_spill_files = 8;
-    milena_error_clear(&grouped_error);
-    assert(milena_stream_csv_grouped_with_options(group_input, group_output,
-        "zona", grouped_metrics, 2, &grouped_options, &grouped_report,
-        &grouped_error) == MILENA_OK);
-    assert(grouped_report.spilled);
-    assert(grouped_report.spill_runs >= 2);
-    assert(grouped_report.spill_records >= grouped_report.groups);
-    assert(grouped_report.spill_bytes > 0);
-    assert(grouped_report.groups == 2);
-    json = fopen(group_output, "rb");
-    assert(json != NULL);
-    memset(buffer, 0, sizeof(buffer));
-    assert(fread(buffer, 1, sizeof(buffer) - 1, json) > 0);
-    assert(fclose(json) == 0);
-    assert(strstr(buffer, "\"spill\":true") != NULL);
-    assert(strstr(buffer, "\"grupos\":2") != NULL);
-    const char *reference_sum = strstr(grouped_reference,
-        "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":7");
-    const char *spill_sum = strstr(buffer,
-        "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":7");
-    const char *reference_count = strstr(grouped_reference,
-        "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2");
-    const char *spill_count = strstr(buffer,
-        "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2");
-    assert(reference_sum != NULL && spill_sum != NULL);
-    assert(reference_count != NULL && spill_count != NULL);
     remove(group_output);
 
-    /* A header-only budget fails closed before publishing a report. */
-    grouped_options.max_spill_bytes = 16;
+    grouped_options = milena_stream_options_default();
+    grouped_options.max_elapsed_milliseconds = 1e-9;
     milena_error_clear(&grouped_error);
     assert(milena_stream_csv_grouped_with_options(group_input, group_output,
         "zona", grouped_metrics, 2, &grouped_options, &grouped_report,
         &grouped_error) == MILENA_ERR_OVERFLOW);
-    assert(strstr(grouped_error.message, "bytes temporales") != NULL);
     assert(grouped_report.resource_limit_reached);
     assert(fopen(group_output, "rb") == NULL);
-    /* The failed operation must release anonymous runs before the next call. */
-    grouped_options.max_spill_bytes = 0;
-    milena_error_clear(&grouped_error);
-    assert(milena_stream_csv_grouped_with_options(group_input, group_output,
-        "zona", grouped_metrics, 2, &grouped_options, &grouped_report,
-        &grouped_error) == MILENA_OK);
-    assert(grouped_report.spilled && grouped_report.groups == 2);
-    remove(group_output);
     remove(group_input);
-    remove(group_output);
-
-    const char *empty_group_input = "tests/.stream_empty_group.csv";
-    FILE *empty_group_file = fopen(empty_group_input, "wb");
-    assert(empty_group_file != NULL);
-    assert(fputs("zona,importe\n", empty_group_file) >= 0);
-    assert(fclose(empty_group_file) == 0);
-    grouped_options = milena_stream_options_default();
-    grouped_options.max_elapsed_milliseconds = 1e-9;
-    milena_error_clear(&grouped_error);
-    assert(milena_stream_csv_grouped_with_options(empty_group_input,
-        group_output, "zona", grouped_metrics, 2, &grouped_options,
-        &grouped_report, &grouped_error) == MILENA_ERR_OVERFLOW);
-    assert(grouped_report.resource_limit_reached);
-    assert(fopen(group_output, "rb") == NULL);
-    remove(empty_group_input);
     remove(group_output);
 
     puts("stream tests passed");

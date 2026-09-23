@@ -13,16 +13,6 @@
 #define STREAM_DEFAULT_MAX_GROUPS 1000u
 #define STREAM_MAX_GROUP_KEY_BYTES 4096u
 #define STREAM_GROUP_STATE_BUDGET (64u * 1024u * 1024u)
-#define STREAM_DEFAULT_SPILL_BYTES (64u * 1024u * 1024u)
-#define STREAM_DEFAULT_SPILL_RECORDS 1000000u
-#define STREAM_DEFAULT_SPILL_FILES 64u
-#define STREAM_HARD_SPILL_BYTES (1024u * 1024u * 1024u)
-#define STREAM_HARD_SPILL_RECORDS 10000000u
-#define STREAM_HARD_SPILL_FILES 256u
-#define STREAM_SPILL_HEADER_BYTES 16u
-
-_Static_assert(sizeof(double) == sizeof(uint64_t),
-               "grouped spill format requires 64-bit doubles");
 
 typedef struct {
     double sum;
@@ -276,14 +266,9 @@ static void stream_free_headers(char **headers, size_t count) {
 }
 
 MilenaStreamOptions milena_stream_options_default(void) {
-    MilenaStreamOptions options = {0};
-    options.chunk_rows = 4096u;
-    options.max_record_bytes = STREAM_DEFAULT_MAX_RECORD;
-    options.max_columns = STREAM_DEFAULT_MAX_COLUMNS;
-    options.max_groups = STREAM_DEFAULT_MAX_GROUPS;
-    options.max_spill_bytes = STREAM_DEFAULT_SPILL_BYTES;
-    options.max_spill_records = STREAM_DEFAULT_SPILL_RECORDS;
-    options.max_spill_files = STREAM_DEFAULT_SPILL_FILES;
+    MilenaStreamOptions options = {4096u, STREAM_DEFAULT_MAX_RECORD,
+                                   STREAM_DEFAULT_MAX_COLUMNS, 0u, 0.0,
+                                   STREAM_DEFAULT_MAX_GROUPS};
     return options;
 }
 
@@ -546,309 +531,25 @@ static bool stream_field_nonempty(const char *text) {
     return *text != '\0';
 }
 
-static void stream_groups_clear(StreamGroup *groups, size_t count) {
+static void stream_groups_release(StreamGroup *groups, size_t count) {
     if (!groups) return;
     for (size_t i = 0; i < count; i++) {
         free(groups[i].key);
         free(groups[i].accumulators);
         free(groups[i].invalid_values);
-        memset(&groups[i], 0, sizeof(groups[i]));
     }
-}
-
-static void stream_groups_release(StreamGroup *groups, size_t count) {
-    stream_groups_clear(groups, count);
     free(groups);
 }
 
-typedef struct {
-    FILE *file;
-    StreamGroup current;
-    bool active;
-} StreamSpillRun;
-
-static uint32_t spill_hash32(const unsigned char *bytes, size_t length) {
-    uint32_t hash = UINT32_C(2166136261);
-    for (size_t i = 0; i < length; i++) hash = (hash ^ bytes[i]) * UINT32_C(16777619);
-    return hash;
-}
-
-static uint64_t spill_hash64(const unsigned char *bytes, size_t length) {
-    uint64_t hash = UINT64_C(1469598103934665603);
-    for (size_t i = 0; i < length; i++) hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
-    return hash;
-}
-
-static void spill_put_u32(unsigned char *out, uint32_t value) {
-    for (unsigned i = 0; i < 4; i++) out[i] = (unsigned char)(value >> (i * 8));
-}
-static uint32_t spill_get_u32(const unsigned char *in) {
-    uint32_t value = 0;
-    for (unsigned i = 0; i < 4; i++) value |= (uint32_t)in[i] << (i * 8);
-    return value;
-}
-static void spill_put_u64(unsigned char *out, uint64_t value) {
-    for (unsigned i = 0; i < 8; i++) out[i] = (unsigned char)(value >> (i * 8));
-}
-static uint64_t spill_get_u64(const unsigned char *in) {
-    uint64_t value = 0;
-    for (unsigned i = 0; i < 8; i++) value |= (uint64_t)in[i] << (i * 8);
-    return value;
-}
-static void spill_put_double(unsigned char *out, double value) {
-    uint64_t bits = 0;
-    memcpy(&bits, &value, sizeof(bits));
-    spill_put_u64(out, bits);
-}
-static double spill_get_double(const unsigned char *in) {
-    uint64_t bits = spill_get_u64(in);
-    double value = 0.0;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-
-static bool spill_run_header_write(FILE *file, size_t metric_count) {
-    unsigned char header[STREAM_SPILL_HEADER_BYTES] = {'M','L','S','R',1,0,0,0,0,0,0,0,0,0,0,0};
-    spill_put_u32(header + 8, (uint32_t)metric_count);
-    spill_put_u32(header + 12, spill_hash32(header, 12));
-    return fwrite(header, 1, sizeof(header), file) == sizeof(header);
-}
-
-static bool spill_run_header_read(FILE *file, size_t metric_count) {
-    unsigned char header[STREAM_SPILL_HEADER_BYTES];
-    if (fread(header, 1, sizeof(header), file) != sizeof(header)) return false;
-    return memcmp(header, "MLSR", 4) == 0 && header[4] == 1 &&
-        header[5] == 0 && header[6] == 0 && header[7] == 0 &&
-        spill_get_u32(header + 8) == metric_count &&
-        spill_get_u32(header + 12) == spill_hash32(header, 12);
-}
-
-static bool spill_record_write(FILE *file, const StreamGroup *group,
-                               size_t metric_count, size_t *written_bytes) {
-    size_t key_length = strlen(group->key);
-    if (key_length > STREAM_MAX_GROUP_KEY_BYTES ||
-        metric_count > (SIZE_MAX - 4u - key_length) / 64u) return false;
-    size_t payload_length = 4u + key_length + metric_count * 64u;
-    unsigned char *payload = (unsigned char *)malloc(payload_length ? payload_length : 1u);
-    if (!payload) return false;
-    spill_put_u32(payload, (uint32_t)key_length);
-    memcpy(payload + 4, group->key, key_length);
-    size_t offset = 4u + key_length;
-    for (size_t i = 0; i < metric_count; i++) {
-        const StreamAccumulator *a = &group->accumulators[i];
-        spill_put_double(payload + offset, a->sum); offset += 8;
-        spill_put_double(payload + offset, a->compensation); offset += 8;
-        spill_put_double(payload + offset, a->mean); offset += 8;
-        spill_put_double(payload + offset, a->m2); offset += 8;
-        spill_put_double(payload + offset, a->minimum); offset += 8;
-        spill_put_double(payload + offset, a->maximum); offset += 8;
-        spill_put_u64(payload + offset, (uint64_t)a->count); offset += 8;
-        spill_put_u64(payload + offset, (uint64_t)group->invalid_values[i]); offset += 8;
-    }
-    unsigned char frame[12];
-    spill_put_u32(frame, (uint32_t)payload_length);
-    spill_put_u64(frame + 4, spill_hash64(payload, payload_length));
-    bool ok = fwrite(frame, 1, 4, file) == 4 &&
-              fwrite(payload, 1, payload_length, file) == payload_length &&
-              fwrite(frame + 4, 1, 8, file) == 8;
-    free(payload);
-    if (ok) *written_bytes += 12u + payload_length;
-    return ok;
-}
-
-static void spill_cursor_clear(StreamSpillRun *run) {
-    if (!run) return;
-    free(run->current.key);
-    free(run->current.accumulators);
-    free(run->current.invalid_values);
-    memset(&run->current, 0, sizeof(run->current));
-    run->active = false;
-}
-
-static MilenaStatus spill_cursor_next(StreamSpillRun *run, size_t metric_count,
-                                      MilenaError *error) {
-    spill_cursor_clear(run);
-    unsigned char length_bytes[4];
-    size_t got = fread(length_bytes, 1, 4, run->file);
-    if (got == 0 && feof(run->file)) return MILENA_OK;
-    if (got != 4) goto corrupt;
-    uint32_t payload_length = spill_get_u32(length_bytes);
-    size_t minimum = 4u + metric_count * 64u;
-    if (payload_length < minimum || payload_length > 4u + STREAM_MAX_GROUP_KEY_BYTES + STREAM_MAX_METRICS * 64u)
-        goto corrupt;
-    unsigned char *payload = (unsigned char *)malloc(payload_length);
-    if (!payload) return MILENA_ERR_MEMORY;
-    unsigned char checksum_bytes[8];
-    if (fread(payload, 1, payload_length, run->file) != payload_length ||
-        fread(checksum_bytes, 1, sizeof(checksum_bytes), run->file) != sizeof(checksum_bytes) ||
-        spill_get_u64(checksum_bytes) != spill_hash64(payload, payload_length)) {
-        free(payload);
-        goto corrupt;
-    }
-    uint32_t key_length = spill_get_u32(payload);
-    if (key_length > STREAM_MAX_GROUP_KEY_BYTES ||
-        payload_length != 4u + (size_t)key_length + metric_count * 64u ||
-        memchr(payload + 4, '\0', key_length) != NULL) {
-        free(payload);
-        goto corrupt;
-    }
-    run->current.key = (char *)malloc((size_t)key_length + 1u);
-    run->current.accumulators = (StreamAccumulator *)calloc(metric_count, sizeof(StreamAccumulator));
-    run->current.invalid_values = (size_t *)calloc(metric_count, sizeof(size_t));
-    if (!run->current.key || !run->current.accumulators || !run->current.invalid_values) {
-        free(payload); spill_cursor_clear(run); return MILENA_ERR_MEMORY;
-    }
-    memcpy(run->current.key, payload + 4, key_length);
-    run->current.key[key_length] = '\0';
-    size_t offset = 4u + key_length;
-    for (size_t i = 0; i < metric_count; i++) {
-        StreamAccumulator *a = &run->current.accumulators[i];
-        a->sum = spill_get_double(payload + offset); offset += 8;
-        a->compensation = spill_get_double(payload + offset); offset += 8;
-        a->mean = spill_get_double(payload + offset); offset += 8;
-        a->m2 = spill_get_double(payload + offset); offset += 8;
-        a->minimum = spill_get_double(payload + offset); offset += 8;
-        a->maximum = spill_get_double(payload + offset); offset += 8;
-        uint64_t count = spill_get_u64(payload + offset); offset += 8;
-        uint64_t invalid = spill_get_u64(payload + offset); offset += 8;
-#if SIZE_MAX < UINT64_MAX
-        if (count > (uint64_t)SIZE_MAX || invalid > (uint64_t)SIZE_MAX) {
-            free(payload); spill_cursor_clear(run); goto corrupt;
-        }
-#endif
-        a->count = (size_t)count;
-        run->current.invalid_values[i] = (size_t)invalid;
-    }
-    free(payload);
-    run->active = true;
-    return MILENA_OK;
-corrupt:
-    milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
-                     "Corrida temporal de agrupación truncada o con checksum inválido");
-    return MILENA_ERR_DATA;
-}
-
-static bool stream_accumulator_merge(StreamAccumulator *a, const StreamAccumulator *b) {
-    if (b->count == 0) return true;
-    if (a->count == 0) { *a = *b; return true; }
-    if (b->count > SIZE_MAX - a->count) return false;
-    size_t total = a->count + b->count;
-    double corrected = b->sum - a->compensation;
-    double next_sum = a->sum + corrected;
-    a->compensation = (next_sum - a->sum) - corrected;
-    a->sum = next_sum;
-    corrected = -b->compensation - a->compensation;
-    next_sum = a->sum + corrected;
-    a->compensation = (next_sum - a->sum) - corrected;
-    a->sum = next_sum;
-    double delta = b->mean - a->mean;
-    a->mean += delta * ((double)b->count / (double)total);
-    a->m2 += b->m2 + delta * delta * ((double)a->count * (double)b->count / (double)total);
-    a->count = total;
-    if (b->minimum < a->minimum) a->minimum = b->minimum;
-    if (b->maximum > a->maximum) a->maximum = b->maximum;
-    return true;
-}
-
-static MilenaStatus stream_spill_merge_next(StreamSpillRun *runs, size_t run_count,
-                                            size_t metric_count, StreamGroup *merged,
-                                            MilenaError *error) {
-    memset(merged, 0, sizeof(*merged));
-    size_t selected = run_count;
-    for (size_t r = 0; r < run_count; r++) {
-        if (runs[r].active && (selected == run_count ||
-            strcmp(runs[r].current.key, runs[selected].current.key) < 0)) selected = r;
-    }
-    if (selected == run_count) return MILENA_OK;
-    merged->key = milena_strdup(runs[selected].current.key);
-    merged->accumulators = (StreamAccumulator *)calloc(metric_count, sizeof(*merged->accumulators));
-    merged->invalid_values = (size_t *)calloc(metric_count, sizeof(*merged->invalid_values));
-    if (!merged->key || !merged->accumulators || !merged->invalid_values) {
-        free(merged->key); free(merged->accumulators); free(merged->invalid_values);
-        memset(merged, 0, sizeof(*merged)); return MILENA_ERR_MEMORY;
-    }
-    const char *key = merged->key;
-    for (size_t r = 0; r < run_count; r++) {
-        while (runs[r].active && strcmp(runs[r].current.key, key) == 0) {
-            for (size_t m = 0; m < metric_count; m++) {
-                if (!stream_accumulator_merge(&merged->accumulators[m], &runs[r].current.accumulators[m]) ||
-                    runs[r].current.invalid_values[m] > SIZE_MAX - merged->invalid_values[m]) {
-                    free(merged->key); free(merged->accumulators); free(merged->invalid_values);
-                    memset(merged, 0, sizeof(*merged));
-                    milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
-                                     "Desbordamiento al fusionar corridas de agrupación");
-                    return MILENA_ERR_OVERFLOW;
-                }
-                merged->invalid_values[m] += runs[r].current.invalid_values[m];
-            }
-            MilenaStatus status = spill_cursor_next(&runs[r], metric_count, error);
-            if (status != MILENA_OK) {
-                free(merged->key); free(merged->accumulators); free(merged->invalid_values);
-                memset(merged, 0, sizeof(*merged)); return status;
-            }
-        }
-    }
-    return MILENA_OK;
-}
-
-static MilenaStatus stream_spill_write_run(StreamGroup *groups, size_t group_count,
-        size_t metric_count, StreamSpillRun *runs, size_t *run_count,
-        size_t max_files, size_t max_bytes, size_t max_records,
-        size_t *spill_bytes, size_t *spill_records, MilenaError *error) {
-    if (*run_count >= max_files || group_count > max_records - *spill_records) {
-        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
-                         "Se alcanzó el límite de corridas o registros temporales");
-        return MILENA_ERR_OVERFLOW;
-    }
-    qsort(groups, group_count, sizeof(*groups), stream_group_compare);
-    FILE *file = tmpfile();
-    if (!file) {
-        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                         "No se pudo crear una corrida temporal local para agrupación");
-        return MILENA_ERR_IO;
-    }
-    size_t run_bytes = STREAM_SPILL_HEADER_BYTES;
-    bool byte_limit = run_bytes > max_bytes - *spill_bytes;
-    if (byte_limit) goto limit_or_io;
-    if (!spill_run_header_write(file, metric_count)) goto io_error;
-    for (size_t i = 0; i < group_count; i++) {
-        size_t key_length = strlen(groups[i].key);
-        size_t record_bytes = 12u + 4u + key_length + metric_count * 64u;
-        if (run_bytes > max_bytes - *spill_bytes ||
-            record_bytes > max_bytes - *spill_bytes - run_bytes) {
-            byte_limit = true;
-            goto limit_or_io;
-        }
-        if (!spill_record_write(file, &groups[i], metric_count, &run_bytes)) goto io_error;
-    }
-    if (fflush(file) != 0 || fseek(file, 0, SEEK_SET) != 0 ||
-        !spill_run_header_read(file, metric_count)) goto io_error;
-    runs[*run_count].file = file;
-    runs[*run_count].active = false;
-    (*run_count)++;
-    *spill_bytes += run_bytes;
-    *spill_records += group_count;
-    return MILENA_OK;
-limit_or_io:
-    fclose(file);
-    milena_error_set(error, byte_limit ? MILENA_ERR_OVERFLOW : MILENA_ERR_IO,
-                     0, 0, 0, byte_limit
-                     ? "Se alcanzó el límite de bytes temporales de agrupación"
-                     : "No se pudo serializar una corrida temporal de agrupación");
-    return byte_limit ? MILENA_ERR_OVERFLOW : MILENA_ERR_IO;
-io_error:
-    fclose(file);
-    milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                     "No se pudo validar la cabecera de una corrida temporal");
-    return MILENA_ERR_IO;
-}
-
-static bool stream_group_emit_start(FILE *output, const char *group_column,
-        size_t group_count, size_t group_limit, size_t rows_read, size_t rows_valid,
-        size_t malformed, size_t input_bytes, size_t observed_record_bytes,
-        size_t record_capacity, double elapsed_ms, bool spilled,
-        size_t spill_runs, size_t spill_bytes, size_t max_rows,
-        double max_elapsed_ms) {
+static bool stream_group_emit(FILE *output, const char *group_column,
+                              const MilenaStreamMetric *metrics,
+                              size_t metric_count, const StreamGroup *groups,
+                              size_t group_count, size_t group_limit,
+                              size_t rows_read, size_t rows_valid,
+                              size_t malformed, size_t input_bytes,
+                              size_t observed_record_bytes,
+                              size_t record_capacity, double elapsed_ms,
+                              size_t max_rows, double max_elapsed_ms) {
     double seconds = elapsed_ms > 0.0 ? elapsed_ms / 1000.0 : 0.0;
     double rows_per_second = seconds > 0.0 ? (double)rows_read / seconds : 0.0;
     double megabytes_per_second = seconds > 0.0 ?
@@ -856,66 +557,51 @@ static bool stream_group_emit_start(FILE *output, const char *group_column,
     if (fprintf(output,
         "{\"modo\":\"flujo_agrupado\",\"grupo\":") < 0) return false;
     milena_json_write_string(output, group_column);
-    return fprintf(output,
+    if (fprintf(output,
         ",\"filas\":%zu,\"filas_validas\":%zu,\"filas_malformadas\":%zu,"
-        "\"grupos\":%zu,\"limite_grupos\":%zu,\"spill\":%s,"
-        "\"corridas_spill\":%zu,\"bytes_spill\":%zu,\"bytes_entrada\":%zu,"
+        "\"grupos\":%zu,\"limite_grupos\":%zu,\"bytes_entrada\":%zu,"
         "\"filas_por_segundo\":%.6f,\"megabytes_por_segundo\":%.6f,"
         "\"limite_filas\":%zu,\"presupuesto_tiempo_ms\":%.3f,"
         "\"pico_registro_bytes\":%zu,\"capacidad_buffer_registro_bytes\":%zu,"
         "\"tiempo_ms\":%.3f,\"resultados\":[",
         rows_read, rows_valid, malformed, group_count, group_limit,
-        spilled ? "true" : "false", spill_runs, spill_bytes, input_bytes,
-        rows_per_second, megabytes_per_second, max_rows, max_elapsed_ms,
-        observed_record_bytes, record_capacity, elapsed_ms) >= 0;
-}
-
-static bool stream_group_emit_one(FILE *output, const MilenaStreamMetric *metrics,
-                                  size_t metric_count, const StreamGroup *group,
-                                  bool first) {
-    if (!first && fputc(',', output) == EOF) return false;
-    if (fputs("{\"clave\":", output) == EOF) return false;
-    milena_json_write_string(output, group->key);
-    if (fputs(",\"metricas\":[", output) == EOF) return false;
-    for (size_t i = 0; i < metric_count; i++) {
-        if (i && fputc(',', output) == EOF) return false;
-        char generated_name[256];
-        const char *name = metrics[i].name;
-        if (!name || !name[0]) {
-            (void)snprintf(generated_name, sizeof(generated_name), "%s_%s",
-                metrics[i].column, milena_stream_operation_name(metrics[i].operation));
-            name = generated_name;
+        input_bytes, rows_per_second, megabytes_per_second, max_rows,
+        max_elapsed_ms, observed_record_bytes, record_capacity, elapsed_ms) < 0) return false;
+    for (size_t g = 0; g < group_count; g++) {
+        if (g && fputc(',', output) == EOF) return false;
+        if (fputs("{\"clave\":", output) == EOF) return false;
+        milena_json_write_string(output, groups[g].key);
+        if (fputs(",\"metricas\":[", output) == EOF) return false;
+        for (size_t i = 0; i < metric_count; i++) {
+            if (i && fputc(',', output) == EOF) return false;
+            char generated_name[256];
+            const char *name = metrics[i].name;
+            if (!name || !name[0]) {
+                (void)snprintf(generated_name, sizeof(generated_name),
+                    "%s_%s", metrics[i].column,
+                    milena_stream_operation_name(metrics[i].operation));
+                name = generated_name;
+            }
+            double value = stream_value(&groups[g].accumulators[i],
+                                        metrics[i].operation);
+            if (fputs("{\"columna\":", output) == EOF) return false;
+            milena_json_write_string(output, metrics[i].column);
+            if (fputs(",\"operacion\":", output) == EOF) return false;
+            milena_json_write_string(output,
+                milena_stream_operation_name(metrics[i].operation));
+            if (fputs(",\"nombre\":", output) == EOF) return false;
+            milena_json_write_string(output, name);
+            if (fprintf(output,
+                ",\"valores_validos\":%zu,\"valores_invalidos\":%zu,\"valor\":",
+                groups[g].accumulators[i].count,
+                groups[g].invalid_values[i]) < 0) return false;
+            if (isnan(value)) {
+                if (fputs("null", output) == EOF) return false;
+            } else if (fprintf(output, "%.17g", value) < 0) return false;
+            if (fputc('}', output) == EOF) return false;
         }
-        double value = stream_value(&group->accumulators[i], metrics[i].operation);
-        if (fputs("{\"columna\":", output) == EOF) return false;
-        milena_json_write_string(output, metrics[i].column);
-        if (fputs(",\"operacion\":", output) == EOF) return false;
-        milena_json_write_string(output, milena_stream_operation_name(metrics[i].operation));
-        if (fputs(",\"nombre\":", output) == EOF) return false;
-        milena_json_write_string(output, name);
-        if (fprintf(output, ",\"valores_validos\":%zu,\"valores_invalidos\":%zu,\"valor\":",
-            group->accumulators[i].count, group->invalid_values[i]) < 0) return false;
-        if (isnan(value)) {
-            if (fputs("null", output) == EOF) return false;
-        } else if (fprintf(output, "%.17g", value) < 0) return false;
-        if (fputc('}', output) == EOF) return false;
+        if (fputs("]}", output) == EOF) return false;
     }
-    return fputs("]}", output) != EOF;
-}
-
-static bool stream_group_emit(FILE *output, const char *group_column,
-        const MilenaStreamMetric *metrics, size_t metric_count,
-        const StreamGroup *groups, size_t group_count, size_t group_limit,
-        size_t rows_read, size_t rows_valid, size_t malformed, size_t input_bytes,
-        size_t observed_record_bytes, size_t record_capacity, double elapsed_ms,
-        bool spilled, size_t spill_runs, size_t spill_bytes, size_t max_rows,
-        double max_elapsed_ms) {
-    if (!stream_group_emit_start(output, group_column, group_count, group_limit,
-            rows_read, rows_valid, malformed, input_bytes, observed_record_bytes,
-            record_capacity, elapsed_ms, spilled, spill_runs, spill_bytes,
-            max_rows, max_elapsed_ms)) return false;
-    for (size_t g = 0; g < group_count; g++)
-        if (!stream_group_emit_one(output, metrics, metric_count, &groups[g], g == 0)) return false;
     return fputs("]}\n", output) != EOF;
 }
 
@@ -927,9 +613,6 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     MilenaStreamOptions defaults = milena_stream_options_default();
     const MilenaStreamOptions *options = requested ? requested : &defaults;
     size_t group_limit = options->max_groups ? options->max_groups : defaults.max_groups;
-    size_t spill_byte_limit = options->max_spill_bytes ? options->max_spill_bytes : defaults.max_spill_bytes;
-    size_t spill_record_limit = options->max_spill_records ? options->max_spill_records : defaults.max_spill_records;
-    size_t spill_file_limit = options->max_spill_files ? options->max_spill_files : defaults.max_spill_files;
     if (!input_path || !output_path || !group_column || !group_column[0] ||
         !metrics || metric_count == 0 || metric_count > STREAM_MAX_METRICS ||
         options->chunk_rows == 0 ||
@@ -938,12 +621,7 @@ MilenaStatus milena_stream_csv_grouped_with_options(
         options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS ||
         options->max_elapsed_milliseconds < 0.0 ||
         !isfinite(options->max_elapsed_milliseconds) ||
-        group_limit > STREAM_HARD_MAX_GROUPS ||
-        spill_byte_limit > STREAM_HARD_SPILL_BYTES ||
-        spill_record_limit > STREAM_HARD_SPILL_RECORDS ||
-        spill_file_limit > STREAM_HARD_SPILL_FILES ||
-        (options->spill_enabled && (spill_byte_limit < STREAM_SPILL_HEADER_BYTES ||
-         spill_record_limit == 0 || spill_file_limit == 0))) {
+        group_limit > STREAM_HARD_MAX_GROUPS) {
         milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
                          "Opciones inválidas para agrupación CSV en flujo");
         return MILENA_ERR_ARGUMENT;
@@ -964,17 +642,12 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     char **headers = NULL;
     StreamGroup *groups = NULL;
     size_t *group_slots = NULL;
-    StreamSpillRun *spill_runs = NULL;
-    size_t spill_run_count = 0, spill_bytes = 0, spill_records = 0;
-    size_t total_group_count = 0;
     size_t group_slot_capacity = 0;
     size_t record_capacity = 0, record_length = 0, column_count = 0;
     size_t group_count = 0, rows_read = 0, rows_valid = 0, malformed = 0;
     size_t input_bytes = 0, bytes_read = 0, observed_record_bytes = 0;
     size_t group_state_bytes = 0;
-    size_t group_base_state_bytes = 0;
     bool resource_limit_reached = false;
-    bool spilled = false;
     MilenaStatus status = MILENA_OK;
 
     status = stream_read_record(input, &record, &record_capacity,
@@ -1070,12 +743,7 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     groups = (StreamGroup *)calloc(group_limit, sizeof(*groups));
     group_slots = (size_t *)calloc(group_slot_capacity, sizeof(*group_slots));
     if (!groups || !group_slots) { status = MILENA_ERR_MEMORY; goto grouped_finish; }
-    if (options->spill_enabled) {
-        spill_runs = (StreamSpillRun *)calloc(spill_file_limit, sizeof(*spill_runs));
-        if (!spill_runs) { status = MILENA_ERR_MEMORY; goto grouped_finish; }
-    }
-    group_base_state_bytes = group_array_bytes + slot_bytes;
-    group_state_bytes = group_base_state_bytes;
+    group_state_bytes = group_array_bytes + slot_bytes;
 
     while ((status = stream_read_record(input, &record, &record_capacity,
             options->max_record_bytes, &record_length, error)) == MILENA_OK) {
@@ -1114,40 +782,21 @@ MilenaStatus milena_stream_csv_grouped_with_options(
             ? group_count : group_slots[slot] - 1;
         if (group_index_found == group_count) {
             size_t key_length = strlen(fields[group_index]);
-            if (key_length > STREAM_MAX_GROUP_KEY_BYTES) {
-                milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
-                                 "La clave de agrupación supera los 4096 bytes");
-                status = MILENA_ERR_OVERFLOW;
-                break;
-            }
-            if (group_count >= group_limit) {
-                if (!options->spill_enabled) {
-                    milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
-                                     "Se superó el límite máximo de grupos del flujo");
-                    status = MILENA_ERR_OVERFLOW;
-                    break;
-                }
-                status = stream_spill_write_run(groups, group_count, metric_count,
-                    spill_runs, &spill_run_count, spill_file_limit,
-                    spill_byte_limit, spill_record_limit, &spill_bytes,
-                    &spill_records, error);
-                if (status != MILENA_OK) { resource_limit_reached = status == MILENA_ERR_OVERFLOW; break; }
-                spilled = true;
-                stream_groups_clear(groups, group_count);
-                group_count = 0;
-                memset(group_slots, 0, group_slot_capacity * sizeof(*group_slots));
-                group_state_bytes = group_base_state_bytes;
-                slot = (size_t)stream_group_hash(fields[group_index]) & (group_slot_capacity - 1);
-                group_index_found = 0;
-            }
             size_t accumulator_bytes = metric_count * sizeof(StreamAccumulator);
             size_t invalid_bytes = metric_count * sizeof(size_t);
-            if (accumulator_bytes > SIZE_MAX - invalid_bytes ||
+            if (key_length > STREAM_MAX_GROUP_KEY_BYTES ||
+                accumulator_bytes > SIZE_MAX - invalid_bytes ||
                 key_length + 1 > SIZE_MAX - accumulator_bytes - invalid_bytes ||
                 group_state_bytes > STREAM_GROUP_STATE_BUDGET -
                     (key_length + 1 + accumulator_bytes + invalid_bytes)) {
                 milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                                  "La agrupación alcanzó el presupuesto de estado acotado");
+                status = MILENA_ERR_OVERFLOW;
+                break;
+            }
+            if (group_count >= group_limit) {
+                milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                                 "Se superó el límite máximo de grupos del flujo");
                 status = MILENA_ERR_OVERFLOW;
                 break;
             }
@@ -1201,104 +850,24 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     }
     if (status != MILENA_OK) goto grouped_finish;
 
-    if (spilled && group_count > 0) {
-        status = stream_spill_write_run(groups, group_count, metric_count,
-            spill_runs, &spill_run_count, spill_file_limit, spill_byte_limit,
-            spill_record_limit, &spill_bytes, &spill_records, error);
-        if (status != MILENA_OK) { resource_limit_reached = status == MILENA_ERR_OVERFLOW; goto grouped_finish; }
-        stream_groups_clear(groups, group_count);
-        group_count = 0;
+    qsort(groups, group_count, sizeof(*groups), stream_group_compare);
+    FILE *output = fopen(output_path, "wb");
+    if (!output) {
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "No se pudo crear el reporte agrupado");
+        status = MILENA_ERR_IO;
+        goto grouped_finish;
     }
-    FILE *output = NULL;
     double elapsed = stream_now_ms() - started;
-    bool emitted = true;
-    if (!spilled) {
-        qsort(groups, group_count, sizeof(*groups), stream_group_compare);
-        total_group_count = group_count;
-        output = fopen(output_path, "wb");
-        if (!output) {
-            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                             "No se pudo crear el reporte agrupado");
-            status = MILENA_ERR_IO;
-            goto grouped_finish;
-        }
-        emitted = stream_group_emit(output, group_column, metrics, metric_count,
-            groups, group_count, group_limit, rows_read, rows_valid, malformed,
-            input_bytes, observed_record_bytes, record_capacity, elapsed,
-            false, 0, 0, options->max_rows, options->max_elapsed_milliseconds);
-    } else {
-        for (size_t r = 0; r < spill_run_count; r++) {
-            if (fseek(spill_runs[r].file, 0, SEEK_SET) != 0 ||
-                !spill_run_header_read(spill_runs[r].file, metric_count)) {
-                milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
-                                 "Corrida temporal con cabecera inválida");
-                status = MILENA_ERR_DATA; emitted = false; break;
-            }
-            status = spill_cursor_next(&spill_runs[r], metric_count, error);
-            if (status != MILENA_OK) { emitted = false; break; }
-        }
-        /* First merge pass validates every checksum and counts distinct groups. */
-        while (emitted) {
-            StreamGroup merged = {0};
-            status = stream_spill_merge_next(spill_runs, spill_run_count,
-                                             metric_count, &merged, error);
-            if (status != MILENA_OK) { emitted = false; break; }
-            if (!merged.key) break;
-            if (total_group_count == SIZE_MAX) {
-                stream_groups_clear(&merged, 1);
-                milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
-                                 "Desbordamiento al contar grupos fusionados");
-                status = MILENA_ERR_OVERFLOW; emitted = false; break;
-            }
-            total_group_count++;
-            free(merged.key); free(merged.accumulators); free(merged.invalid_values);
-        }
-        /* Reset readers for the output pass only after complete validation. */
-        for (size_t r = 0; emitted && r < spill_run_count; r++) {
-            spill_cursor_clear(&spill_runs[r]);
-            if (fseek(spill_runs[r].file, 0, SEEK_SET) != 0 ||
-                !spill_run_header_read(spill_runs[r].file, metric_count)) {
-                status = MILENA_ERR_DATA; emitted = false; break;
-            }
-            status = spill_cursor_next(&spill_runs[r], metric_count, error);
-            if (status != MILENA_OK) emitted = false;
-        }
-        if (emitted) {
-            output = fopen(output_path, "wb");
-            if (!output) {
-                milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                                 "No se pudo crear el reporte agrupado");
-                status = MILENA_ERR_IO;
-                emitted = false;
-            }
-        }
-        if (emitted && !stream_group_emit_start(output, group_column,
-                total_group_count, group_limit, rows_read, rows_valid, malformed,
-                input_bytes, observed_record_bytes, record_capacity, elapsed,
-                true, spill_run_count, spill_bytes, options->max_rows,
-                options->max_elapsed_milliseconds)) emitted = false;
-        bool first_group = true;
-        while (emitted) {
-            StreamGroup merged = {0};
-            status = stream_spill_merge_next(spill_runs, spill_run_count,
-                                             metric_count, &merged, error);
-            if (status != MILENA_OK) { emitted = false; break; }
-            if (!merged.key) break;
-            emitted = stream_group_emit_one(output, metrics, metric_count,
-                                             &merged, first_group);
-            first_group = false;
-            free(merged.key); free(merged.accumulators); free(merged.invalid_values);
-        }
-        if (emitted && fputs("]}\n", output) == EOF) emitted = false;
-    }
-    if (output && fclose(output) != 0) emitted = false;
+    bool emitted = stream_group_emit(output, group_column, metrics, metric_count,
+        groups, group_count, group_limit, rows_read, rows_valid, malformed,
+        input_bytes, observed_record_bytes, record_capacity, elapsed,
+        options->max_rows, options->max_elapsed_milliseconds);
+    if (fclose(output) != 0) emitted = false;
     if (!emitted) {
-        if (status == MILENA_OK) {
-            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                             "No se pudo escribir el reporte agrupado");
-            status = MILENA_ERR_IO;
-        }
-        if (output) remove(output_path);
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "No se pudo escribir el reporte agrupado");
+        status = MILENA_ERR_IO;
         goto grouped_finish;
     }
 
@@ -1324,19 +893,8 @@ grouped_finish:
         report->max_elapsed_milliseconds = options->max_elapsed_milliseconds;
         report->resource_limit_reached = resource_limit_reached;
         report->bytes_read = bytes_read;
-        report->groups = spilled ? total_group_count : group_count;
+        report->groups = group_count;
         report->max_groups = group_limit;
-        report->spilled = spilled;
-        report->spill_runs = spill_run_count;
-        report->spill_bytes = spill_bytes;
-        report->spill_records = spill_records;
-    }
-    if (spill_runs) {
-        for (size_t r = 0; r < spill_run_count; r++) {
-            spill_cursor_clear(&spill_runs[r]);
-            if (spill_runs[r].file) fclose(spill_runs[r].file);
-        }
-        free(spill_runs);
     }
     free(record);
     free(fields);
