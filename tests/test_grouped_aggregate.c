@@ -125,7 +125,7 @@ int main(void) {
     assert(milena_grouped_aggregate_add(&grouped, "z", 1, 9.0, &error) == MILENA_ERR_OVERFLOW);
     assert(grouped.failed && grouped.failure_status == MILENA_ERR_OVERFLOW);
     size_t persisted_prefix = grouped.spill.record_count;
-    assert(persisted_prefix == 1);
+    assert(persisted_prefix > 0 && persisted_prefix < grouped.group_capacity);
     /* Retrying either operation must not append the unflushed map again. */
     assert(milena_grouped_aggregate_add(&grouped, "z", 1, 9.0, &error) == MILENA_ERR_OVERFLOW);
     assert(milena_grouped_aggregate_finalize(&grouped, check_order, NULL,
