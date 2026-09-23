@@ -1696,5 +1696,12 @@ spill_finish:
         report->max_groups = policy->max_output_groups;
         report->peak_record_bytes = record_capacity;
     }
+    if (status != MILENA_OK && error && error->code == MILENA_OK) {
+        char message[128];
+        (void)snprintf(message, sizeof(message),
+                       "Fallo de spill agrupado CSV (%s) sin detalle del backend",
+                       milena_status_name(status));
+        milena_error_set(error, status, 0, 0, 0, message);
+    }
     return status;
 }
