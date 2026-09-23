@@ -11,6 +11,9 @@ make = (ROOT / "Makefile").read_text()
 manifest = (ROOT / "scripts/check_source_manifest.py").read_text()
 stream = (ROOT / "src/stream.c").read_text()
 stream_header = (ROOT / "include/stream.h").read_text()
+streaming_docs = (ROOT / "docs/STREAMING_EXECUTION.md").read_text()
+spill_contract = (ROOT / "docs/GROUPED_SPILL_CONTRACT.md").read_text()
+pr25_docs = (ROOT / "docs/PR25_BIG_DATA_FOUNDATION.md").read_text()
 
 required = [
     "ASTStreamOperation", "stream_chunk_rows", "stream_record_limit",
@@ -36,6 +39,17 @@ if "AST_AGRUPACION_POR" not in stream_runtime or "group_key->value" not in strea
     raise SystemExit("grouping key bypasses typed AST execution")
 if "milena_stream_csv_grouped_with_options" not in stream_header:
     raise SystemExit("grouped streaming API is not declared in the canonical contract")
+# Do not let docs imply a spill implementation before a typed backend, source
+# manifest entry, runtime path, and end-to-end evidence actually exist.
+if "src/spill.c" in make or "src/spill_store.c" in make:
+    raise SystemExit("planned spill module must be implemented and integrated before entering SOURCES")
+if "no hay spill-to-disk" not in streaming_docs.lower():
+    raise SystemExit("streaming docs must state that grouped spill is not implemented")
+if "no implementa spill-to-disk" not in pr25_docs.lower():
+    raise SystemExit("PR25 status must state that grouped spill is not implemented")
+for marker in ("contrato", "checksum", "límites", "limpieza", "e2e"):
+    if marker not in spill_contract.lower():
+        raise SystemExit(f"grouped spill design contract is incomplete: {marker}")
 for marker in ("STREAM_HARD_MAX_GROUPS", "STREAM_GROUP_STATE_BUDGET", "qsort(groups"):
     if marker not in stream:
         raise SystemExit(f"bounded/deterministic grouping guard missing: {marker}")

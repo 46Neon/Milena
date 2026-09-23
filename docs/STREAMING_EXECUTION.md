@@ -67,6 +67,10 @@ mantiene fuera del producto los módulos experimentales de VM/IR/GC.
   hasta el límite configurado.
 - Mantiene acumuladores de suma compensada, media, mínimo, máximo, conteo y
   varianza/desviación estándar en una pasada.
+- También admite agrupación tipada en el mismo AST/runtime. Las claves emitidas
+  se ordenan byte a byte y el número de grupos tiene un límite explícito; la
+  especificación y sintaxis están en
+  [`PR25_BIG_DATA_FOUNDATION.md`](PR25_BIG_DATA_FOUNDATION.md).
 - Rechaza columnas inexistentes, demasiadas columnas (máximo 4096), registros
   que exceden el límite y CSV con comillas sin cerrar.
 - Reporta filas leídas, filas válidas, filas malformadas, límite de registro,
@@ -75,12 +79,16 @@ mantiene fuera del producto los módulos experimentales de VM/IR/GC.
 
 ## Límites deliberados
 
-El flujo actual admite resúmenes numéricos globales. No admite mediana,
-percentiles, joins, limpieza que necesite observar todo el conjunto,
-transformaciones materializadas ni agrupaciones ilimitadas. Es preferible
-rechazar esas operaciones antes que fingir que son streaming y desbordar la
-memoria. Tampoco ofrece procesamiento distribuido, spill a disco, reanudación,
-compresión ni garantías de latencia fija.
+La agrupación mantiene su tabla de grupos en memoria, hasta el límite
+configurado (predeterminado 1.000, tope duro 100.000), con un presupuesto de
+estado adicional de 64 MiB y claves de hasta 4 KiB. Si se alcanza cualquiera
+de esos presupuestos, falla explícitamente; **no hay spill-to-disk**. El
+contrato del siguiente incremento está documentado en
+[`GROUPED_SPILL_CONTRACT.md`](GROUPED_SPILL_CONTRACT.md).
+
+No admite mediana, percentiles, joins, limpieza que necesite observar todo el
+conjunto ni transformaciones materializadas. Tampoco ofrece procesamiento
+distribuido, reanudación, compresión ni garantías de latencia fija.
 
 El tiempo en milisegundos se mide y se informa únicamente como observabilidad;
 no se promete una latencia fija. Leer un archivo grande cuesta en proporción a
