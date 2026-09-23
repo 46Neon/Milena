@@ -123,6 +123,12 @@ static MilenaStatus stream_split(char *record, char delimiter, char **fields,
                                  size_t field_capacity, size_t *field_count,
                                  MilenaError *error) {
     if (!record || !fields || !field_count) return MILENA_ERR_ARGUMENT;
+    if (*record == '\0') {
+        if (field_capacity == 0) return MILENA_ERR_OVERFLOW;
+        fields[0] = record;
+        *field_count = 1;
+        return MILENA_OK;
+    }
     char *read = record;
     char *write = record;
     size_t count = 0;
@@ -193,6 +199,15 @@ static int stream_column_index(char **headers, size_t count, const char *name) {
     return -1;
 }
 
+static bool stream_has_duplicate_header(char **headers, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        for (size_t j = i + 1; j < count; j++) {
+            if (strcmp(headers[i], headers[j]) == 0) return true;
+        }
+    }
+    return false;
+}
+
 static bool stream_parse_number(const char *text, double *value) {
     if (!text || !value) return false;
     while (*text == ' ' || *text == '\t') text++;
@@ -244,7 +259,7 @@ static void stream_free_headers(char **headers, size_t count) {
 
 MilenaStreamOptions milena_stream_options_default(void) {
     MilenaStreamOptions options = {4096u, STREAM_DEFAULT_MAX_RECORD,
-                                   STREAM_DEFAULT_MAX_COLUMNS};
+                                   STREAM_DEFAULT_MAX_COLUMNS, 0u, 0.0};
     return options;
 }
 
@@ -261,7 +276,8 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         metric_count > STREAM_MAX_METRICS || options->chunk_rows == 0 ||
         options->max_record_bytes < STREAM_INITIAL_RECORD ||
         options->max_record_bytes > STREAM_DEFAULT_MAX_RECORD ||
-        options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS)
+        options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS ||
+        options->max_elapsed_milliseconds < 0.0)
         return MILENA_ERR_ARGUMENT;
     if (report) memset(report, 0, sizeof(*report));
     if (error) milena_error_clear(error);
@@ -280,6 +296,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
     size_t column_count = 0;
     StreamAccumulator accumulators[STREAM_MAX_METRICS] = {{0}};
     size_t rows_read = 0, rows_valid = 0, malformed = 0;
+    bool resource_limit_reached = false;
     size_t bytes_read = 0;
     MilenaStatus status = stream_read_record(input, &record, &record_capacity, options->max_record_bytes, error);
     if (status != MILENA_OK) {
@@ -299,6 +316,12 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         headers[i] = milena_strdup(fields[i]);
         if (!headers[i]) { status = MILENA_ERR_MEMORY; goto finish; }
     }
+    if (stream_has_duplicate_header(headers, column_count)) {
+        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
+                         "La cabecera CSV contiene columnas duplicadas");
+        status = MILENA_ERR_DATA;
+        goto finish;
+    }
     int indexes[STREAM_MAX_METRICS];
     for (size_t i = 0; i < metric_count; i++) {
         if (!metrics[i].column || !metrics[i].column[0]) {
@@ -312,6 +335,21 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         }
     }
     while ((status = stream_read_record(input, &record, &record_capacity, options->max_record_bytes, error)) == MILENA_OK) {
+        if (options->max_rows != 0 && rows_read >= options->max_rows) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "El flujo alcanzó el máximo de filas configurado");
+            resource_limit_reached = true;
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
+        if (options->max_elapsed_milliseconds > 0.0 &&
+            stream_now_ms() - started >= options->max_elapsed_milliseconds) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "El flujo alcanzó el presupuesto de tiempo configurado");
+            resource_limit_reached = true;
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
         long position = ftell(input);
         if (position >= 0) bytes_read = (size_t)position;
         rows_read++;
@@ -379,12 +417,30 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
             report->header_columns = column_count;
             report->max_record_bytes = options->max_record_bytes;
             report->max_columns = options->max_columns;
+            report->max_rows = options->max_rows;
+            report->max_elapsed_milliseconds = options->max_elapsed_milliseconds;
+            report->resource_limit_reached = resource_limit_reached;
             report->bytes_read = bytes_read;
         }
     }
 
 finish:
     if (fclose(input) != 0 && status == MILENA_OK) status = MILENA_ERR_IO;
+    if (report && status != MILENA_OK) {
+        report->rows_read = rows_read;
+        report->rows_with_valid_values = rows_valid;
+        report->malformed_rows = malformed;
+        report->chunk_rows = options->chunk_rows;
+        report->elapsed_milliseconds = stream_now_ms() - started;
+        report->peak_record_bytes = record_capacity;
+        report->header_columns = column_count;
+        report->max_record_bytes = options->max_record_bytes;
+        report->max_columns = options->max_columns;
+        report->max_rows = options->max_rows;
+        report->max_elapsed_milliseconds = options->max_elapsed_milliseconds;
+        report->resource_limit_reached = resource_limit_reached;
+        report->bytes_read = bytes_read;
+    }
     free(record);
     free(fields);
     stream_free_headers(headers, column_count);
