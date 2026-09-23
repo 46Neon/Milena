@@ -585,6 +585,44 @@ static ASTNode *parse_stream_summary(Parser *parser) {
     return summary;
 }
 
+static ASTNode *parse_stream_group(Parser *parser) {
+    parser_advance(parser); /* consume 'agrupar' */
+    if (!parser_expect(parser, TOKEN_KW_POR,
+                       "Se esperaba 'por' después de agrupar")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA,
+                       "Se esperaba el nombre de la columna de agrupación entre comillas"))
+        return NULL;
+    ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
+    if (!group) {
+        parser_error(parser, "Sin memoria para crear la agrupación de flujo");
+        return NULL;
+    }
+    group->type_name = milena_strdup("flujo");
+    ASTNode *key = ast_create_leaf(AST_AGRUPACION_POR, parser->previous.lexeme);
+    if (!group->type_name || !key) {
+        ast_destroy(key);
+        ast_destroy(group);
+        parser_error(parser, "Sin memoria para la clave de agrupación");
+        return NULL;
+    }
+    if (!parser_add_child(parser, group, key,
+                          "Sin memoria para la clave de agrupación")) {
+        ast_destroy(group);
+        return NULL;
+    }
+    ASTNode *summary = parse_stream_summary(parser);
+    if (!summary) {
+        ast_destroy(group);
+        return NULL;
+    }
+    if (!parser_add_child(parser, group, summary,
+                          "Sin memoria para métricas agrupadas")) {
+        ast_destroy(group);
+        return NULL;
+    }
+    return group;
+}
+
 static ASTNode *parse_human_stream_load(Parser *parser) {
     if (!parser_expect(parser, TOKEN_KW_DATOS, "Se esperaba 'datos'")) return NULL;
     if (!parser_expect(parser, TOKEN_KW_DESDE, "Se esperaba 'desde' después de datos")) return NULL;
@@ -622,6 +660,15 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
             if (parser_match(parser, TOKEN_KW_MIB)) parser_advance(parser);
             else { parser_error(parser, "Se esperaba la unidad 'MiB'"); goto fail; }
             load->stream_record_limit = (size_t)(limit * 1024.0 * 1024.0);
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "grupos") == 0) {
+            parser_advance(parser);
+            if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de grupos")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El límite de grupos debe ser numérico")) goto fail;
+            double groups = parser->previous.number_value;
+            if (!isfinite(groups) || groups < 1.0 || groups > 100000.0 || floor(groups) != groups) {
+                parser_error(parser, "El límite de grupos debe ser un entero entre 1 y 100000"); goto fail;
+            }
+            load->stream_group_limit = (size_t)groups;
         } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "columnas") == 0) {
             parser_advance(parser);
             if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de columnas")) goto fail;
@@ -631,8 +678,27 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
                 parser_error(parser, "El límite de columnas debe ser un entero entre 1 y 4096"); goto fail;
             }
             load->stream_column_limit = (size_t)columns;
+        } else if (parser_match(parser, TOKEN_KW_FILAS)) {
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de filas")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El límite de filas debe ser numérico")) goto fail;
+            double rows = parser->previous.number_value;
+            if (!isfinite(rows) || rows < 1.0 || rows > 1000000000.0 || floor(rows) != rows) {
+                parser_error(parser, "El límite de filas debe ser un entero entre 1 y 1000000000"); goto fail;
+            }
+            load->stream_row_limit = (size_t)rows;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "tiempo") == 0) {
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de tiempo")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El presupuesto de tiempo debe ser numérico")) goto fail;
+            double milliseconds = parser->previous.number_value;
+            if (!isfinite(milliseconds) || milliseconds < 1.0 || milliseconds > 3600000.0 || floor(milliseconds) != milliseconds) {
+                parser_error(parser, "El límite de tiempo debe ser un entero de 1 a 3600000 ms"); goto fail;
+            }
+            if (!parser_expect_word(parser, "ms", "Se esperaba la unidad 'ms'")) goto fail;
+            load->stream_time_limit_ms = milliseconds;
         } else {
-            parser_error(parser, "Se esperaba 'registros' o 'columnas' después de 'con'"); goto fail;
+            parser_error(parser, "Se esperaba 'registros', 'grupos', 'columnas', 'filas' o 'tiempo' después de 'con'"); goto fail;
         }
     }
     if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
@@ -674,6 +740,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             ASTNode *load = parse_human_stream_load(parser);
             if (load && !parser_add_child(parser, node, load,
                                            "Sin memoria para cargar datos")) break;
+        } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
+            ASTNode *group = parse_stream_group(parser);
+            if (group && !parser_add_child(parser, node, group,
+                                           "Sin memoria para agrupación de flujo")) break;
         } else if (parser_match(parser, TOKEN_KW_RESUMIR)) {
             ASTNode *summary = parse_stream_summary(parser);
             if (summary && !parser_add_child(parser, node, summary,
