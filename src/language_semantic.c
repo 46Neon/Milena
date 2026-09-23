@@ -57,6 +57,16 @@ static MilenaStatus validate_sst_arguments(const ASTNode *node,
     return MILENA_OK;
 }
 
+static bool known_stream_operation(ASTStreamOperation operation) {
+    return operation == AST_STREAM_OPERATION_SUM ||
+           operation == AST_STREAM_OPERATION_MEAN ||
+           operation == AST_STREAM_OPERATION_MIN ||
+           operation == AST_STREAM_OPERATION_MAX ||
+           operation == AST_STREAM_OPERATION_COUNT ||
+           operation == AST_STREAM_OPERATION_VARIANCE ||
+           operation == AST_STREAM_OPERATION_STDDEV;
+}
+
 static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
     if (!node) return semantic_error(node, error, "Nodo AST nulo");
     if (node->type == AST_COMANDO_SST) {
@@ -85,6 +95,13 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
             break;
         case AST_AGRUPACION_POR:
         case AST_RESUMEN_METRICA:
+            if (node->type == AST_RESUMEN_METRICA &&
+                node->stream_operation != AST_STREAM_OPERATION_NONE &&
+                !known_stream_operation(node->stream_operation))
+                return semantic_error(node, error, "Operación de flujo no registrada en el AST canónico");
+            if (!node->value || !node->value[0])
+                return semantic_error(node, error, "Operación AST sin argumento");
+            break;
         case AST_COMANDO_COLUMNAS:
         case AST_COMANDO_DERECHA:
         case AST_COMANDO_CLAVE:
@@ -184,3 +201,4 @@ MilenaStatus milena_validate_ast(const ASTNode *program, MilenaError *error) {
         return semantic_error(program, error, "El programa no tiene una raíz AST válida");
     return validate_node(program, error);
 }
+

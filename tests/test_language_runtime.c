@@ -285,7 +285,7 @@ static int run_human_stream_pipeline(void) {
     const char *source =
         ".analisis ventas_grandes {\n"
         "  datos desde \"test-language-runtime-human-stream.csv\" procesar por lotes de 2 filas con registros de hasta 1 MiB con columnas de 8\n"
-        "  resumir { suma de \"importe\"; media de \"importe\"; contar de \"importe\"; }\n"
+        "  resumir { suma de \"importe\"; media de \"importe\"; minimo de \"importe\"; maximo de \"importe\"; contar de \"importe\"; varianza de \"importe\"; desviacion_estandar de \"importe\"; }\n"
         "  guardar resultado en \"test-language-runtime-human-stream.json\"\n"
         "}\n";
     MilenaError error;
@@ -298,6 +298,12 @@ static int run_human_stream_pipeline(void) {
     CHECK(read_file(output, text, sizeof(text)), "flujo humano: no se creó el JSON");
     CHECK(strstr(text, "\"modo\":\"flujo\"") != NULL &&
           strstr(text, "importe_suma") != NULL &&
+          strstr(text, "importe_media") != NULL &&
+          strstr(text, "importe_minimo") != NULL &&
+          strstr(text, "importe_maximo") != NULL &&
+          strstr(text, "importe_conteo") != NULL &&
+          strstr(text, "importe_varianza") != NULL &&
+          strstr(text, "importe_desviacion_estandar") != NULL &&
           strstr(text, "\"tamano_lote\":2") != NULL &&
           strstr(text, "\"limite_registro_bytes\":1048576") != NULL &&
           strstr(text, "\"limite_columnas\":8") != NULL,
@@ -316,3 +322,4 @@ int main(void) {
     puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo OK");
     return 0;
 }
+

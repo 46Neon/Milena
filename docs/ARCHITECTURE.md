@@ -93,6 +93,25 @@ ensamblador, VM, GC, módulos alternativos ni bosque, y que las capas del
 producto no incluyan sus headers. Estos módulos pueden compilarse en pruebas
 específicas, pero no pueden convertirse accidentalmente en una ruta oficial.
 
+## Flujo numérico canónico
+
+El flujo de CSV es una capacidad del lenguaje, no una utilidad C independiente.
+La forma humana canónica es `datos desde "archivo.csv"`, opcionalmente seguida
+por `procesar por lotes de N filas`, un bloque `resumir` y `guardar resultado`.
+Cada operación (`suma`, `media`, `minimo`, `maximo`, `contar`, `varianza` y
+`desviacion_estandar`) se reconoce en el lexer, se tipa en el AST, se valida
+semánticamente y se traduce una sola vez al runtime común antes de llamar al
+backend acotado. La semántica de `contar` cuenta valores numéricos válidos; las
+otras operaciones también ignoran valores inválidos por métrica y los reportan.
+
+PR25 implementa resúmenes numéricos globales de una pasada con un búfer de
+registro reutilizado y acumuladores constantes por métrica. No materializa
+las filas ni promete latencia fija, escala industrial o ejecución distribuida.
+La sintaxis `operacion:columna` queda únicamente como compatibilidad legacy y
+no es la superficie recomendada ni un segundo parser. Agrupaciones streaming,
+spill-to-disk y joins externos son fases futuras explícitas y no forman parte
+del contrato global de este flujo.
+
 ## Puerta de unificación
 
 Mientras la ruta canónica no tenga paridad con las capacidades que se desean
@@ -111,3 +130,4 @@ La fase de nuevas capacidades comienza únicamente cuando todos los componentes
 conservados tengan una ruta unificada, una API de valores común y pruebas de
 integración. A partir de ese momento, cada capacidad nueva debe ampliar el AST,
 el runtime y la suite común; nunca debe crear otro parser o ejecutor paralelo.
+
