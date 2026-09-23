@@ -9,8 +9,9 @@ paralelo.
 
 1. **Protocolo de resultados** — implementado aquí: mensaje binario versionado,
    checksum, identificador de partición, estado, validez y valor numérico.
-2. **Reducción distribuible** — consumir resultados decodificados en orden de
-   partición, rechazar duplicados y conservar equivalencia monolítica.
+2. **Reducción distribuible** — implementada en esta actualización: consumir
+   resultados decodificados fuera de orden, rechazar duplicados/faltantes y
+   conservar equivalencia monolítica.
 3. **Spill-to-disk** — serializar estados parciales y limitar espacio temporal.
 4. **Formatos masivos** — Parquet/Arrow, row groups, compresión y pushdown.
 5. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
@@ -43,3 +44,12 @@ cancelación, reducción e IPC POSIX. PR #28 comienza la interoperabilidad del
 resultado. Todavía no existe procesamiento entre máquinas, Parquet, shuffle,
 spill-to-disk ni un SLO de latencia fija. Cada una requiere implementación y
 medición propia.
+
+## Reducción implementada
+
+`partition_protocol_reduce.c` recibe mensajes de tamaño fijo en cualquier orden,
+los coloca por identificador de partición y delega la combinación numérica al
+reductor determinista del runtime. Rechaza particiones desconocidas, mensajes
+duplicados, resultados faltantes y estados de worker distintos de `MILENA_OK`.
+La prueba compara el resultado desordenado contra la suma local y cubre un
+duplicado.
