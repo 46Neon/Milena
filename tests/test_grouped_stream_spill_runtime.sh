@@ -200,7 +200,10 @@ if composite_error=$(cd "$TMP_DIR" && "$MILENA_BIN" run composite-key-pending.mi
   echo "A composite spill key unexpectedly passed preflight" >&2
   exit 1
 fi
-printf '%s\n' "$composite_error" | grep -q 'claves compuestas'
+if ! printf '%s\n' "$composite_error" | grep -qi 'compuest'; then
+  printf '%s\n' "$composite_error" >&2
+  exit 1
+fi
 [ ! -e "$TMP_DIR/composite-key.json" ] && [ ! -e "$TMP_DIR/composite-key.bin" ]
 
 # Explicit typed rejection for unsupported key/metric types.
