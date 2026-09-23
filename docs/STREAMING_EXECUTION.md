@@ -87,9 +87,12 @@ mantiene fuera del producto los módulos experimentales de VM/IR/GC.
 
 La agrupación mantiene su tabla de grupos en memoria, hasta el límite
 configurado (predeterminado 1.000, tope duro 100.000), con un presupuesto de
-estado adicional de 64 MiB y claves de hasta 4 KiB. Si se alcanza cualquiera
-de esos presupuestos, falla explícitamente; **no hay spill-to-disk**. El
-contrato del siguiente incremento está documentado en
+estado adicional de 64 MiB y claves de hasta 4 KiB. Por omisión, al alcanzar
+`max_groups` falla explícitamente. Los callers C pueden habilitar el primer
+spill local pasando `spill_enabled=true` y límites tipados en
+`MilenaStreamOptions`; el backend escribe corridas temporales checksummed y
+combina claves duplicadas en orden determinista. La sintaxis AST/runtime aún
+no expone esa política. Los límites se documentan en
 [`GROUPED_SPILL_CONTRACT.md`](GROUPED_SPILL_CONTRACT.md).
 
 No admite mediana, percentiles, joins, limpieza que necesite observar todo el

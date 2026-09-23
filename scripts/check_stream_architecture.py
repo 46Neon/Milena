@@ -39,15 +39,14 @@ if "AST_AGRUPACION_POR" not in stream_runtime or "group_key->value" not in strea
     raise SystemExit("grouping key bypasses typed AST execution")
 if "milena_stream_csv_grouped_with_options" not in stream_header:
     raise SystemExit("grouped streaming API is not declared in the canonical contract")
-# Do not let docs imply a spill implementation before a typed backend, source
-# manifest entry, runtime path, and end-to-end evidence actually exist.
+# Spill remains in the existing product backend; don't create a parallel tool.
 if "src/spill.c" in make or "src/spill_store.c" in make:
-    raise SystemExit("planned spill module must be implemented and integrated before entering SOURCES")
-if "no hay spill-to-disk" not in streaming_docs.lower():
-    raise SystemExit("streaming docs must state that grouped spill is not implemented")
-if "no implementa spill-to-disk" not in pr25_docs.lower():
-    raise SystemExit("PR25 status must state that grouped spill is not implemented")
-for marker in ("contrato", "checksum", "límites", "limpieza", "e2e"):
+    raise SystemExit("grouped spill must stay in the canonical stream backend")
+if "spill_enabled" not in stream_header or "milena_stream_csv_grouped_with_options" not in stream:
+    raise SystemExit("typed grouped spill option is not wired into the stream backend")
+if "checksum" not in spill_contract.lower() or "api tipada c" not in spill_contract.lower():
+    raise SystemExit("grouped spill contract must document the bounded typed API")
+for marker in ("contrato", "checksum", "límites", "corridas", "tmpfile"):
     if marker not in spill_contract.lower():
         raise SystemExit(f"grouped spill design contract is incomplete: {marker}")
 for marker in ("STREAM_HARD_MAX_GROUPS", "STREAM_GROUP_STATE_BUDGET", "qsort(groups"):
