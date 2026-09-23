@@ -160,7 +160,7 @@ jobs:
             artifacts/termux-runner/grouped-spill-ten-gb.json
             dist/termux/*.deb
             dist/termux/*.sha256
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Upload verified package to an existing GitHub Release
         if: inputs.release_tag != ''
