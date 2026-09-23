@@ -142,7 +142,10 @@ int main(void) {
     assert(milena_grouped_aggregate_finalize(&grouped, check_order, NULL,
         &emitted, &error) == MILENA_ERR_OVERFLOW);
     (void)milena_grouped_aggregate_close(&grouped, NULL);
-    assert(fopen(path, "rb") == NULL);
+    char run_path[256];
+    (void)snprintf(run_path, sizeof(run_path), "%s.group.p0.r0", path);
+    assert(fopen(run_path, "rb") == NULL);
+    (void)remove(path);
 
     /* Reject budgets that cannot hold even one group. */
     assert(milena_grouped_aggregate_open(path, 1, 8, 1024, &grouped, &error) == MILENA_ERR_ARGUMENT);
