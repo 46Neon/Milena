@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BINARY = ROOT / "milena"
+BINARY = Path(os.environ.get("MILENA_BIN", str(ROOT / "milena"))).resolve()
 MAX_ROWS = 1_000_000
 RUN_TIMEOUT_SECONDS = 300
 MEMORY_BUDGET_BYTES = 262_144
@@ -40,38 +40,86 @@ def write_csv(path: Path, rows: int, groups: int) -> int:
     return path.stat().st_size
 
 
+def _milena_path(path: Path | str) -> str:
+    # Milena accepts forward slashes on Windows; avoid treating path separators
+    # as string escapes in the canonical language source.
+    return str(path).replace("\\", "/")
+
+
 def render_script(csv_path: Path, report_name: str, groups: int,
                   row_limit: int, scratch: Path | None = None,
                   spill_quota: int = 0) -> str:
     spill = ""
     if scratch is not None:
-        spill = (f' #spill("{scratch}", {MEMORY_BUDGET_BYTES}, '
+        spill = (f' #spill("{_milena_path(scratch)}", {MEMORY_BUDGET_BYTES}, '
                  f'{spill_quota}, {MAX_KEY_BYTES}, {groups}, '
                  f'{MAX_REPORT_BYTES}, {MAX_RUNS})')
     return f''' .analisis benchmark_spill {{
     variable grupo texto
     variable valor numerica
-    datos desde "{csv_path}" con grupos de {groups} con filas hasta {row_limit} con tiempo hasta 3600000 ms
+    datos desde "{_milena_path(csv_path)}" con grupos de {groups} con filas hasta {row_limit} con tiempo hasta 3600000 ms
     agrupar por "grupo"{spill} resumir {{ suma de "valor"; }}
-    guardar resultado en "{report_name}"
+    guardar resultado en "{_milena_path(report_name)}"
 }}
 '''.lstrip()
 
 
 _MEASURE_CHILD = r"""
-import json, platform, subprocess, sys, time
+import ctypes, json, platform, subprocess, sys, threading, time
 try:
     import resource
 except ImportError:
     resource = None
 command = json.loads(sys.argv[1])
 started = time.perf_counter()
-try:
-    process = subprocess.run(command, text=True, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, timeout=int(sys.argv[2]))
-    elapsed = time.perf_counter() - started
+process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+windows_peak = [None]
+stop = threading.Event()
+def sample_windows_rss():
+    if platform.system() != "Windows": return
+    class ProcessMemoryCountersEx(ctypes.Structure):
+        _fields_ = [("cb", ctypes.c_ulong), ("PageFaultCount", ctypes.c_ulong),
+            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
+            ("PrivateUsage", ctypes.c_size_t)]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    psapi.GetProcessMemoryInfo.argtypes = [ctypes.c_void_p,
+        ctypes.POINTER(ProcessMemoryCountersEx), ctypes.c_ulong]
+    psapi.GetProcessMemoryInfo.restype = ctypes.c_int
+    handle = kernel32.OpenProcess(0x0400 | 0x0010, 0, process.pid)
+    if not handle: return
     try:
-        if resource is None:
+        while not stop.is_set():
+            counters = ProcessMemoryCountersEx()
+            counters.cb = ctypes.sizeof(counters)
+            if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                windows_peak[0] = max(windows_peak[0] or 0,
+                                      int(counters.PeakWorkingSetSize))
+            time.sleep(0.01)
+        counters = ProcessMemoryCountersEx()
+        counters.cb = ctypes.sizeof(counters)
+        if psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            windows_peak[0] = max(windows_peak[0] or 0,
+                                  int(counters.PeakWorkingSetSize))
+    finally:
+        kernel32.CloseHandle(handle)
+monitor = threading.Thread(target=sample_windows_rss, daemon=True)
+monitor.start()
+try:
+    stdout, stderr = process.communicate(timeout=int(sys.argv[2]))
+    elapsed = time.perf_counter() - started
+    stop.set(); monitor.join()
+    try:
+        if platform.system() == "Windows":
+            peak = windows_peak[0]
+        elif resource is None:
             peak = None
         else:
             peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
@@ -79,13 +127,15 @@ try:
             elif platform.system() == "Darwin": peak = int(peak)
             else: peak = None
     except (AttributeError, OSError):
-        peak = None
-    print(json.dumps({"returncode": process.returncode, "stdout": process.stdout,
-        "stderr": process.stderr, "elapsed": elapsed,
-        "peak_rss_bytes": peak}))
+        peak = windows_peak[0]
+    print(json.dumps({"returncode": process.returncode, "stdout": stdout,
+        "stderr": stderr, "elapsed": elapsed, "peak_rss_bytes": peak}))
 except subprocess.TimeoutExpired as error:
-    print(json.dumps({"timeout": True, "stdout": error.stdout or "",
-        "stderr": error.stderr or ""}))
+    process.kill()
+    stdout, stderr = process.communicate()
+    stop.set(); monitor.join()
+    print(json.dumps({"timeout": True, "stdout": stdout or error.stdout or "",
+        "stderr": stderr or error.stderr or ""}))
     sys.exit(124)
 """
 
@@ -242,10 +292,29 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
                 "measurements": measurements}
 
 
+def _allocated_size(path: Path, file_stat: os.stat_result) -> tuple[int, str]:
+    if hasattr(file_stat, "st_blocks") and file_stat.st_blocks > 0:
+        return file_stat.st_blocks * 512, "stat.st_blocks * 512"
+    if os.name == "nt":
+        import ctypes
+
+        high = ctypes.c_ulong(0)
+        get_size = ctypes.WinDLL("kernel32", use_last_error=True).GetCompressedFileSizeW
+        get_size.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_ulong)]
+        get_size.restype = ctypes.c_ulong
+        ctypes.set_last_error(0)
+        low = get_size(str(path), ctypes.byref(high))
+        error = ctypes.get_last_error()
+        if low == 0xFFFFFFFF and error:
+            raise OSError(error, "GetCompressedFileSizeW failed", str(path))
+        return (high.value << 32) | low, "GetCompressedFileSizeW"
+    raise OSError(f"cannot measure allocated disk size for {path}")
+
+
 def write_padded_csv(path: Path, rows: int, groups: int,
-                     minimum_bytes: int) -> tuple[int, int, int]:
-    if rows < 1 or groups < 1 or groups > 32 or groups > rows:
-        raise ValueError("large-file workload requires 1..32 groups and valid rows")
+                     minimum_bytes: int) -> tuple[int, int, int, str]:
+    if rows < 1 or groups != 1_000 or groups > rows:
+        raise ValueError("10 GB spill gate requires exactly 1,000 groups and valid rows")
     header = b"grupo,valor,relleno\n"
     first_prefix = b"G000000,1,"
     base_record_bytes = len(first_prefix) + 1  # plus line feed
@@ -271,15 +340,15 @@ def write_padded_csv(path: Path, rows: int, groups: int,
         os.fsync(stream.fileno())
     file_stat = path.stat()
     actual_bytes = file_stat.st_size
-    allocated_bytes = getattr(file_stat, "st_blocks", 0) * 512
+    allocated_bytes, allocation_method = _allocated_size(path, file_stat)
     if actual_bytes < minimum_bytes:
         raise AssertionError(
             f"generated CSV is only {actual_bytes} bytes; need {minimum_bytes}")
-    if allocated_bytes and allocated_bytes < minimum_bytes * 0.9:
+    if allocated_bytes < minimum_bytes * 0.9:
         raise AssertionError(
             f"CSV allocation looks sparse: {allocated_bytes} allocated bytes "
             f"for {actual_bytes} logical bytes")
-    return actual_bytes, padding_bytes, allocated_bytes or actual_bytes
+    return actual_bytes, padding_bytes, allocated_bytes, allocation_method
 
 
 def run_large_file_case(minimum_bytes: int, rows: int, groups: int,
@@ -294,7 +363,7 @@ def run_large_file_case(minimum_bytes: int, rows: int, groups: int,
                 f"need at least {minimum_bytes + 512 * 1024 * 1024} free bytes; "
                 f"found {free_before}")
         csv_path = root / "ten-gib.csv"
-        input_bytes, padding_bytes, allocated_bytes = write_padded_csv(
+        input_bytes, padding_bytes, allocated_bytes, allocation_method = write_padded_csv(
             csv_path, rows, groups, minimum_bytes)
         free_after_generation = shutil.disk_usage(root).free
         quota = min(4_294_967_296,
@@ -331,8 +400,12 @@ def run_large_file_case(minimum_bytes: int, rows: int, groups: int,
             spill_values = values(spill_report, "flujo_agrupado_spill", groups)
             if memory_values != spill_values:
                 raise AssertionError("large-file memory/spill outputs differ")
-            if spill_path.exists():
-                raise AssertionError("large-file scratch file remains after success")
+            if scratch_peak <= 0:
+                raise AssertionError(
+                    "large-file spill run produced no sampled scratch bytes; "
+                    "the test did not prove an actual disk spill")
+            if _scratch_size(spill_path) != 0:
+                raise AssertionError("large-file spill scratch files remain after success")
             measurements.append({
                 "repetition": repetition + 1,
                 "memory_elapsed_seconds": memory_seconds,
@@ -348,6 +421,7 @@ def run_large_file_case(minimum_bytes: int, rows: int, groups: int,
             "minimum_file_bytes": minimum_bytes,
             "actual_file_bytes": input_bytes,
             "allocated_file_bytes": allocated_bytes,
+            "allocation_measurement": allocation_method,
             "rows": rows,
             "groups": groups,
             "padding_bytes_per_row": padding_bytes,
@@ -357,8 +431,8 @@ def run_large_file_case(minimum_bytes: int, rows: int, groups: int,
             "free_disk_bytes_after_generation": free_after_generation,
             "measurements": measurements,
             "limitations": [
-                "Synthetic deterministic CSV with a repeated padding column, one million rows and low group cardinality; this proves byte-volume streaming only for this workload.",
-                "RSS is per-process peak RSS, not global/cgroup RSS or a system memory cap; sampled scratch is disk usage, not RAM.",
+                "Synthetic deterministic CSV with a repeated padding column, one million rows and exactly 1,000 groups; the configured 262,144-byte reducer budget forces flushes, but this does not prove arbitrary high-cardinality, global-RSS, or distributed scale.",
+                "RSS is per-process peak RSS, not global/cgroup RSS or a system memory cap; sampled scratch is logical spill-file bytes on disk, not RAM.",
             ],
         }
 
@@ -371,7 +445,7 @@ def main() -> int:
     parser.add_argument("--large-file-bytes", type=int, default=0,
                         help="also validate a generated CSV of at least 10 GB")
     parser.add_argument("--large-file-rows", type=int, default=1_000_000)
-    parser.add_argument("--large-file-groups", type=int, default=4)
+    parser.add_argument("--large-file-groups", type=int, default=1_000)
     parser.add_argument("--large-file-repetitions", type=int, default=1)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -385,8 +459,8 @@ def main() -> int:
         raise SystemExit("--large-file-bytes must be at least 10,000,000,000")
     if not 1 <= args.large_file_rows <= MAX_ROWS:
         raise SystemExit(f"--large-file-rows must be between 1 and {MAX_ROWS}")
-    if not 1 <= args.large_file_groups <= 32 or args.large_file_groups > args.large_file_rows:
-        raise SystemExit("--large-file-groups must be between 1 and 32 and not exceed rows")
+    if args.large_file_groups != 1_000 or args.large_file_groups > args.large_file_rows:
+        raise SystemExit("--large-file-groups must be exactly 1000 and not exceed rows; fewer groups may not force reducer flushes")
     if not 1 <= args.large_file_repetitions <= 5:
         raise SystemExit("--large-file-repetitions must be between 1 and 5")
     cases = [("small", 100, 4), ("medium", 10_000, 32)]
@@ -408,14 +482,15 @@ def main() -> int:
                         "commit": os.environ.get("GITHUB_SHA", "unknown")},
         "methodology": ("Deterministic generated CSV; canonical lexer-parser-AST-"
                         "semantic-runtime-stream backend; compare in-memory and "
-                        "spill output values, wall-clock time, per-process child "
-                        "peak RSS where resource.getrusage is supported, and "
-                        "sample scratch bytes every 10 ms during spill runs."),
+                        "spill output values, wall-clock time, per-process peak RSS "
+                        "(Windows peak working set or resource.getrusage where "
+                        "available), and sample scratch bytes every 10 ms during "
+                        "spill runs."),
         "limitations": [
-            "Peak RSS is per-process child ru_maxrss (or null on unsupported platforms), not aggregate cgroup/system RSS or a memory guarantee.",
-            "Scratch peak is a 10 ms sampled sum of files prefixed by the configured path; short-lived peaks can be missed and final scratch is cleaned up.",
+            "Peak RSS is per-process child working set on Windows or ru_maxrss on Linux/macOS (null elsewhere), not aggregate cgroup/system RSS or a memory guarantee.",
+            "Scratch peak is a 10 ms sampled sum of logical file sizes for files prefixed by the configured path; short-lived peaks can be missed and final scratch is cleaned up. Scratch bytes are on disk, not RAM.",
             "No SLO or performance guarantee; results apply only to the recorded environment and workload.",
-            "The optional >=10 GB gate is a generated CSV with a repeated padding field, one million rows and low group cardinality; it proves input-byte streaming only for this workload, not high-cardinality or distributed scale.",
+            "The optional >=10 GB gate is a generated CSV with a repeated padding field, one million rows and exactly 1,000 groups; it checks full input consumption, output parity and sampled nonzero spill, but not arbitrary high-cardinality or distributed scale.",
             "No CSV-aware partition execution, Arrow/Parquet, cloud or distributed execution is measured.",
         ],
     }

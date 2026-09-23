@@ -1,4 +1,14 @@
+#if !defined(_WIN32)
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
+
 #include "grouped_aggregate.h"
+#include "file_position.h"
 
 #define GROUP_RECORD_FIXED (4u + MILENA_AGGREGATE_WIRE_SIZE)
 
@@ -376,9 +386,9 @@ static char *sorted_run_path(const char *base, size_t pass, size_t run) {
 static bool file_size(const char *path, size_t *bytes) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;
-    bool ok = fseek(file, 0, SEEK_END) == 0;
-    long end = ok ? ftell(file) : -1;
-    if (end < 0) ok = false;
+    bool ok = milena_file_seek64(file, 0, SEEK_END) == 0;
+    int64_t end = ok ? milena_file_tell64(file) : -1;
+    if (end < 0 || (uint64_t)end > SIZE_MAX) ok = false;
     if (fclose(file) != 0) ok = false;
     if (ok) *bytes = (size_t)end;
     return ok;

@@ -1,8 +1,14 @@
-#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#if !defined(_WIN32)
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
+#ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
 #endif
 
 #include "spill_store.h"
+#include "file_position.h"
 
 #include <errno.h>
 #include <stdint.h>
@@ -175,19 +181,23 @@ MilenaStatus milena_spill_store_recover(const char *path, size_t quota_bytes,
         spill_error(error, MILENA_ERR_IO, "No se pudo abrir el spill para recuperar");
         return MILENA_ERR_IO;
     }
-    if (fseek(input, 0, SEEK_END) != 0) {
+    if (milena_file_seek64(input, 0, SEEK_END) != 0) {
         fclose(input);
         spill_error(error, MILENA_ERR_IO, "No se pudo medir el spill");
         return MILENA_ERR_IO;
     }
-    long end = ftell(input);
-    if (end < 0 || (uintmax_t)end > (uintmax_t)SIZE_MAX) {
+    int64_t end = milena_file_tell64(input);
+    if (end < 0 || (uint64_t)end > SIZE_MAX) {
         fclose(input);
         spill_error(error, MILENA_ERR_OVERFLOW, "El archivo spill es demasiado grande");
         return MILENA_ERR_OVERFLOW;
     }
     size_t total = (size_t)end;
-    rewind(input);
+    if (milena_file_seek64(input, 0, SEEK_SET) != 0) {
+        fclose(input);
+        spill_error(error, MILENA_ERR_IO, "No se pudo rebobinar el spill");
+        return MILENA_ERR_IO;
+    }
     size_t valid = 0, records = 0;
     bool bad_tail = false;
     MilenaStatus status = scan_store(input, quota_bytes, max_record_bytes,

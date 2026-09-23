@@ -1,4 +1,14 @@
+#if !defined(_WIN32)
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
+
 #include "external_sort.h"
+#include "file_position.h"
 
 #include <float.h>
 
@@ -27,9 +37,9 @@ static char *run_path(const char *prefix, size_t pass, size_t run) {
 }
 static bool disk_size(const char *path, size_t *size) {
     FILE *file = fopen(path, "rb"); if (!file) return false;
-    bool ok = fseek(file, 0, SEEK_END) == 0;
-    long end = ok ? ftell(file) : -1;
-    if (end < 0) ok = false;
+    bool ok = milena_file_seek64(file, 0, SEEK_END) == 0;
+    int64_t end = ok ? milena_file_tell64(file) : -1;
+    if (end < 0 || (uint64_t)end > SIZE_MAX) ok = false;
     if (fclose(file) != 0) ok = false;
     if (ok) *size = (size_t)end;
     return ok;

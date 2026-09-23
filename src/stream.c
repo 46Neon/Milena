@@ -1,7 +1,20 @@
+#if !defined(_WIN32)
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
+
 #include "stream.h"
 #include "grouped_aggregate.h"
 
+#include "file_position.h"
+
+#include <errno.h>
 #include <float.h>
+#include <stdint.h>
 #include <time.h>
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -466,8 +479,14 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
     }
     while ((status = stream_read_record(input, &record, &record_capacity,
             options->max_record_bytes, &record_length, error)) == MILENA_OK) {
-        long position = ftell(input);
-        if (position >= 0) bytes_read = (size_t)position;
+        size_t position = 0;
+        if (!milena_file_position_size(input, &position)) {
+            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                             "No se pudo medir la posición del CSV en 64 bits");
+            status = MILENA_ERR_IO;
+            break;
+        }
+        bytes_read = position;
         if (options->max_rows != 0 && rows_read >= options->max_rows) {
             milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                              "El flujo alcanzó el máximo de filas configurado");
@@ -509,10 +528,12 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         else malformed++;
     }
     if (status == MILENA_ERR_IO && feof(input)) status = MILENA_OK;
-    long measured_bytes = ftell(input);
-    if (measured_bytes >= 0) {
-        input_bytes = (size_t)measured_bytes;
-        bytes_read = (size_t)measured_bytes;
+    if (!milena_file_position_size(input, &input_bytes)) {
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "No se pudo medir el tamaño del CSV en 64 bits");
+        status = MILENA_ERR_IO;
+    } else {
+        bytes_read = input_bytes;
     }
     if (status == MILENA_OK && options->max_elapsed_milliseconds > 0.0 &&
         stream_now_ms() - started >= options->max_elapsed_milliseconds) {
@@ -874,8 +895,14 @@ MilenaStatus milena_stream_csv_grouped_with_options(
 
     while ((status = stream_read_record(input, &record, &record_capacity,
             options->max_record_bytes, &record_length, error)) == MILENA_OK) {
-        long position = ftell(input);
-        if (position >= 0) bytes_read = (size_t)position;
+        size_t position = 0;
+        if (!milena_file_position_size(input, &position)) {
+            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                             "No se pudo medir la posición del CSV en 64 bits");
+            status = MILENA_ERR_IO;
+            break;
+        }
+        bytes_read = position;
         if ((options->max_rows != 0 && rows_read >= options->max_rows) ||
             (options->max_elapsed_milliseconds > 0.0 &&
              stream_now_ms() - started >= options->max_elapsed_milliseconds)) {
@@ -996,9 +1023,12 @@ MilenaStatus milena_stream_csv_grouped_with_options(
         if (row_malformed) malformed++;
     }
     if (status == MILENA_ERR_IO && feof(input)) status = MILENA_OK;
-    {
-        long position = ftell(input);
-        if (position >= 0) input_bytes = bytes_read = (size_t)position;
+    if (!milena_file_position_size(input, &input_bytes)) {
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "No se pudo medir el tamaño del CSV en 64 bits");
+        status = MILENA_ERR_IO;
+    } else {
+        bytes_read = input_bytes;
     }
     if (status == MILENA_OK && options->max_elapsed_milliseconds > 0.0 &&
         stream_now_ms() - started >= options->max_elapsed_milliseconds) {
@@ -1032,8 +1062,14 @@ MilenaStatus milena_stream_csv_grouped_with_options(
 
 grouped_finish:
     if (input) {
-        long position = ftell(input);
-        if (position >= 0) input_bytes = bytes_read = (size_t)position;
+        size_t position = 0;
+        if (milena_file_position_size(input, &position)) {
+            input_bytes = bytes_read = position;
+        } else if (status == MILENA_OK) {
+            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                             "No se pudo medir la posición final del CSV en 64 bits");
+            status = MILENA_ERR_IO;
+        }
         if (fclose(input) != 0 && status == MILENA_OK) status = MILENA_ERR_IO;
     }
     if (report) {
@@ -1197,11 +1233,12 @@ static MilenaStatus stream_spill_emit_group(
     ADD_SPILL_LITERAL("}]}");
 #undef ADD_SPILL_LITERAL
 
-    long position = ftell(emitter->output);
+    size_t position = 0;
     size_t comma = emitter->first ? 0u : 1u;
-    if (position < 0 || (size_t)position > emitter->max_output_bytes ||
-        comma > emitter->max_output_bytes - (size_t)position ||
-        encoded > emitter->max_output_bytes - (size_t)position - comma) {
+    if (!milena_file_position_size(emitter->output, &position) ||
+        position > emitter->max_output_bytes ||
+        comma > emitter->max_output_bytes - position ||
+        encoded > emitter->max_output_bytes - position - comma) {
         free(key);
         milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                          "El reporte spill superaría el límite de bytes de salida");
@@ -1390,8 +1427,14 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
 
     while ((status = stream_read_record(input, &record, &record_capacity,
             options->max_record_bytes, &record_length, error)) == MILENA_OK) {
-        long position = ftell(input);
-        if (position >= 0) bytes_read = (size_t)position;
+        size_t position = 0;
+        if (!milena_file_position_size(input, &position)) {
+            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                             "No se pudo medir la posición del CSV en 64 bits");
+            status = MILENA_ERR_IO;
+            break;
+        }
+        bytes_read = position;
         if ((options->max_rows && rows_read >= options->max_rows) ||
             (options->max_elapsed_milliseconds > 0.0 &&
              stream_now_ms() - started >= options->max_elapsed_milliseconds)) {
@@ -1456,9 +1499,12 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         if (status != MILENA_OK) break;
     }
     if (status == MILENA_ERR_IO && feof(input)) status = MILENA_OK;
-    {
-        long position = ftell(input);
-        if (position >= 0) input_bytes = bytes_read = (size_t)position;
+    if (!milena_file_position_size(input, &input_bytes)) {
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "No se pudo medir el tamaño del CSV en 64 bits");
+        status = MILENA_ERR_IO;
+    } else {
+        bytes_read = input_bytes;
     }
     if (input) {
         if (fclose(input) != 0) {
@@ -1504,7 +1550,7 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         policy->spill_quota_bytes, output_byte_limit) < 0) {
         status = MILENA_ERR_IO; goto spill_finish;
     }
-    long groups_position = ftell(staged);
+    int64_t groups_position = milena_file_tell64(staged);
     if (groups_position < 0 || fprintf(staged,
         "%20s,\"limite_grupos\":%zu,\"filas_por_segundo\":%.6f,"
         "\"megabytes_por_segundo\":%.6f,\"tiempo_ms\":%.3f,"
@@ -1514,8 +1560,8 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         elapsed) < 0) {
         status = MILENA_ERR_IO; goto spill_finish;
     }
-    long prefix_end = ftell(staged);
-    if (prefix_end < 0 || (size_t)prefix_end > output_byte_limit) {
+    int64_t prefix_end = milena_file_tell64(staged);
+    if (prefix_end < 0 || (uint64_t)prefix_end > output_byte_limit) {
         milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                          "El encabezado supera el límite de bytes del reporte spill");
         status = MILENA_ERR_OVERFLOW; goto spill_finish;
@@ -1533,16 +1579,23 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         resource_limit_reached = true;
         status = MILENA_ERR_OVERFLOW; goto spill_finish;
     }
-    long report_end = ftell(staged);
-    if (report_end < 0 || fseek(staged, groups_position, SEEK_SET) != 0 ||
+    int64_t report_end = milena_file_tell64(staged);
+    if (report_end < 0 || milena_file_seek64(staged, groups_position, SEEK_SET) != 0 ||
         fprintf(staged, "%20zu", groups_emitted) < 0 ||
-        fseek(staged, report_end, SEEK_SET) != 0) {
+        milena_file_seek64(staged, report_end, SEEK_SET) != 0) {
         milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
                          "No se pudo completar el conteo de grupos del reporte");
         status = MILENA_ERR_IO; goto spill_finish;
     }
-    if (report_end < 0 || (size_t)report_end > output_byte_limit ||
-        output_byte_limit - (size_t)report_end < 3u ||
+    size_t report_end_size = 0;
+    if (report_end < 0 || (uint64_t)report_end > SIZE_MAX) {
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "La posición final del reporte no cabe en size_t");
+        status = MILENA_ERR_OVERFLOW; goto spill_finish;
+    }
+    report_end_size = (size_t)report_end;
+    if (report_end_size > output_byte_limit ||
+        output_byte_limit - report_end_size < 3u ||
         fputs("]}\n", staged) == EOF || fflush(staged) != 0) {
         milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
                          "No se pudo completar el reporte spill agrupado");
@@ -1591,8 +1644,14 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     }
 spill_finish:
     if (input) {
-        long position = ftell(input);
-        if (position >= 0) input_bytes = bytes_read = (size_t)position;
+        size_t position = 0;
+        if (milena_file_position_size(input, &position)) {
+            input_bytes = bytes_read = position;
+        } else if (status == MILENA_OK) {
+            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                             "No se pudo medir la posición final del CSV en 64 bits");
+            status = MILENA_ERR_IO;
+        }
         if (fclose(input) != 0 && status == MILENA_OK) status = MILENA_ERR_IO;
     }
     if (staged) fclose(staged);
