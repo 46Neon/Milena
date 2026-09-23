@@ -12,7 +12,7 @@ lenguaje de scripts, parser, CLI de datos ni runtime paralelo.
 PR #29 valida tres ejecuciones del lenguaje sobre un CSV determinista de
 exactamente 1.000.000 de filas: resumen global, agrupación streaming de dos
 claves y agrupación streaming con spill de 128 claves y tres métricas (suma,
-media y contar), todas por `milena run` y `.analisis`. Se comprueban resultados exactos, errores de datos, conteos,
+media y contar sobre la misma columna numérica), todas por `milena run` y `.analisis`. Se comprueban resultados exactos, errores de datos, conteos,
 límites declarados y limpieza; la corrida spill se repite para verificar
 salida semántica determinista. Se observa tiempo, bytes, buffers y RSS pico
 cuando el sistema lo permite. El resultado prueba únicamente estas operaciones,
@@ -29,8 +29,14 @@ canónico delega a `milena_stream_csv_grouped_spill_with_options` del backend
 existente, reutilizando su lector CSV, reducer versionado, ordenamiento/fusión externos,
 cuotas y publicación transaccional; no hay copia paralela de almacenamiento o
 reducer. La identidad de métrica se añade a la clave opaca del reducer único.
-La política de AST incluye memoria, scratch, clave codificada, grupos, bytes del
-reporte y máximo de runs. El adaptador tabular existente también se conserva.
+Tras ordenar cada run, sus estados parciales repetidos para una misma clave
+compuesta (grupo, métrica) se combinan antes de la fusión externa por pares; así,
+incluso cuando los vaciados del mapa repiten claves, el visitor recibe cada
+métrica una sola vez por grupo y conserva el orden determinista de grupos y el
+orden declarado de métricas. La fusión preserva el estado tipado completo,
+incluidos válidos, nulos e inválidos. La política de AST incluye memoria,
+scratch, clave codificada, grupos, bytes del reporte y máximo de runs. El
+adaptador tabular existente también se conserva.
 
 PR #28 sigue abierto y no forma parte de `main`; PR #29 conserva como base el
 snapshot fijado indicado arriba. La CI de PR #29 valida este corte sin cambiar
@@ -92,11 +98,17 @@ un planner general de operadores, esquema, costos, filtros o formatos.
 - Implementado en esta actualización: el plan físico canónico de `.analisis`
   conecta la agrupación CSV con el API de spill existente; usa una clave texto y
   hasta 64 métricas suma/media/mínimo/máximo/contar declaradas y tipadas, con
-  identidad de métrica incluida en la clave opaca del mismo reductor. Respeta
-  memoria, scratch, longitud de clave codificada, cardinalidad de grupos de
-  salida, bytes del reporte y máximo de runs; no crea un reductor por métrica
-  ni materializa filas de entrada. No duplica almacén, serialización, estados
-  mergeables, sort ni reducer.
+  identidad de métrica incluida en la clave opaca del mismo reductor. Tras cada
+  ordenamiento de run, los estados parciales repetidos de claves compuestas se
+  combinan antes de la fusión externa acotada; la salida mantiene un único
+  resultado por grupo y la secuencia declarada de métricas aunque el mapa vacíe
+  varias veces claves repetidas. Se validan suma/media/contar sobre la misma
+  columna numérica en el workload de un millón de filas y una regresión pequeña
+  que fuerza múltiples vaciados/runs y comprueba orden y conteos exactos de
+  válidos, nulos e inválidos. Respeta memoria, scratch, longitud de clave
+  codificada, cardinalidad de grupos de salida, bytes del reporte y máximo de
+  runs; no crea un reductor por métrica ni materializa filas de entrada. No
+  duplica almacén, serialización, estados mergeables, sort ni reducer.
 - Sigue pendiente ampliar fuentes/operadores y los contratos de key/métricas;
   mantener límites de lectura y fallos explícitos en cada backend.
 - Aceptación continua: agregación global/agrupada y ejecución por lotes con
