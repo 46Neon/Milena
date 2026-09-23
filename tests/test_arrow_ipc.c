@@ -1,8 +1,10 @@
 #include "arrow_ipc.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -45,6 +47,62 @@ static void test_input_release(struct ArrowIpcInputStream *stream) {
     stream->private_data = NULL;
 }
 
+struct TestBodyAllocationBudget {
+    size_t byte_limit;
+    size_t bytes_live;
+    size_t peak_bytes_live;
+    size_t max_request;
+    size_t allocation_calls;
+    size_t rejected_requests;
+};
+
+static uint8_t *test_body_budget_reallocate(
+    struct ArrowBufferAllocator *allocator, uint8_t *ptr,
+    int64_t old_size, int64_t new_size) {
+    struct TestBodyAllocationBudget *budget =
+        (struct TestBodyAllocationBudget *)allocator->private_data;
+    if (!budget || old_size < 0 || new_size < 0 ||
+        (uint64_t)old_size > budget->bytes_live ||
+        (uint64_t)new_size > budget->byte_limit ||
+        (size_t)new_size > budget->byte_limit -
+                               (budget->bytes_live - (size_t)old_size)) {
+        if (budget) budget->rejected_requests++;
+        return NULL;
+    }
+
+    uint8_t *result = NULL;
+    if (new_size > 0) {
+        result = (uint8_t *)malloc((size_t)new_size);
+        if (!result) return NULL;
+        if (ptr && old_size > 0) {
+            size_t copy_bytes = (size_t)old_size;
+            if (copy_bytes > (size_t)new_size) copy_bytes = (size_t)new_size;
+            memcpy(result, ptr, copy_bytes);
+        }
+    }
+    free(ptr);
+    budget->bytes_live -= (size_t)old_size;
+    budget->bytes_live += (size_t)new_size;
+    if ((size_t)new_size > budget->max_request)
+        budget->max_request = (size_t)new_size;
+    if (budget->bytes_live > budget->peak_bytes_live)
+        budget->peak_bytes_live = budget->bytes_live;
+    if (new_size > 0) budget->allocation_calls++;
+    return result;
+}
+
+static void test_body_budget_free(struct ArrowBufferAllocator *allocator,
+                                  uint8_t *ptr, int64_t size) {
+    struct TestBodyAllocationBudget *budget =
+        (struct TestBodyAllocationBudget *)allocator->private_data;
+    if (!ptr) return;
+    free(ptr);
+    if (budget && size >= 0 && (uint64_t)size <= budget->bytes_live)
+        budget->bytes_live -= (size_t)size;
+    else if (budget)
+        budget->bytes_live = 0;
+}
+
 static bool write_bytes(const char *path, const void *bytes, size_t size) {
     FILE *file = fopen(path, "wb");
     if (!file) return false;
@@ -53,9 +111,150 @@ static bool write_bytes(const char *path, const void *bytes, size_t size) {
     return ok;
 }
 
+static uint16_t test_read_u16_le(const unsigned char *data) {
+    return (uint16_t)((uint16_t)data[0] | (uint16_t)((uint16_t)data[1] << 8));
+}
+
+static uint32_t test_read_u32_le(const unsigned char *data) {
+    return (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+           ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+}
+
+static uint64_t test_read_u64_le(const unsigned char *data) {
+    uint64_t value = 0;
+    for (unsigned int i = 0; i < 8u; ++i)
+        value |= (uint64_t)data[i] << (i * 8u);
+    return value;
+}
+
+static void test_write_u64_le(unsigned char *data, uint64_t value) {
+    for (unsigned int i = 0; i < 8u; ++i)
+        data[i] = (unsigned char)(value >> (i * 8u));
+}
+
+/* Copy a valid fixture but change only the first RecordBatch Message.bodyLength.
+ * Its physical body remains unchanged, making it a hostile declaration that
+ * must be rejected before body storage is allocated or any body bytes are read. */
+static bool make_oversized_declared_batch(const char *source,
+                                          const char *destination,
+                                          uint64_t declared_body_size,
+                                          size_t *body_offset_out) {
+    FILE *file = fopen(source, "rb");
+    if (!file) return false;
+    if (fseek(file, 0, SEEK_END) != 0) { fclose(file); return false; }
+    long file_size_long = ftell(file);
+    if (file_size_long <= 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return false;
+    }
+    size_t file_size = (size_t)file_size_long;
+    unsigned char *bytes = (unsigned char *)malloc(file_size);
+    if (!bytes) { fclose(file); return false; }
+    bool ok = fread(bytes, 1u, file_size, file) == file_size;
+    if (fclose(file) != 0) ok = false;
+
+    size_t offset = 0;
+    bool mutated = false;
+    while (ok && offset <= file_size && file_size - offset >= 8u) {
+        uint32_t continuation = test_read_u32_le(bytes + offset);
+        uint32_t metadata_size = test_read_u32_le(bytes + offset + 4u);
+        offset += 8u;
+        if (continuation != UINT32_MAX || metadata_size == 0u ||
+            (size_t)metadata_size > file_size - offset) break;
+        unsigned char *metadata = bytes + offset;
+        size_t metadata_length = (size_t)metadata_size;
+        uint32_t root = test_read_u32_le(metadata);
+        if ((size_t)root > metadata_length || metadata_length - (size_t)root < 4u)
+            break;
+        size_t table = (size_t)root;
+        uint32_t raw_delta = test_read_u32_le(metadata + table);
+        int64_t vtable_delta = raw_delta <= INT32_MAX ? (int64_t)raw_delta :
+            (int64_t)raw_delta - INT64_C(4294967296);
+        size_t vtable;
+        if (vtable_delta > 0) {
+            if ((uint64_t)vtable_delta > table) break;
+            vtable = table - (size_t)vtable_delta;
+        } else if (vtable_delta < 0) {
+            uint64_t forward_delta = (uint64_t)(-vtable_delta);
+            if (forward_delta > metadata_length - table) break;
+            vtable = table + (size_t)forward_delta;
+        } else {
+            break;
+        }
+        if (metadata_length - vtable < 8u) break;
+        uint16_t vtable_size = test_read_u16_le(metadata + vtable);
+        if (vtable_size < 8u || vtable_size > metadata_length - vtable) break;
+        uint16_t type_offset = test_read_u16_le(metadata + vtable + 6u);
+        uint16_t body_offset = vtable_size >= 12u ?
+            test_read_u16_le(metadata + vtable + 10u) : 0u;
+        if (type_offset != 0u && body_offset != 0u &&
+            (size_t)type_offset < metadata_length - table &&
+            (size_t)body_offset <= metadata_length - table &&
+            metadata_length - table - (size_t)body_offset >= 8u &&
+            metadata[table + type_offset] ==
+                (unsigned char)NANOARROW_IPC_MESSAGE_TYPE_RECORD_BATCH) {
+            test_write_u64_le(metadata + table + body_offset, declared_body_size);
+            if (body_offset_out) *body_offset_out = offset + metadata_length;
+            mutated = true;
+            break;
+        }
+        if (body_offset != 0u && (size_t)body_offset <= metadata_length - table &&
+            metadata_length - table - (size_t)body_offset >= 8u) {
+            uint64_t body_size = test_read_u64_le(metadata + table + body_offset);
+            if (body_size > (uint64_t)(file_size - offset - metadata_length)) break;
+            offset += (size_t)body_size;
+        }
+        offset += metadata_length;
+    }
+
+    if (ok && mutated) ok = write_bytes(destination, bytes, file_size);
+    else ok = false;
+    free(bytes);
+    return ok;
+}
+
 static bool write_sentinel(const char *path) {
     static const char sentinel[] = "existing-destination-must-survive";
     return write_bytes(path, sentinel, sizeof(sentinel) - 1u);
+}
+
+static bool no_staging_files_for(const char *path) {
+    const char *slash = strrchr(path, '/');
+    const char *backslash = strrchr(path, '\\');
+    if (!slash || (backslash && backslash > slash)) slash = backslash;
+    size_t directory_length = slash ? (size_t)(slash - path) : 1u;
+    const char *directory_name = slash ? path : ".";
+    const char *base_name = slash ? slash + 1 : path;
+    char *directory = (char *)malloc(directory_length + 2u);
+    size_t prefix_length = strlen(base_name) + sizeof(".part.");
+    char *prefix = (char *)malloc(prefix_length);
+    if (!directory || !prefix) { free(directory); free(prefix); return false; }
+    if (slash) {
+        if (directory_length == 0u) {
+            directory[0] = '/';
+            directory[1] = '\0';
+        } else {
+            memcpy(directory, directory_name, directory_length);
+            directory[directory_length] = '\0';
+        }
+    } else {
+        memcpy(directory, directory_name, 2u);
+    }
+    (void)snprintf(prefix, prefix_length, "%s.part.", base_name);
+    DIR *dir = opendir(directory);
+    if (!dir) { free(directory); free(prefix); return false; }
+    bool found = false;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, prefix, strlen(prefix)) == 0) {
+            found = true;
+            break;
+        }
+    }
+    if (closedir(dir) != 0) found = true;
+    free(directory);
+    free(prefix);
+    return !found;
 }
 
 static bool is_sentinel(const char *path) {
@@ -104,7 +303,8 @@ static bool verify_output(const char *path, VerifyKind kind) {
     struct ArrowSchema schema = {0};
     struct ArrowArrayView view = {0};
     struct ArrowError arrow_error;
-    struct ArrowIpcArrayStreamReaderOptions reader_options = {-1, 0};
+    struct ArrowIpcArrayStreamReaderOptions reader_options = {0};
+    reader_options.field_index = -1;
     size_t batches = 0, rows = 0;
     bool ok = false, reader_live = false, schema_live = false, view_live = false;
 
@@ -284,6 +484,8 @@ static bool expect_failure_preserves(MilenaArrowIpcOptions options,
     if (expected_status != MILENA_OK)
         CHECK(status == expected_status, "failure returned an unexpected status code");
     CHECK(is_sentinel(options.output_path), "failed transform replaced the existing destination");
+    CHECK(no_staging_files_for(options.output_path),
+          "failed transform left an Arrow staging file behind");
     return true;
 }
 
@@ -322,6 +524,72 @@ static bool make_truncated_copy(const char *source, const char *destination) {
     return ok;
 }
 
+static bool test_oversized_reader_preallocation(const char *path,
+                                               size_t byte_limit,
+                                               size_t expected_body_offset) {
+    FILE *file = fopen(path, "rb");
+    struct ArrowIpcInputStream input = {0};
+    struct ArrowArrayStream reader = {0};
+    struct ArrowSchema schema = {0};
+    struct ArrowArray batch = {0};
+    struct ArrowIpcArrayStreamReaderOptions reader_options = {-1, 1};
+    struct TestBodyAllocationBudget budget = {0};
+    bool reader_live = false;
+    bool schema_live = false;
+    bool ok = false;
+
+    if (!file) return false;
+    budget.byte_limit = byte_limit;
+    input.read = test_read;
+    input.release = test_input_release;
+    input.private_data = file;
+    if (ArrowIpcArrayStreamReaderInit(&reader, &input, &reader_options) != NANOARROW_OK) {
+        fprintf(stderr, "FALLO Arrow IPC: hostile reader initialization failed\n");
+        goto cleanup;
+    }
+    reader_live = true;
+    struct ArrowBufferAllocator body_allocator = {
+        &test_body_budget_reallocate, &test_body_budget_free, &budget
+    };
+    if (ArrowIpcArrayStreamReaderSetBodyAllocationLimit(
+            &reader, (int64_t)byte_limit, body_allocator) != NANOARROW_OK) {
+        fprintf(stderr, "FALLO Arrow IPC: hostile allocator installation failed\n");
+        goto cleanup;
+    }
+    if (!reader.get_schema || reader.get_schema(&reader, &schema) != NANOARROW_OK) {
+        fprintf(stderr, "FALLO Arrow IPC: hostile fixture schema was not readable\n");
+        goto cleanup;
+    }
+    schema_live = schema.release != NULL;
+    int next_status = reader.get_next(&reader, &batch);
+    const char *message = reader.get_last_error ? reader.get_last_error(&reader) : NULL;
+    if (next_status == NANOARROW_OK || batch.release || !message ||
+        strstr(message, "record batch body exceeds configured byte limit") == NULL) {
+        fprintf(stderr, "FALLO Arrow IPC: oversized declared body was not rejected before decode\n");
+        goto cleanup;
+    }
+    if (budget.allocation_calls != 0u || budget.rejected_requests != 0u ||
+        budget.max_request > byte_limit || budget.peak_bytes_live > byte_limit ||
+        budget.bytes_live != 0u) {
+        fprintf(stderr, "FALLO Arrow IPC: body allocator exceeded or attempted to exceed cap\n");
+        goto cleanup;
+    }
+    long position_after_header = ftell(file);
+    if (position_after_header < 0 ||
+        (uint64_t)position_after_header != (uint64_t)expected_body_offset) {
+        fprintf(stderr, "FALLO Arrow IPC: reader consumed hostile batch-body bytes\n");
+        goto cleanup;
+    }
+    ok = true;
+
+cleanup:
+    if (batch.release) batch.release(&batch);
+    if (schema_live && schema.release) schema.release(&schema);
+    if (reader_live && reader.release) reader.release(&reader);
+    if (fclose(file) != 0) ok = false;
+    return ok;
+}
+
 static bool test_failures(void) {
     static const char *const numeric_projection[] = {"int64_nullable"};
     static const MilenaArrowValueType numeric_type[] = {MILENA_ARROW_VALUE_NUMERICA};
@@ -351,6 +619,26 @@ static bool test_failures(void) {
     CHECK(expect_failure_preserves(options, MILENA_ERR_OVERFLOW,
                                    "decoded batch byte limit was ignored"), "batch-byte cap test failed");
     options.max_batch_bytes = 64u * 1024u * 1024u;
+
+    const char *hostile = "tests/arrow-hostile-declared-size.stream";
+    const size_t body_limit = 2048u;
+    size_t hostile_body_offset = 0u;
+    CHECK(make_oversized_declared_batch(PRIMITIVE_FIXTURE, hostile,
+                                        (uint64_t)body_limit + 1u,
+                                        &hostile_body_offset),
+          "could not create hostile oversized declared-batch fixture");
+    CHECK(test_oversized_reader_preallocation(hostile, body_limit,
+                                               hostile_body_offset),
+          "nanoarrow allocated before enforcing the declared-batch cap");
+    options.input_path = hostile;
+    options.max_batch_bytes = body_limit;
+    CHECK(expect_failure_preserves(options, MILENA_ERR_OVERFLOW,
+                                   "oversized declared Arrow body was accepted"),
+          "pre-allocation batch cap/staging cleanup test failed");
+    remove(hostile);
+    options.input_path = PRIMITIVE_FIXTURE;
+    options.max_batch_bytes = 64u * 1024u * 1024u;
+
     options.max_columns = 1u;
     CHECK(expect_failure_preserves(options, MILENA_ERR_UNSUPPORTED,
                                    "source column limit was ignored"), "column cap test failed");

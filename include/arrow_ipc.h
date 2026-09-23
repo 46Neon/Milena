@@ -36,7 +36,9 @@ typedef struct {
     size_t max_output_bytes;
     size_t max_rows;
     size_t max_batch_rows;
-    /* Decoded source Arrow buffer bytes; checked after nanoarrow decoding. */
+    /* Maximum declared source record-batch body bytes, enforced before body
+     * allocation/read. The scoped payload allocator also caps simultaneous
+     * endian-conversion copies; this is not a whole-process RSS limit. */
     size_t max_batch_bytes;
     size_t max_columns;
     double max_elapsed_milliseconds;

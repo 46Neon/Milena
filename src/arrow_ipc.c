@@ -34,6 +34,60 @@ struct ArrowBoundedInput {
     size_t byte_limit;
 };
 
+struct ArrowBatchAllocationBudget {
+    size_t byte_limit;
+    size_t bytes_live;
+    size_t peak_bytes_live;
+};
+
+/* Nanoarrow scopes this allocator to the IPC message-body buffer and any
+ * endian-conversion scratch buffers. Releasing old storage before replacement
+ * avoids an allocator-side old+new overlap; shared-buffer ownership ensures
+ * the previous batch's body is no longer referenced before the next batch. */
+static uint8_t *arrow_batch_budget_reallocate(
+    struct ArrowBufferAllocator *allocator, uint8_t *ptr,
+    int64_t old_size, int64_t new_size) {
+    struct ArrowBatchAllocationBudget *budget =
+        (struct ArrowBatchAllocationBudget *)allocator->private_data;
+    if (!budget || old_size < 0 || new_size < 0) {
+        free(ptr);
+        return NULL;
+    }
+
+    if (ptr) {
+        free(ptr);
+        if ((uint64_t)old_size > budget->bytes_live) {
+            budget->bytes_live = 0;
+            return NULL;
+        }
+        budget->bytes_live -= (size_t)old_size;
+    }
+    if ((uint64_t)new_size > budget->byte_limit ||
+        (size_t)new_size > budget->byte_limit - budget->bytes_live)
+        return NULL;
+    if (new_size == 0) return NULL;
+
+    uint8_t *result = (uint8_t *)malloc((size_t)new_size);
+    if (!result) return NULL;
+    budget->bytes_live += (size_t)new_size;
+    if (budget->bytes_live > budget->peak_bytes_live)
+        budget->peak_bytes_live = budget->bytes_live;
+    return result;
+}
+
+static void arrow_batch_budget_free(struct ArrowBufferAllocator *allocator,
+                                    uint8_t *ptr, int64_t size) {
+    struct ArrowBatchAllocationBudget *budget =
+        (struct ArrowBatchAllocationBudget *)allocator->private_data;
+    if (ptr) {
+        free(ptr);
+        if (budget && size >= 0 && (uint64_t)size <= budget->bytes_live)
+            budget->bytes_live -= (size_t)size;
+        else if (budget)
+            budget->bytes_live = 0;
+    }
+}
+
 static ArrowErrorCode arrow_bounded_read(struct ArrowIpcInputStream *stream,
                                          uint8_t *buffer, int64_t requested,
                                          int64_t *read_out,
@@ -367,6 +421,7 @@ MilenaStatus milena_arrow_ipc_stream_transform(
     bool writer_live = false, input_file_closed = false, output_file_closed = false;
     size_t max_input = 0, max_output = 0, max_rows = 0;
     size_t max_batch = 0, max_batch_bytes = 0, max_columns = 0;
+    struct ArrowBatchAllocationBudget batch_allocation_budget = {0};
     int projection_indices[ARROW_STREAM_HARD_COLUMNS];
     int filter_index = -1;
     size_t input_size = 0, total_input_rows = 0, total_output_rows = 0;
@@ -378,6 +433,7 @@ MilenaStatus milena_arrow_ipc_stream_transform(
     status = arrow_validate_options(options, &max_input, &max_output, &max_rows,
                                     &max_batch, &max_batch_bytes, &max_columns, error);
     if (status != MILENA_OK) return status;
+    batch_allocation_budget.byte_limit = max_batch_bytes;
     if (arrow_cancelled(options)) {
         arrow_runtime_error(error, MILENA_ERR_IO, "Arrow IPC operation cancelled");
         return MILENA_ERR_IO;
@@ -413,7 +469,7 @@ MilenaStatus milena_arrow_ipc_stream_transform(
     ipc_input.read = arrow_bounded_read;
     ipc_input.release = arrow_bounded_input_release;
     ipc_input.private_data = &bounded_input;
-    struct ArrowIpcArrayStreamReaderOptions reader_options = {-1, 0};
+    struct ArrowIpcArrayStreamReaderOptions reader_options = {-1, 1};
     if (ArrowIpcArrayStreamReaderInit(&reader, &ipc_input, &reader_options) != NANOARROW_OK) {
         if (ipc_input.release) ipc_input.release(&ipc_input);
         arrow_runtime_error(error, MILENA_ERR_DATA,
@@ -422,6 +478,17 @@ MilenaStatus milena_arrow_ipc_stream_transform(
         goto cleanup;
     }
     reader_live = true;
+    struct ArrowBufferAllocator body_allocator = {
+        &arrow_batch_budget_reallocate, &arrow_batch_budget_free,
+        &batch_allocation_budget
+    };
+    if (ArrowIpcArrayStreamReaderSetBodyAllocationLimit(
+            &reader, (int64_t)max_batch_bytes, body_allocator) != NANOARROW_OK) {
+        arrow_runtime_error(error, MILENA_ERR_ARGUMENT,
+                            "Could not install Arrow batch allocation budget");
+        status = MILENA_ERR_ARGUMENT;
+        goto cleanup;
+    }
     if (!reader.get_schema || reader.get_schema(&reader, &input_schema) != 0) {
         const char *message = reader.get_last_error ? reader.get_last_error(&reader) : NULL;
         arrow_runtime_error(error, MILENA_ERR_DATA,
@@ -574,9 +641,11 @@ MilenaStatus milena_arrow_ipc_stream_transform(
         int next_status = reader.get_next(&reader, &batch);
         if (next_status != 0) {
             const char *message = reader.get_last_error ? reader.get_last_error(&reader) : NULL;
-            arrow_runtime_error(error, MILENA_ERR_DATA,
+            bool body_limit_exceeded = message &&
+                strstr(message, "record batch body exceeds configured byte limit") != NULL;
+            status = body_limit_exceeded ? MILENA_ERR_OVERFLOW : MILENA_ERR_DATA;
+            arrow_runtime_error(error, status,
                                 message ? message : "Malformed or truncated Arrow IPC batch");
-            status = MILENA_ERR_DATA;
             if (batch.release) batch.release(&batch);
             goto cleanup;
         }

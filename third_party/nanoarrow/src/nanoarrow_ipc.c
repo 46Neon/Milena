@@ -25948,6 +25948,9 @@ struct ArrowIpcDecoderPrivate {
   int64_t n_buffers;
   // The number of union fields in the Schema.
   int64_t n_union_fields;
+  // Optional scoped allocator for record-batch body and endian-conversion buffers.
+  struct ArrowBufferAllocator buffer_allocator;
+  int use_buffer_allocator;
   // A pointer to the last flatbuffers message.
   const void* last_message;
   // Storage for a DictionaryBatch
@@ -28011,7 +28014,9 @@ struct ArrowIpcIntervalMonthDayNano {
 
 static int ArrowIpcDecoderSwapEndian(struct ArrowIpcBufferSource* src,
                                      struct ArrowBufferView* out_view,
-                                     struct ArrowBuffer* dst, struct ArrowError* error) {
+                                     struct ArrowBuffer* dst,
+                                     struct ArrowBufferAllocator* temp_allocator,
+                                     struct ArrowError* error) {
   NANOARROW_DCHECK(out_view->size_bytes > 0);
   NANOARROW_DCHECK(out_view->data.data != NULL);
 
@@ -28035,10 +28040,22 @@ static int ArrowIpcDecoderSwapEndian(struct ArrowIpcBufferSource* src,
     ArrowBufferMove(dst, &tmp);
     ArrowBufferInit(dst);
   }
+  if (temp_allocator != NULL) dst->allocator = *temp_allocator;
 
   if (dst->size_bytes == 0) {
-    NANOARROW_RETURN_NOT_OK(ArrowBufferReserve(dst, out_view->size_bytes));
-    dst->size_bytes = out_view->size_bytes;
+    ArrowErrorCode allocation_status;
+    if (temp_allocator != NULL) {
+      allocation_status = ArrowBufferResize(dst, out_view->size_bytes,
+                                            /*shrink_to_fit=*/0);
+    } else {
+      allocation_status = ArrowBufferReserve(dst, out_view->size_bytes);
+      if (allocation_status == NANOARROW_OK)
+        dst->size_bytes = out_view->size_bytes;
+    }
+    if (allocation_status != NANOARROW_OK) {
+      ArrowBufferReset(&tmp);
+      return allocation_status;
+    }
   }
 
   switch (src->data_type) {
@@ -28117,6 +28134,7 @@ static int ArrowIpcDecoderSwapEndian(struct ArrowIpcBufferSource* src,
           ArrowErrorSet(
               error, "Endian swapping for element bitwidth %" PRId64 " is not supported",
               src->element_size_bits);
+          ArrowBufferReset(&tmp);
           return ENOTSUP;
       }
       break;
@@ -28136,6 +28154,7 @@ struct ArrowIpcArraySetter {
   struct ArrowIpcBufferFactory factory;
   enum ArrowIpcMetadataVersion version;
   struct ArrowIpcDictionaries* dictionaries;
+  struct ArrowBufferAllocator* temp_allocator;
 };
 
 static int ArrowIpcDecoderMakeBuffer(struct ArrowIpcArraySetter* setter, int64_t offset,
@@ -28165,8 +28184,8 @@ static int ArrowIpcDecoderMakeBuffer(struct ArrowIpcArraySetter* setter, int64_t
       setter->factory.make_buffer(&setter->factory, &setter->src, out_view, out, error));
 
   if (setter->src.swap_endian) {
-    NANOARROW_RETURN_NOT_OK(
-        ArrowIpcDecoderSwapEndian(&setter->src, out_view, out, error));
+    NANOARROW_RETURN_NOT_OK(ArrowIpcDecoderSwapEndian(
+        &setter->src, out_view, out, setter->temp_allocator, error));
   }
 
   return NANOARROW_OK;
@@ -28390,6 +28409,8 @@ static ArrowErrorCode ArrowIpcDecoderDecodeArrayViewInternal(
   setter.buffers = ns(RecordBatch_buffers(batch));
   setter.buffer_i = root->buffer_offset - 1;
   setter.factory = factory;
+  setter.temp_allocator = private_data->use_buffer_allocator ?
+      &private_data->buffer_allocator : NULL;
   setter.src.codec = decoder->codec;
   setter.src.swap_endian = ArrowIpcDecoderNeedsSwapEndian(decoder);
   setter.version = decoder->metadata_version;
@@ -29589,6 +29610,9 @@ struct ArrowIpcArrayStreamReaderPrivate {
   struct ArrowIpcInputStream input;
   struct ArrowIpcDecoder decoder;
   int use_shared_buffers;
+  int64_t max_body_size_bytes;
+  struct ArrowBufferAllocator body_allocator;
+  int use_body_allocator;
   struct ArrowSchema out_schema;
   int64_t field_index;
   struct ArrowBuffer header;
@@ -29756,10 +29780,31 @@ static int ArrowIpcArrayStreamReaderNextBody(
   int64_t bytes_read;
   int64_t bytes_to_read = private_data->decoder.body_size_bytes;
 
-  // Read the body bytes
-  private_data->body.size_bytes = 0;
-  NANOARROW_RETURN_NOT_OK_WITH_ERROR(
-      ArrowBufferReserve(&private_data->body, bytes_to_read), &private_data->error);
+  // Enforce a configured body limit before asking the allocator for memory. Use
+  // Resize rather than Reserve in bounded mode because Reserve may overallocate
+  // geometrically beyond the caller's byte budget.
+  if (bytes_to_read < 0) {
+    ArrowErrorSet(&private_data->error, "Arrow record batch body size is negative");
+    return EINVAL;
+  }
+  if (private_data->use_body_allocator && private_data->body.data == NULL) {
+    private_data->body.allocator = private_data->body_allocator;
+  }
+  if (private_data->max_body_size_bytes > 0) {
+    if (bytes_to_read > private_data->max_body_size_bytes) {
+      ArrowErrorSet(&private_data->error,
+                    "Arrow record batch body exceeds configured byte limit");
+      return EFBIG;
+    }
+    NANOARROW_RETURN_NOT_OK_WITH_ERROR(
+        ArrowBufferResize(&private_data->body, bytes_to_read, /*shrink_to_fit=*/0),
+        &private_data->error);
+    private_data->body.size_bytes = 0;
+  } else {
+    private_data->body.size_bytes = 0;
+    NANOARROW_RETURN_NOT_OK_WITH_ERROR(
+        ArrowBufferReserve(&private_data->body, bytes_to_read), &private_data->error);
+  }
   NANOARROW_RETURN_NOT_OK(private_data->input.read(&private_data->input,
                                                    private_data->body.data, bytes_to_read,
                                                    &bytes_read, &private_data->error));
@@ -29996,6 +30041,8 @@ ArrowErrorCode ArrowIpcArrayStreamReaderInit(
 
   ArrowBufferInit(&private_data->header);
   ArrowBufferInit(&private_data->body);
+  private_data->max_body_size_bytes = 0;
+  private_data->use_body_allocator = 0;
   private_data->out_schema.release = NULL;
   ArrowIpcInputStreamMove(input_stream, &private_data->input);
   private_data->expected_header_prefix_size = kExpectedHeaderPrefixSizeNotSet;
@@ -30014,6 +30061,42 @@ ArrowErrorCode ArrowIpcArrayStreamReaderInit(
   out->get_next = &ArrowIpcArrayStreamReaderGetNext;
   out->get_last_error = &ArrowIpcArrayStreamReaderGetLastError;
   out->release = &ArrowIpcArrayStreamReaderRelease;
+
+  return NANOARROW_OK;
+}
+
+ArrowErrorCode ArrowIpcArrayStreamReaderSetBodyAllocationLimit(
+    struct ArrowArrayStream* reader, int64_t max_body_size_bytes,
+    struct ArrowBufferAllocator body_allocator) {
+  if (reader == NULL || reader->private_data == NULL ||
+      reader->get_next != &ArrowIpcArrayStreamReaderGetNext ||
+      reader->release != &ArrowIpcArrayStreamReaderRelease ||
+      max_body_size_bytes < 0 ||
+      (body_allocator.reallocate == NULL) != (body_allocator.free == NULL)) {
+    return EINVAL;
+  }
+
+  struct ArrowIpcArrayStreamReaderPrivate* private_data =
+      (struct ArrowIpcArrayStreamReaderPrivate*)reader->private_data;
+  if (private_data->out_schema.release != NULL || private_data->body.data != NULL) {
+    return EINVAL;
+  }
+
+  private_data->max_body_size_bytes = max_body_size_bytes;
+  private_data->use_body_allocator = body_allocator.reallocate != NULL;
+  if (private_data->use_body_allocator) {
+    private_data->body_allocator = body_allocator;
+    private_data->body.allocator = body_allocator;
+    struct ArrowIpcDecoderPrivate* decoder_private_data =
+        (struct ArrowIpcDecoderPrivate*)private_data->decoder.private_data;
+    decoder_private_data->buffer_allocator = body_allocator;
+    decoder_private_data->use_buffer_allocator = 1;
+  } else {
+    private_data->body.allocator = ArrowBufferAllocatorDefault();
+    struct ArrowIpcDecoderPrivate* decoder_private_data =
+        (struct ArrowIpcDecoderPrivate*)private_data->decoder.private_data;
+    decoder_private_data->use_buffer_allocator = 0;
+  }
 
   return NANOARROW_OK;
 }

@@ -80,6 +80,8 @@
   NANOARROW_SYMBOL(NANOARROW_NAMESPACE, ArrowIpcInputStreamMove)
 #define ArrowIpcArrayStreamReaderInit \
   NANOARROW_SYMBOL(NANOARROW_NAMESPACE, ArrowIpcArrayStreamReaderInit)
+#define ArrowIpcArrayStreamReaderSetBodyAllocationLimit \
+  NANOARROW_SYMBOL(NANOARROW_NAMESPACE, ArrowIpcArrayStreamReaderSetBodyAllocationLimit)
 #define ArrowIpcEncoderInit NANOARROW_SYMBOL(NANOARROW_NAMESPACE, ArrowIpcEncoderInit)
 #define ArrowIpcEncoderReset NANOARROW_SYMBOL(NANOARROW_NAMESPACE, ArrowIpcEncoderReset)
 #define ArrowIpcEncoderFinalizeBuffer \
@@ -749,6 +751,18 @@ struct ArrowIpcArrayStreamReaderOptions {
 NANOARROW_DLL ArrowErrorCode ArrowIpcArrayStreamReaderInit(
     struct ArrowArrayStream* out, struct ArrowIpcInputStream* input_stream,
     struct ArrowIpcArrayStreamReaderOptions* options);
+
+/// \brief Set a pre-allocation record-batch body limit and scoped payload allocator
+///
+/// Call after ArrowIpcArrayStreamReaderInit() and before get_schema/get_next.
+/// A positive max_body_size_bytes rejects an oversized declared message body
+/// before allocation or body reads; zero disables the limit. The optional
+/// allocator (both callbacks NULL for the default body allocator) is used for
+/// the body and endian-conversion buffers, not IPC metadata, schemas, or array
+/// structures. Its private_data must outlive every decoded array using it.
+NANOARROW_DLL ArrowErrorCode ArrowIpcArrayStreamReaderSetBodyAllocationLimit(
+    struct ArrowArrayStream* reader, int64_t max_body_size_bytes,
+    struct ArrowBufferAllocator body_allocator);
 
 /// \brief Encoder for Arrow IPC messages
 ///
