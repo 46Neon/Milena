@@ -132,7 +132,9 @@ MilenaStatus milena_language_group_by_spill(
         policy->group_memory_budget_bytes == 0 ||
         policy->group_spill_quota_bytes == 0 ||
         policy->group_max_key_bytes < 2 ||
-        policy->group_max_output_groups == 0) {
+        policy->group_max_output_groups == 0 ||
+        policy->group_max_runs == 0 ||
+        policy->group_max_runs > MILENA_GROUPED_HARD_MAX_RUNS) {
         GROUP_SPILL_ERR(error, MILENA_ERR_ARGUMENT,
                         "Configuración AST inválida para spill #agrupar");
         return MILENA_ERR_ARGUMENT;
@@ -161,9 +163,10 @@ MilenaStatus milena_language_group_by_spill(
         return MILENA_ERR_UNSUPPORTED;
     }
     MilenaGroupedAggregate reducer = {0};
-    MilenaStatus status = milena_grouped_aggregate_open(policy->value,
+    MilenaStatus status = milena_grouped_aggregate_open_with_max_runs(policy->value,
         policy->group_memory_budget_bytes, policy->group_max_key_bytes,
-        policy->group_spill_quota_bytes, &reducer, error);
+        policy->group_spill_quota_bytes, policy->group_max_runs,
+        &reducer, error);
     if (status != MILENA_OK) return status;
     for (size_t row = 0; status == MILENA_OK && row < source->row_count; ++row) {
         bool key_valid = !milena_table_is_null(source, (size_t)key_index, row);

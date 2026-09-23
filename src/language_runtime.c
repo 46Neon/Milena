@@ -1546,7 +1546,8 @@ static MilenaStatus run_stream_dataset_with_options(
             ast_policy->group_spill_quota_bytes,
             ast_policy->group_max_key_bytes,
             ast_policy->group_max_output_groups,
-            ast_policy->group_max_output_bytes
+            ast_policy->group_max_output_bytes,
+            ast_policy->group_max_runs
         };
         status = milena_stream_csv_grouped_spill_with_options(
             input_path, output_path, group_key->value, &metrics[0], options,

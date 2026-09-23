@@ -4,6 +4,9 @@
 #include "mergeable_aggregate.h"
 #include "spill_store.h"
 
+#define MILENA_GROUPED_DEFAULT_MAX_RUNS 4096u
+#define MILENA_GROUPED_HARD_MAX_RUNS 65536u
+
 /* A bounded, spillable grouped reducer. Keys are opaque byte strings; output
  * is emitted in ascending unsigned-byte lexicographic order. */
 typedef struct {
@@ -26,6 +29,7 @@ typedef struct {
     size_t memory_budget_bytes;
     size_t workspace_budget_bytes;
     size_t max_key_bytes;
+    size_t max_runs;
     size_t group_capacity;
     size_t group_count;
     size_t table_capacity;
@@ -51,6 +55,12 @@ MilenaStatus milena_grouped_aggregate_open(
     const char *spill_path, size_t memory_budget_bytes, size_t max_key_bytes,
     size_t spill_quota_bytes, MilenaGroupedAggregate *grouped,
     MilenaError *error);
+/* max_runs caps the number of initial sorted runs accepted for one finalization.
+ * Pairwise merge keeps at most three run files open at once. */
+MilenaStatus milena_grouped_aggregate_open_with_max_runs(
+    const char *spill_path, size_t memory_budget_bytes, size_t max_key_bytes,
+    size_t spill_quota_bytes, size_t max_runs,
+    MilenaGroupedAggregate *grouped, MilenaError *error);
 MilenaStatus milena_grouped_aggregate_add(
     MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
     double value, MilenaError *error);

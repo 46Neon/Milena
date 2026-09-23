@@ -129,6 +129,21 @@ int main(void) {
     (void)milena_grouped_aggregate_close(&grouped, NULL);
     (void)remove(path);
 
+    /* A configured run cap fails before creating an unbounded run set and
+     * cleanup removes the owned spill file. */
+    CHECK_OK(milena_grouped_aggregate_open_with_max_runs(path, 2048, 64,
+        1024u * 1024u, 1u, &grouped, &error));
+    for (size_t i = 0; i < 120; ++i) {
+        char key[16];
+        (void)snprintf(key, sizeof(key), "cap%03zu", i);
+        CHECK_OK(milena_grouped_aggregate_add(&grouped, key, strlen(key),
+                                               (double)i, &error));
+    }
+    assert(milena_grouped_aggregate_finalize(&grouped, check_order, NULL,
+        &emitted, &error) == MILENA_ERR_OVERFLOW);
+    (void)milena_grouped_aggregate_close(&grouped, NULL);
+    assert(fopen(path, "rb") == NULL);
+
     /* Reject budgets that cannot hold even one group. */
     assert(milena_grouped_aggregate_open(path, 1, 8, 1024, &grouped, &error) == MILENA_ERR_ARGUMENT);
     puts("grouped aggregate spill tests: ok");

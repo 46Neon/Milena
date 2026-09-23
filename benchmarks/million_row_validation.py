@@ -116,6 +116,7 @@ def validate_spill_report(report: dict[str, Any], malformed_expected: int,
             "configured_group_state_bytes": 4096,
             "scratch_quota_bytes": 134217728,
             "output_byte_quota": 16777216,
+            "max_initial_runs": 4096,
             "backend_elapsed_milliseconds": report.get("tiempo_ms"),
             "backend_rows_per_second": report.get("filas_por_segundo")}
 
@@ -388,7 +389,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
         con columnas de 16
         con filas hasta {ROWS}
         con grupos de 128
-    agrupar por "grupo_spill" #spill({json.dumps(str(scratch_path), ensure_ascii=False)}, 4096, 134217728, 128, 128, 16777216)
+    agrupar por "grupo_spill" #spill({json.dumps(str(scratch_path), ensure_ascii=False)}, 4096, 134217728, 128, 128, 16777216, 4096)
         resumir {{ suma de "importe"; }}
     guardar resultado en {json.dumps(str(spill_report_path), ensure_ascii=False)}
 }}

@@ -27,7 +27,7 @@ cat > "$TMP_DIR/spill.milena" <<EOF
   dataset cargar datos("rows.csv")
   variable grupo texto
   variable valor numerica
-  .agrupar dataset { #por("grupo") #spill("$TMP_DIR/scratch.bin", 262144, 1048576, 128, 32) #suma("valor") }
+  .agrupar dataset { #por("grupo") #spill("$TMP_DIR/scratch.bin", 262144, 1048576, 128, 32, 1073741824, 4096) #suma("valor") }
   .exportar { ("one.json") }
 }
 EOF

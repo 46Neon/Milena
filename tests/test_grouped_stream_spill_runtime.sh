@@ -30,7 +30,7 @@ cat > "$TMP_DIR/spill.milena" <<EOF_M
   variable grupo texto
   variable valor numerica
   datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo" #spill("$TMP_DIR/scratch.bin", 4096, 1048576, 128, 100, 1048576) resumir { suma de "valor"; }
+  agrupar por "grupo" #spill("$TMP_DIR/scratch.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { suma de "valor"; }
   guardar resultado en "spill.json"
 }
 EOF_M
@@ -100,6 +100,19 @@ EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run group-limit.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/group-limit.json" ] && [ ! -e "$TMP_DIR/group-limit.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'group-limit.json.part.*' | grep -q .
+# The typed AST run-count cap rejects excess runs and removes all spill artifacts.
+cat > "$TMP_DIR/run-limit.milena" <<EOF_M
+.analisis runs_limitados {
+  variable grupo texto
+  variable valor numerica
+  datos desde "rows.csv" con filas hasta 1000 con tiempo hasta 30000 ms
+  agrupar por "grupo" #spill("$TMP_DIR/run-limit.bin", 4096, 1048576, 128, 100, 1048576, 1) resumir { suma de "valor"; }
+  guardar resultado en "run-limit.json"
+}
+EOF_M
+if (cd "$TMP_DIR" && "$MILENA_BIN" run run-limit.milena); then exit 1; fi
+[ ! -e "$TMP_DIR/run-limit.json" ] && [ ! -e "$TMP_DIR/run-limit.bin" ]
+! find "$TMP_DIR" -maxdepth 1 -name 'run-limit.json.part.*' | grep -q .
 # Output report bytes are bounded before each complete JSON group is written;
 # a failed replacement must leave the prior destination untouched.
 printf 'old-report' > "$TMP_DIR/output-limit.json"

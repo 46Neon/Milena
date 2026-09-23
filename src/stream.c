@@ -1149,7 +1149,9 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         policy->max_key_bytes < 2u || policy->max_key_bytes > 1048576u ||
         policy->max_output_groups == 0 ||
         policy->max_output_groups > 1000000u ||
-        policy->max_output_bytes > STREAM_DEFAULT_SPILL_OUTPUT_BYTES) {
+        policy->max_output_bytes > STREAM_DEFAULT_SPILL_OUTPUT_BYTES ||
+        policy->max_runs == 0 ||
+        policy->max_runs > MILENA_GROUPED_HARD_MAX_RUNS) {
         milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
                          "Política u operación inválida para spill agrupado CSV");
         return MILENA_ERR_ARGUMENT;
@@ -1215,9 +1217,9 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
             : "La clave textual no puede reutilizarse como métrica numérica en #spill");
         status = MILENA_ERR_UNSUPPORTED; goto spill_finish;
     }
-    status = milena_grouped_aggregate_open(policy->scratch_path,
+    status = milena_grouped_aggregate_open_with_max_runs(policy->scratch_path,
         policy->memory_budget_bytes, policy->max_key_bytes,
-        policy->spill_quota_bytes, &reducer, error);
+        policy->spill_quota_bytes, policy->max_runs, &reducer, error);
     if (status != MILENA_OK) goto spill_finish;
     reducer_open = true;
     scratch_owned = true;

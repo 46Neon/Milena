@@ -120,12 +120,13 @@ static MilenaStatus flush_groups(MilenaGroupedAggregate *grouped,
     return status;
 }
 
-MilenaStatus milena_grouped_aggregate_open(
+MilenaStatus milena_grouped_aggregate_open_with_max_runs(
     const char *spill_path, size_t memory_budget_bytes, size_t max_key_bytes,
-    size_t spill_quota_bytes, MilenaGroupedAggregate *grouped,
-    MilenaError *error) {
+    size_t spill_quota_bytes, size_t max_runs,
+    MilenaGroupedAggregate *grouped, MilenaError *error) {
     if (!spill_path || !grouped || max_key_bytes == 0 ||
-        max_key_bytes > UINT32_MAX || memory_budget_bytes == 0) {
+        max_key_bytes > UINT32_MAX || memory_budget_bytes == 0 ||
+        max_runs == 0 || max_runs > MILENA_GROUPED_HARD_MAX_RUNS) {
         group_error(error, MILENA_ERR_ARGUMENT, "Configuración inválida para agregación agrupada");
         return MILENA_ERR_ARGUMENT;
     }
@@ -176,6 +177,7 @@ MilenaStatus milena_grouped_aggregate_open(
         return MILENA_ERR_MEMORY;
     }
     grouped->memory_budget_bytes = memory_budget_bytes;
+    grouped->max_runs = max_runs;
     size_t map_used = group_bytes + key_bytes + table_bytes;
     size_t path_bytes = strlen(spill_path) + 1u;
     size_t temporary_path_bytes = 0, path_reserve = 0;
@@ -206,6 +208,15 @@ MilenaStatus milena_grouped_aggregate_open(
     grouped->spill_open = true;
     if (error) milena_error_clear(error);
     return MILENA_OK;
+}
+
+MilenaStatus milena_grouped_aggregate_open(
+    const char *spill_path, size_t memory_budget_bytes, size_t max_key_bytes,
+    size_t spill_quota_bytes, MilenaGroupedAggregate *grouped,
+    MilenaError *error) {
+    return milena_grouped_aggregate_open_with_max_runs(spill_path,
+        memory_budget_bytes, max_key_bytes, spill_quota_bytes,
+        MILENA_GROUPED_DEFAULT_MAX_RUNS, grouped, error);
 }
 
 MilenaStatus milena_grouped_aggregate_add(
@@ -527,6 +538,12 @@ MilenaStatus milena_grouped_aggregate_finalize(
             MILENA_AGGREGATE_WIRE_SIZE, &decoded, error);
         if (status != MILENA_OK) break;
         if (batch.count == batch.capacity) {
+            if (run_count >= grouped->max_runs) {
+                group_error(error, MILENA_ERR_OVERFLOW,
+                            "Se excedió el máximo configurado de runs agrupados");
+                status = MILENA_ERR_OVERFLOW;
+                break;
+            }
             qsort(batch.records, batch.count, batch.stride, grouped_record_compare);
             char *path = sorted_run_path(grouped->spill_path, 0, run_count);
             if (!path) { group_error(error, MILENA_ERR_MEMORY, "No se pudo crear la ruta de run agrupado"); status = MILENA_ERR_MEMORY; break; }
@@ -553,7 +570,13 @@ MilenaStatus milena_grouped_aggregate_finalize(
         if (status == MILENA_OK) status = close_status;
     }
     if (status == MILENA_OK && batch.count != 0) {
-        qsort(batch.records, batch.count, batch.stride, grouped_record_compare);
+        if (run_count >= grouped->max_runs) {
+            group_error(error, MILENA_ERR_OVERFLOW,
+                        "Se excedió el máximo configurado de runs agrupados");
+            status = MILENA_ERR_OVERFLOW;
+        }
+        if (status == MILENA_OK)
+            qsort(batch.records, batch.count, batch.stride, grouped_record_compare);
         char *path = sorted_run_path(grouped->spill_path, 0, run_count);
         if (!path) { group_error(error, MILENA_ERR_MEMORY, "No se pudo crear la ruta de run agrupado"); status = MILENA_ERR_MEMORY; }
         else {

@@ -120,7 +120,8 @@ MilenaStatus milena_stream_execution_plan_build(
                     child->group_max_key_bytes < 2 ||
                     child->group_max_output_groups == 0 ||
                     child->group_max_output_bytes == 0 ||
-                    child->group_max_output_bytes > 1073741824u)
+                    child->group_max_output_bytes > 1073741824u ||
+                    child->group_max_runs == 0 || child->group_max_runs > 65536u)
                     return plan_error(error, MILENA_ERR_PARSE,
                                       "La política spill del plan es única y debe tener límites positivos");
                 plan->spill_policy = child;
