@@ -1,4 +1,5 @@
 #include "language_runtime.h"
+#include "language_grouped_spill.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -163,7 +164,50 @@ static int run_dataset_pipeline(void) {
     CHECK(read_file("test-language-runtime-data.json.interes_simple.json", text, sizeof(text)),
           "dataset: no se creó interés simple");
 
-    remove(csv); remove(right); remove(output);
+    const char *limited_join =
+        ".analisis join_limit {\n"
+        "  dataset cargar datos(\"test-language-runtime-data.csv\")\n"
+        "  variable ciudad texto\n"
+        "  .unir { #derecha(\"test-language-runtime-right.csv\") #clave(\"ciudad\") #limites(67108864, 1) }\n"
+        "  .exportar { (\"test-language-runtime-limited.json\") }\n"
+        "}\n";
+    remove("test-language-runtime-limited.json");
+    CHECK(milena_run_dataset_program(limited_join,
+        "test-language-runtime-limit.milena", NULL, &error) == MILENA_ERR_OVERFLOW,
+        "join: debió rechazar la salida por superar el límite AST de filas");
+    FILE *unexpected = fopen("test-language-runtime-limited.json", "rb");
+    if (unexpected) fclose(unexpected);
+    CHECK(unexpected == NULL,
+        "join: publicó salida parcial después del límite");
+
+    const char *large_right = "test-language-runtime-join-large.csv";
+    char large_content[6000];
+    const char *large_header = "ciudad,region\nCaracas,";
+    size_t header_length = strlen(large_header);
+    memcpy(large_content, large_header, header_length);
+    memset(large_content + header_length, 'x', 5000);
+    large_content[header_length + 5000] = '\n';
+    large_content[header_length + 5001] = '\0';
+    CHECK(write_file(large_right, large_content),
+          "join: no se pudo crear el CSV de presupuesto");
+    const char *memory_limited_join =
+        ".analisis join_memory_limit {\n"
+        "  dataset cargar datos(\"test-language-runtime-data.csv\")\n"
+        "  variable ciudad texto\n"
+        "  .unir { #derecha(\"test-language-runtime-join-large.csv\") #clave(\"ciudad\") #limites(4096, 100) }\n"
+        "  .exportar { (\"test-language-runtime-memory-limited.json\") }\n"
+        "}\n";
+    remove("test-language-runtime-memory-limited.json");
+    CHECK(milena_run_dataset_program(memory_limited_join,
+        "test-language-runtime-memory-limit.milena", NULL, &error) ==
+        MILENA_ERR_OVERFLOW,
+        "join: debió rechazar la estimación de memoria sobre el presupuesto");
+    unexpected = fopen("test-language-runtime-memory-limited.json", "rb");
+    if (unexpected) fclose(unexpected);
+    CHECK(unexpected == NULL,
+        "join: publicó salida parcial después del límite de memoria");
+
+    remove(csv); remove(right); remove(large_right); remove(output);
     remove("test-language-runtime-data.json.sst.json");
     remove("test-language-runtime-data.json.histograma.json");
     remove("test-language-runtime-data.json.tasa.json");
@@ -172,6 +216,8 @@ static int run_dataset_pipeline(void) {
     remove("test-language-runtime-data.json.riesgo.json");
     remove("test-language-runtime-data.json.modelo_sst.json");
     remove("test-language-runtime-data.json.interes_simple.json");
+    remove("test-language-runtime-limited.json");
+    remove("test-language-runtime-memory-limited.json");
     return 0;
 }
 
@@ -357,11 +403,79 @@ static int run_grouped_human_stream_pipeline(void) {
           strstr(text, "\"limite_grupos\":4") != NULL &&
           strstr(text, "\"limite_filas\":10") != NULL &&
           strstr(text, "\"presupuesto_tiempo_ms\":30000.000") != NULL &&
-          strstr(text, "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":5") != NULL &&
-          strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2") != NULL,
+          strstr(text, "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_nulos\":0,\"valores_invalidos\":1,\"valor\":5") != NULL &&
+          strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":2") != NULL &&
+          strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":1,\"valores_nulos\":1,\"valores_invalidos\":0,\"valor\":1") != NULL,
           "agrupación de flujo: AST, orden o semántica de valores inválidos incorrectos");
     remove(csv);
     remove(output);
+    return 0;
+}
+
+static int run_int64_grouped_spill_adapter(void) {
+    MilenaError error;
+    milena_error_clear(&error);
+    const size_t row_count = 14;
+    const size_t shape[] = {row_count};
+    const char *keys[] = {"A", "A", "k00", "k01", "k02", "k03", "k04",
+                          "k05", "k06", "k07", "k08", "A", "B", "C"};
+    const int64_t values[] = {INT64_C(9007199254740993), 1, 10, 11, 12, 13,
+                              14, 15, 16, 17, 18, 1, INT64_MIN, 0};
+    bool validity[row_count];
+    for (size_t i = 0; i < row_count; ++i) validity[i] = true;
+    validity[row_count - 1] = false;
+    MilenaArray input_values = {0};
+    CHECK(milena_array_from_i64(&input_values, 1, shape, values, &error) == MILENA_OK,
+          error.message);
+    MilenaTable input = {0}, output = {0};
+    milena_table_init(&input);
+    CHECK(milena_table_add_string_column_copy(&input, "group", keys, row_count,
+                                               NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_table_add_column_copy(&input, "value", &input_values,
+                                       validity, &error) == MILENA_OK,
+          error.message);
+    const char *scratch = "test-language-runtime-int64-grouped.spill";
+    ASTNode policy = {0};
+    policy.type = AST_AGRUPACION_SPILL;
+    policy.value = (char *)scratch;
+    policy.group_memory_budget_bytes = 4096;
+    policy.group_spill_quota_bytes = 1024 * 1024;
+    policy.group_max_key_bytes = 128;
+    policy.group_max_output_groups = 32;
+    policy.group_max_runs = 32;
+    MilenaAggregateSpec spec = {"value", MILENA_AGG_SUM, NULL};
+    CHECK(milena_language_group_by_spill(&output, &input, "group", &spec,
+                                          &policy, &error) == MILENA_OK,
+          error.message);
+    CHECK(output.row_count == 12, "spill INT64: cardinalidad de salida inesperada");
+    const MilenaTableColumn *sums = milena_table_column(&output, 1);
+    CHECK(sums != NULL && sums->values.dtype == MILENA_DTYPE_INT64,
+          "spill INT64: suma no conservó el tipo INT64");
+    const int64_t *sum_values = milena_array_const_data(&sums->values);
+    bool saw_large = false, saw_min = false, saw_null_group = false;
+    const MilenaTableColumn *out_keys = milena_table_column(&output, 0);
+    for (size_t i = 0; i < output.row_count; ++i) {
+        const char *key = out_keys->strings[i];
+        if (strcmp(key, "A") == 0) {
+            saw_large = true;
+            CHECK(sum_values[i] == INT64_C(9007199254740995),
+                  "spill INT64: suma perdio precisión por encima de 2^53");
+        } else if (strcmp(key, "B") == 0) {
+            saw_min = true;
+            CHECK(sum_values[i] == INT64_MIN, "spill INT64: INT64_MIN alterado");
+        } else if (strcmp(key, "C") == 0) {
+            saw_null_group = true;
+            CHECK(!sums->validity[i], "spill INT64: grupo nulo se volvió valor válido");
+        }
+    }
+    CHECK(saw_large && saw_min && saw_null_group,
+          "spill INT64: faltó un grupo esperado");
+    CHECK(fopen(scratch, "rb") == NULL,
+          "spill INT64: no se limpió el temporal propiedad de la operación");
+    milena_table_destroy(&output);
+    milena_table_destroy(&input);
+    milena_array_release(&input_values);
     return 0;
 }
 
@@ -374,6 +488,8 @@ int main(void) {
     CHECK(run_human_stream_pipeline() == 0, "falló la fase de flujo humano");
     CHECK(run_grouped_human_stream_pipeline() == 0,
           "falló la fase de agrupación de flujo humano");
+    CHECK(run_int64_grouped_spill_adapter() == 0,
+          "falló la fase canónica de spill agrupado INT64");
     puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo agrupado OK");
     return 0;
 }

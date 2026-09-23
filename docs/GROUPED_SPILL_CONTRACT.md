@@ -1,10 +1,78 @@
 # Contrato para spill-to-disk de agrupaciones en flujo
 
-**Estado:** diseño acordado; no implementado. El backend actual `milena_stream_csv_grouped_with_options` guarda grupos en memoria y falla explícitamente al alcanzar `max_groups` o el presupuesto de estado. No existen `src/spill.c` ni `src/spill_store.c`. Este documento no anuncia capacidad disponible.
+**Estado:** hay dos cortes locales distintos. El `.agrupar` tabular canónico conserva su adaptador de tabla existente y sigue materializando la entrada/salida en RAM. La agrupación de CSV en el runtime streaming ahora tiene un primer corte de spill directo `stream.c → grouped_aggregate.c`: no crea `Dataset`/`MilenaTable`, reutiliza el lector CSV existente y emite el JSON desde callback ordenado a un staging file antes de publicarlo. En ambos casos se admite una sola clave de texto y una métrica por operación spill; no es una capacidad industrial general ni una ruta distribuida.
 
 ## Límite arquitectónico
 
 La única ruta de producto seguirá siendo `lexer → parser → AST tipado → semántica → runtime → stream.c`. La sintaxis humana expresará las políticas de spill en el AST; el runtime validará los límites antes de ejecutar y pasará opciones tipadas al backend. El spill no tendrá parser, CLI, runtime ni comando externo propios. El manifiesto de fuentes debe clasificar cada módulo nuevo como producto; `Makefile` debe incorporarlo a las fuentes oficiales. El verificador existente debe fallar ante fuentes C presentes pero no clasificadas: no se permite resolver diferencias excluyendo archivos o agregando módulos inexistentes.
+
+## Corte vertical implementado en #agrupar tabular
+
+La sintaxis del adaptador tabular admite `#spill("ruta-nueva", memoria_bytes, cuota_spill_bytes, max_key_bytes, max_grupos[, 0, max_runs])` dentro de `.agrupar dataset { ... }`. Los límites numéricos son enteros tipados en el AST: memoria 4 KiB–512 MiB, cuota 1 B–4 GiB, clave 2 B–1 MiB, grupos 1–1,000,000 y runs 1–65,536 (default 4096); la ruta scratch queda limitada a 220 bytes. En el sexto parámetro solo se admite `0` (sin cuota de reporte JSON para esta salida `MilenaTable`); un límite no nulo se rechaza en semántica porque el adaptador no produce un reporte JSON. La política es opt-in; sin ella sigue el camino histórico de `milena_table_group_by`. Una solicitud explícita que no esté soportada falla y nunca vuelve silenciosamente al backend en memoria.
+
+El adaptador usa una clave STRING (una clave únicamente) y una métrica; `conteo` acepta cualquier columna, `suma` acepta FLOAT64 o INT64 y las otras tres métricas requieren FLOAT64. La suma INT64 mantiene un acumulador firmado exacto y rechaza desbordamiento; no convierte el resultado por binary64 (por lo que valores por encima de 2^53 conservan precisión). La clave nula no colisiona con texto vacío; la clave vacía observada sí es válida. El estado mergeable distingue y serializa observaciones válidas, nulas e inválidas; el JSON de CSV spill ahora expone `valores_validos`, `valores_nulos` y `valores_invalidos`, separando celdas vacías de texto no numérico. La salida es una `MilenaTable` materializada con tope de grupos y sale en orden lexicográfico binario; el backend histórico conserva orden de primera aparición. La suma/media con reducer mergeable puede diferir por redondeo del backend anterior; la equivalencia numérica se comprueba con tolerancia, no bit a bit.
+
+Límites todavía abiertos del adaptador tabular: su input `Dataset` y la tabla previa ya residen en RAM, y la salida también se materializa. Scratch es una ruta provista por el programa y se crea exclusivamente para no sobrescribir un archivo existente; todavía no se garantizan nombres aleatorios privados ni writers concurrentes sobre una misma ruta. El fan-in es fijo de dos vías. La política AST incluye límites de filas/tiempo para CSV streaming y un máximo configurable de runs para ambas rutas.
+
+
+## Primer corte de spill directo del CSV streaming
+
+La sintaxis humana sigue el bloque `agrupar por ... resumir { ... }` del modo streaming, y añade la política AST ya tipada:
+
+```milena
+.analisis ejemplo {
+  variable grupo texto
+  variable importe numerica
+  datos desde "entrada.csv" con filas hasta 10000000 con tiempo hasta 300000 ms
+  agrupar por "grupo" #spill("scratch.bin", 262144, 1073741824, 4096, 100000, 104857600, 4096)
+    resumir { suma de "importe"; }
+  guardar resultado en "reporte.json"
+}
+```
+
+En esta sintaxis de flujo, `#spill` contiene memoria del reductor, cuota de
+bytes del spill de entrada, bytes máximos de clave codificada y máximo de grupos.
+El sexto argumento fija el máximo de bytes del reporte final (opcional; `0`
+selecciona el default de 1 GiB), y el séptimo fija máximo de runs iniciales
+(opcional; default 4096, hard cap 65,536). El adaptador tabular acepta el valor
+cero como marcador al especificar solo el séptimo argumento y rechaza una cuota
+JSON no nula. Los límites de filas y
+tiempo deben ser explícitos en `datos desde`; el registro CSV/cantidad de
+columnas conservan sus límites existentes. La política se valida en el AST y
+la semántica rechaza tipos de clave/métrica incompatibles, métricas no
+admitidas y más de una métrica antes del runtime.
+
+El lector usa `stream_read_record` y `stream_split` compartidos, respetando
+comillas, comas y saltos de línea incrustados. Cada fila va directamente al
+reductor; ninguna fila se agrega a Dataset/Table. Al finalizar, el reducer
+invoca un callback por grupo de salida ya ordenado, que precomputa el tamaño
+JSON del grupo y verifica la cuota restante antes de escribirlo al archivo
+staging hermano. La publicación sustituye el destino atómicamente en POSIX y
+con `MoveFileEx` en Windows, solo cuando lectura, límites, reducción, escritura
+y cierre finalizaron bien. En error se elimina staging, runs y scratch. La
+prueba E2E compara el valor del corte spill con el agrupamiento de referencia
+en memoria mediante tolerancia y compara los contadores de filas válidas,
+nulas e inválidas por grupo.
+
+El contrato de memoria distingue el búfer de registro CSV (capacidad limitada
+por `max_record_bytes`), la copia acotada de cabecera, `max_columns` punteros,
+el búfer stdio de 64 KiB, un buffer callback de hasta una clave máxima y el
+presupuesto separado del reductor (mapa + sorting/merge). Los límites de caller
+y libc/stdio no equivalen a una cota de RSS total. En disco, el archivo de
+entrada append-only se limita por la cuota configurada y los runs ordenados
+pueden consumir hasta dos cuotas adicionales (hasta 3× la cuota en total),
+aparte del reporte staging. El reporte cuenta con una cuota independiente de
+bytes configurada en AST; no se mezcla con la cuota de scratch.
+
+No se agregan varias claves/métricas spill, clave compuesta, unión, ordenamiento
+de filas, Parquet/Arrow ni workers/red. Operaciones `Dataset` y `MilenaTable`
+siguen en memoria. El workflow `Grouped spill million-row validation` ejecuta
+un workload determinista de 1.000.000 de filas por la ruta canónica y compara
+la salida en memoria con spill; el artefacto registra el entorno y tiempos
+observados, pero no mide RSS global ni establece un SLO o una garantía de
+rendimiento. La ruta scratch la proporciona el programa y se crea en modo
+exclusivo; si ya existe, se rechaza sin sobrescribirla. No se prometen nombres
+aleatorios privados ni concurrencia de writers sobre la misma ruta.
 
 ## Semántica y determinismo
 
@@ -15,11 +83,11 @@ La única ruta de producto seguirá siendo `lexer → parser → AST tipado → 
 
 ## Formato persistente
 
-Cada corrida tendrá una cabecera explícita con magic, versión, endianess, identificador de ejecución, esquema/operaciones de métricas, número de filas y registros. Cada registro tendrá longitud de clave y valores enteros/floating de ancho fijo con encoding definido, nunca `fwrite` de structs C con padding o ABI dependiente. Bloques y cabecera tendrán checksums para detectar truncamiento/corrupción; checksum no significa autenticidad criptográfica. Rechazar versiones, tamaños, métricas, checksum o datos numéricos inválidos antes de combinar.
+El estado de agregado actual tiene wire v4 little-endian de 96 bytes: contadores de válidos/nulos/inválidos, seis campos binary64 para la estadística mergeable, tipo de agregado, suma INT64 exacta y checksum. Rechaza mezcla FLOAT64/INT64, versión o checksum inválido y overflow de suma exacta. Esto no convierte el registro en un contrato persistente plenamente autocontenido: falta todavía una cabecera de corrida enlazada al esquema con tipo(s) de clave, lista/orden/tipos de métricas e identificador de ejecución; siguen sin estar implementadas las claves compuestas o métricas múltiples. Cada registro futuro debe usar longitudes y valores de ancho fijo definidos, nunca `fwrite` de structs C con padding o ABI dependiente. Checksums detectan corrupción, no autenticidad criptográfica.
 
 ## Recursos y fallos
 
-Todos los límites tendrán defaults conservadores, validación y topes duros: memoria residente, tamaño máximo de clave/registro, número de corridas/archivos abiertos, bytes temporales totales, filas/tiempo y grupos totales. Cualquier suma/multiplicación de tamaños debe comprobar overflow. La falta de espacio, límite excedido, error de lectura/escritura, cancelación o corrupción devuelve error explícito; nunca cae silenciosamente a agregación ilimitada en RAM.
+Todos los límites tendrán defaults conservadores, validación y topes duros: memoria residente, tamaño máximo de clave/registro/reporte de salida, número de corridas/archivos abiertos, bytes temporales totales, filas/tiempo y grupos totales. Cualquier suma/multiplicación de tamaños debe comprobar overflow. La falta de espacio, límite excedido, error de lectura/escritura, cancelación o corrupción devuelve error explícito; nunca cae silenciosamente a agregación ilimitada en RAM.
 
 Crear temporales exclusivos con nombres impredecibles y permisos privados en un directorio permitido; registrar cada recurso para limpieza en cualquier camino de salida. No truncar ni reemplazar el destino final hasta completar la fusión y validar el reporte. Publicar mediante archivo temporal de salida y renombrado atómico cuando el sistema de archivos lo permita. Ningún error debe dejar corridas o un reporte parcial como resultado válido.
 
@@ -31,4 +99,4 @@ Crear temporales exclusivos con nombres impredecibles y permisos privados en un 
 4. Guardas de arquitectura, manifiesto y Makefile; sanitizers; suite completa y CI del head final. Documentar limits/defaults reales y benchmark reproducible con medición de pico RAM/bytes temporales.
 5. Mantener explícito que este contrato es local: no introduce red, clúster, cloud, Spark, Flink, Arrow ni Parquet.
 
-Hasta superar toda esta puerta, la afirmación correcta sigue siendo: «la agrupación en flujo tiene estado acotado en memoria y falla al exceder sus límites; spill-to-disk está pendiente».
+Hasta superar toda esta puerta, la afirmación correcta es específica: «un corte opt-in de una clave y una métrica ya transmite el CSV streaming al reducer spillable y publica la salida ordenada sin materializar grupos; el agrupador de Dataset/Table sigue en memoria y no hay soporte industrial/distribuido».

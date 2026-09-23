@@ -1,0 +1,86 @@
+name: Grouped spill scale and 10 GB validation
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  grouped-spill-million-row:
+    name: Canonical grouped spill (1,000,000 rows)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+      - name: Build canonical Milena binary
+        run: make all
+      - name: Run deterministic one-million-row parity workload
+        env:
+          CC: gcc
+        run: |
+          mkdir -p artifacts
+          python3 benchmarks/grouped_spill_benchmark.py \
+            --large-rows 1000000 \
+            --repetitions 3 \
+            --output artifacts/grouped-spill-million-row.json
+      - name: Run real 10 GB CSV acceptance gate with forced disk spill
+        env:
+          CC: gcc
+        run: |
+          mkdir -p artifacts
+          python3 benchmarks/grouped_spill_benchmark.py \
+            --large-file-bytes 10000000000 \
+            --large-file-rows 1000000 \
+            --large-file-groups 1000 \
+            --large-file-repetitions 1 \
+            --repetitions 1 \
+            --output artifacts/grouped-spill-ten-gb.json
+      - name: Upload reproducible workload observation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grouped-spill-large-file-acceptance-linux-${{ github.sha }}
+          path: |
+            artifacts/grouped-spill-million-row.json
+            artifacts/grouped-spill-ten-gb.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  grouped-spill-windows-10gb:
+    name: Windows x64 10 GB CSV and disk-spill gate
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+      - name: Install LLVM
+        shell: pwsh
+        run: choco install llvm --no-progress -y
+      - name: Build canonical Windows executable
+        shell: pwsh
+        run: ./packaging/windows/build.ps1
+      - name: Run real 10 GB CSV acceptance gate with forced disk spill
+        shell: pwsh
+        env:
+          CC: clang
+          MILENA_BIN: dist/windows/milena.exe
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          python benchmarks/grouped_spill_benchmark.py `
+            --large-file-bytes 10000000000 `
+            --large-file-rows 1000000 `
+            --large-file-groups 1000 `
+            --large-file-repetitions 1 `
+            --repetitions 1 `
+            --output artifacts/grouped-spill-ten-gb-windows.json
+      - name: Upload Windows workload observation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grouped-spill-large-file-acceptance-windows-${{ github.sha }}
+          path: artifacts/grouped-spill-ten-gb-windows.json
+          if-no-files-found: warn
+          retention-days: 30

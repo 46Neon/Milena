@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: ''
+      run_10gb_gate:
+        description: 'Ejecutar en el dispositivo real la prueba sintética de 10 GB y spill (requiere espacio libre)'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -48,7 +53,7 @@ jobs:
   termux-aarch64-contract:
     if: inputs.confirm_device == true
     runs-on: [self-hosted, termux, aarch64, milena]
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - name: Checkout Milena
         uses: actions/checkout@v4
@@ -108,6 +113,40 @@ jobs:
           package="$(find dist/termux -maxdepth 1 -type f -name 'milena_*_aarch64.deb' -print -quit)"
           ./scripts/termux-real-smoke.sh "$package" "${MILENA_APT_REPOSITORY:-}"
 
+      - name: Run opt-in 10 GB grouped-spill gate on real Termux
+        if: inputs.run_10gb_gate == true
+        shell: bash
+        env:
+          CC: clang
+          MILENA_BIN: ${{ github.workspace }}/milena
+        run: |
+          set -euo pipefail
+          test "${{ inputs.confirm_device }}" = "true"
+          test "$(uname -m)" = "aarch64"
+          mkdir -p artifacts/termux-runner
+          make clean
+          make TERMUX=1 CC=clang all
+          ./milena --self-check | grep -Fq 'Milena self-check: OK'
+          export TMPDIR="${TMPDIR:-$PREFIX/tmp}"
+          mkdir -p "$TMPDIR"
+          {
+            uname -a
+            printf 'PREFIX=%s\n' "$PREFIX"
+            if command -v getprop >/dev/null 2>&1; then
+              getprop ro.build.version.release
+            fi
+            clang --version | head -n 1
+            python3 --version
+            df -h "$TMPDIR"
+          } > artifacts/termux-runner/large-file-environment.txt
+          python3 benchmarks/grouped_spill_benchmark.py \
+            --large-file-bytes 10000000000 \
+            --large-file-rows 1000000 \
+            --large-file-groups 1000 \
+            --large-file-repetitions 1 \
+            --repetitions 1 \
+            --output artifacts/termux-runner/grouped-spill-ten-gb.json
+
       - name: Upload real-runner evidence
         uses: actions/upload-artifact@v4
         with:
@@ -117,6 +156,8 @@ jobs:
             artifacts/termux-runner/toolchain.txt
             artifacts/termux-runner/workspace-sha256.txt
             artifacts/termux-runner/smoke.txt
+            artifacts/termux-runner/large-file-environment.txt
+            artifacts/termux-runner/grouped-spill-ten-gb.json
             dist/termux/*.deb
             dist/termux/*.sha256
           if-no-files-found: error

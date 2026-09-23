@@ -66,6 +66,11 @@ typedef enum {
     MILENA_JOIN_FULL
 } MilenaJoinType;
 
+#define MILENA_TABLE_JOIN_DEFAULT_MEMORY_BYTES (256u * 1024u * 1024u)
+#define MILENA_TABLE_JOIN_HARD_MEMORY_BYTES (1024u * 1024u * 1024u)
+#define MILENA_TABLE_JOIN_DEFAULT_MAX_OUTPUT_ROWS 1000000u
+#define MILENA_TABLE_JOIN_HARD_MAX_OUTPUT_ROWS 10000000u
+
 typedef struct {
     const char *column;
     bool ascending;
@@ -249,6 +254,17 @@ MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
                                const char *const *right_keys,
                                size_t key_count, MilenaJoinType join_type,
                                MilenaError *error);
+/* Bounded join contract: the byte budget preflights the hash indexes, row
+ * maps, output metadata/data and known staging buffers used to materialize the
+ * result. Source tables, an existing caller-owned output table, loader/parser
+ * allocations, allocator overhead and process-wide RSS are excluded; this is
+ * not a global RSS cap. The API rejects budgets below 4096 bytes or above the
+ * hard cap and output-row limits above the hard cap. */
+MilenaStatus milena_table_join_with_limits(
+    MilenaTable *out, const MilenaTable *left, const MilenaTable *right,
+    const char *const *left_keys, const char *const *right_keys,
+    size_t key_count, MilenaJoinType join_type,
+    size_t memory_budget_bytes, size_t max_output_rows, MilenaError *error);
 
 /* Unpivot requires all value columns to have the same logical type/storage. */
 MilenaStatus milena_table_unpivot(MilenaTable *out,

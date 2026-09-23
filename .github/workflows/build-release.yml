@@ -36,7 +36,7 @@ jobs:
       - name: Build and test Debian package
         run: |
           set -euxo pipefail
-          timeout --signal=TERM --kill-after=30s 15m ./packaging/debian/build-local-deb.sh
+          timeout 900 ./packaging/debian/build-local-deb.sh
       - name: Upload Debian artifact
         uses: actions/upload-artifact@v4
         with:

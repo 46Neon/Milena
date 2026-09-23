@@ -38,6 +38,7 @@ typedef enum {
     AST_COMANDO_TOTAL,
     AST_COMANDO_PERIODO,
     AST_AGRUPACION_POR,
+    AST_AGRUPACION_SPILL,
     AST_RESUMEN_METRICA,
     AST_OPERACION_ESTADISTICA,
     AST_DECLARACION_ENTRADA,
@@ -93,6 +94,18 @@ typedef struct ASTNode {
     size_t stream_group_limit;
     size_t stream_row_limit;
     double stream_time_limit_ms;
+    /* Explicit resource policy for canonical #agrupar spill-to-disk. */
+    size_t group_memory_budget_bytes;
+    size_t group_spill_quota_bytes;
+    size_t group_max_key_bytes;
+    size_t group_max_output_groups;
+    size_t group_max_output_bytes;
+    size_t group_max_runs;
+    bool group_output_limit_explicit;
+    /* Resource limits for canonical table joins. */
+    size_t join_memory_budget_bytes;
+    size_t join_max_output_rows;
+    bool join_limits_explicit;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;

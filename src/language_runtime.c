@@ -3,6 +3,7 @@
 #include "array.h"
 #include "dataset.h"
 #include "stream.h"
+#include "language_grouped_spill.h"
 #include "analysis.h"
 #include "schema.h"
 #include "table.h"
@@ -1422,6 +1423,7 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
     const ASTNode *group_block = NULL;
     const ASTNode *group_key = NULL;
     const ASTNode *group_summary = NULL;
+    const ASTNode *spill_policy = NULL;
     bool has_top_summary = false;
     for (size_t i = 0; i < analysis->child_count; i++) {
         const ASTNode *node = analysis->children[i];
@@ -1469,6 +1471,13 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
                     return MILENA_ERR_PARSE;
                 }
                 group_summary = child;
+            } else if (child->type == AST_AGRUPACION_SPILL) {
+                if (spill_policy) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La agrupación de flujo solo admite una política #spill");
+                    return MILENA_ERR_PARSE;
+                }
+                spill_policy = child;
             } else {
                 runtime_error(error, MILENA_ERR_PARSE,
                               "La agrupación de flujo contiene un nodo no compatible");
@@ -1574,11 +1583,33 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
         return MILENA_ERR_PARSE;
     }
     MilenaStreamReport report = {0};
-    MilenaStatus status = group_block
-        ? milena_stream_csv_grouped_with_options(input_path, output_path,
-              group_key->value, metrics, metric_count, options, &report, error)
-        : milena_stream_csv_summary_with_options(input_path, output_path,
-              metrics, metric_count, options, &report, error);
+    MilenaStatus status;
+    MilenaStreamSpillPolicy policy = {0};
+    const MilenaStreamSpillPolicy *policy_ptr = NULL;
+    if (group_block && spill_policy) {
+        if (metric_count != 1) {
+            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                          "#spill de flujo admite exactamente una métrica");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+        policy = (MilenaStreamSpillPolicy){
+            spill_policy->value,
+            spill_policy->group_memory_budget_bytes,
+            spill_policy->group_spill_quota_bytes,
+            spill_policy->group_max_key_bytes,
+            spill_policy->group_max_output_groups,
+            spill_policy->group_max_output_bytes,
+            spill_policy->group_max_runs
+        };
+        policy_ptr = &policy;
+    }
+    MilenaStreamExecutionPlan plan;
+    status = milena_stream_plan_build_csv(group_block != NULL,
+                                          spill_policy != NULL, &plan, error);
+    if (status == MILENA_OK)
+        status = milena_stream_execute_csv_plan(&plan, input_path, output_path,
+            group_key ? group_key->value : NULL, metrics, metric_count, options,
+            policy_ptr, &report, error);
     if (status == MILENA_OK && output) {
         fprintf(output, "Programa de flujo ejecutado: %s\n", input_path);
         fprintf(output, "Filas: %zu | Válidas: %zu | Malformadas: %zu | Lote: %zu | Registro máximo observado: %zu bytes | Tiempo medido: %.3f ms\n",
@@ -1818,11 +1849,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 }
             } else if (block->type == AST_BLOQUE_AGRUPAR) {
                 const ASTNode *group_key = NULL;
+                const ASTNode *spill_policy = NULL;
                 const ASTNode *summaries[16];
                 size_t summary_count = 0;
                 for (size_t j = 0; j < block->child_count; j++) {
                     if (block->children[j]->type == AST_AGRUPACION_POR) {
                         group_key = block->children[j];
+                    } else if (block->children[j]->type == AST_AGRUPACION_SPILL) {
+                        spill_policy = block->children[j];
                     } else if (block->children[j]->type == AST_RESUMEN_METRICA &&
                                summary_count < 16) {
                         summaries[summary_count++] = block->children[j];
@@ -1865,10 +1899,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     const char *key_names[1] = {group_key->value};
                     MilenaTable grouped = {0};
                     milena_table_init(&grouped);
-                    status = milena_table_group_by(&grouped, &canonical_table,
-                                                   key_names, 1,
-                                                   specifications, summary_count,
-                                                   error);
+                    if (spill_policy) {
+                        status = milena_language_group_by_spill(&grouped,
+                            &canonical_table, group_key->value,
+                            &specifications[0], spill_policy, error);
+                    } else {
+                        status = milena_table_group_by(&grouped, &canonical_table,
+                            key_names, 1, specifications, summary_count, error);
+                    }
                     if (status == MILENA_OK) {
                         milena_table_swap(&canonical_table, &grouped);
                         for (size_t j = 0; j < summary_count; j++) {
@@ -2024,9 +2062,11 @@ MilenaStatus milena_run_dataset_program(const char *source,
                         const char *right_keys[1] = {key_node->value};
                         MilenaTable joined = {0};
                         milena_table_init(&joined);
-                        status = milena_table_join(&joined, &canonical_table,
-                                                   &right_table, left_keys, right_keys,
-                                                   1, MILENA_JOIN_INNER, error);
+                        status = milena_table_join_with_limits(
+                            &joined, &canonical_table, &right_table, left_keys,
+                            right_keys, 1, MILENA_JOIN_INNER,
+                            block->join_memory_budget_bytes,
+                            block->join_max_output_rows, error);
                         if (status == MILENA_OK) {
                             milena_table_swap(&canonical_table, &joined);
                             for (size_t j = 0; j < canonical_table.column_count; j++) {

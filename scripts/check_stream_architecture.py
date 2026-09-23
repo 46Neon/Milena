@@ -25,28 +25,45 @@ for marker in required:
         raise SystemExit(f"missing typed AST contract: {marker}")
 if "milena_validate_ast(program, error)" not in runtime:
     raise SystemExit("runtime bypasses semantic validation")
-if "run_stream_dataset_with_options" not in runtime or "milena_stream_csv_summary_with_options" not in runtime:
-    raise SystemExit("stream backend is not invoked by the canonical runtime")
+if "run_stream_dataset_with_options" not in runtime or "milena_stream_execute_csv_plan" not in runtime:
+    raise SystemExit("typed CSV plan is not invoked by the canonical runtime")
+if "milena_stream_csv_summary_with_options" not in stream:
+    raise SystemExit("CSV summary backend is not dispatched by the stream planner")
 # The natural syntax branch must consume typed AST operations, not scan text.
 start = runtime.index("static MilenaStatus run_stream_dataset_with_options")
 end = runtime.index("MilenaStatus milena_run_dataset_program", start)
 stream_runtime = runtime[start:end]
 if "summary->stream_operation" not in stream_runtime:
     raise SystemExit("natural stream metrics do not use typed AST operations")
-if "milena_stream_csv_grouped_with_options" not in stream_runtime:
-    raise SystemExit("grouped streaming is not invoked by the canonical runtime")
+if "milena_stream_execute_csv_plan" not in stream_runtime:
+    raise SystemExit("canonical runtime bypasses typed CSV plan execution")
+if "milena_stream_csv_grouped_with_options" not in stream:
+    raise SystemExit("grouped streaming is not dispatched by the stream planner")
+if "milena_stream_csv_grouped_spill_with_options" not in stream:
+    raise SystemExit("streaming spill is not dispatched by the stream planner")
+if "milena_stream_csv_grouped_spill_with_options" not in stream_header or \
+   "milena_grouped_aggregate_finalize" not in stream:
+    raise SystemExit("streaming spill does not use the canonical reducer callback")
 if "AST_AGRUPACION_POR" not in stream_runtime or "group_key->value" not in stream_runtime:
     raise SystemExit("grouping key bypasses typed AST execution")
 if "milena_stream_csv_grouped_with_options" not in stream_header:
     raise SystemExit("grouped streaming API is not declared in the canonical contract")
-# Do not let docs imply a spill implementation before a typed backend, source
-# manifest entry, runtime path, and end-to-end evidence actually exist.
-if "src/spill.c" in make or "src/spill_store.c" in make:
-    raise SystemExit("planned spill module must be implemented and integrated before entering SOURCES")
-if "no hay spill-to-disk" not in streaming_docs.lower():
-    raise SystemExit("streaming docs must state that grouped spill is not implemented")
-if "no implementa spill-to-disk" not in pr25_docs.lower():
-    raise SystemExit("PR25 status must state that grouped spill is not implemented")
+# The bounded CSV spill path uses the same AST/runtime and CSV record parser,
+# and does not route through Dataset/Table materialization.
+if "src/spill.c" in make:
+    raise SystemExit("unplanned legacy spill module entered product SOURCES")
+if "src/spill_store.c" in make and (
+    "src/language_grouped_spill.c" not in make or
+    '"language_grouped_spill.c"' not in manifest or
+    "AST_AGRUPACION_SPILL" not in ast + parser or
+    "milena_language_group_by_spill" not in runtime
+):
+    raise SystemExit("grouped spill API lacks its typed canonical #agrupar adapter")
+if "max_record_bytes" not in streaming_docs or "memoria_reductor_bytes" not in streaming_docs or \
+   "rss global" not in streaming_docs.lower():
+    raise SystemExit("streaming spill docs must distinguish record/reducer caps from RSS")
+if "streaming" not in pr25_docs.lower() or "materializando" not in pr25_docs.lower():
+    raise SystemExit("big-data status must describe the real streaming/table boundaries")
 for marker in ("contrato", "checksum", "límites", "limpieza", "e2e"):
     if marker not in spill_contract.lower():
         raise SystemExit(f"grouped spill design contract is incomplete: {marker}")
@@ -55,6 +72,12 @@ for marker in ("STREAM_HARD_MAX_GROUPS", "STREAM_GROUP_STATE_BUDGET", "qsort(gro
         raise SystemExit(f"bounded/deterministic grouping guard missing: {marker}")
 if "sscanf(summary->value" in stream_runtime:
     raise SystemExit("natural stream metrics still use textual scanning")
+spill_stream_start = stream.index("MilenaStatus milena_stream_csv_grouped_spill_with_options")
+spill_stream = stream[spill_stream_start:]
+if "stream_read_record" not in spill_stream or "stream_split" not in spill_stream:
+    raise SystemExit("streaming spill bypasses the existing bounded CSV parser")
+if "Dataset" in spill_stream or "MilenaTable" in spill_stream:
+    raise SystemExit("streaming spill materializes Dataset/MilenaTable")
 if "src/stream.c" not in make or '"stream.c"' not in manifest:
     raise SystemExit("stream.c is not classified as official product")
 # Related analysis, SST, and finance remain language-runtime capabilities.
