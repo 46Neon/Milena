@@ -1351,6 +1351,7 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     bool reducer_open = false, scratch_owned = false, published = false;
     bool resource_limit_reached = false;
     size_t spill_bytes = 0, spill_records = 0, spill_runs = 0;
+    const char *failure_stage = "lectura CSV y agregado";
     MilenaGroupedAggregate reducer = {0};
     MilenaStatus status = MILENA_OK;
 
@@ -1526,6 +1527,7 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     }
     if (status != MILENA_OK) goto spill_finish;
 
+    failure_stage = "creación del informe staging";
     staged = stream_open_staging(output_path, &staging_path, error);
     if (!staged) { status = error ? error->code : MILENA_ERR_IO; goto spill_finish; }
     double elapsed = stream_now_ms() - started;
@@ -1577,10 +1579,13 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     emitter.started_ms = started;
     emitter.max_elapsed_ms = options->max_elapsed_milliseconds;
     size_t entries_emitted = 0;
+    failure_stage = "finalización del reducer y ordenamiento externo";
     status = milena_grouped_aggregate_finalize(&reducer,
         stream_spill_emit_group, &emitter, &entries_emitted, error);
-    if (status == MILENA_OK)
+    if (status == MILENA_OK) {
+        failure_stage = "cierre de grupos del reporte";
         status = stream_spill_emitter_finish(&emitter, error);
+    }
     if (status != MILENA_OK) { free(emitter.current_key); goto spill_finish; }
     free(emitter.current_key);
     emitter.current_key = NULL;
@@ -1699,8 +1704,8 @@ spill_finish:
     if (status != MILENA_OK && error && error->code == MILENA_OK) {
         char message[128];
         (void)snprintf(message, sizeof(message),
-                       "Fallo de spill agrupado CSV (%s) sin detalle del backend",
-                       milena_status_name(status));
+                       "Fallo de spill agrupado CSV (%s) durante %s sin detalle del backend",
+                       milena_status_name(status), failure_stage);
         milena_error_set(error, status, 0, 0, 0, message);
     }
     return status;
