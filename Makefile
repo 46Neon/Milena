@@ -26,7 +26,7 @@ SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all benchmark clean termux-build termux-install test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
+.PHONY: all benchmark clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-compiler-boundary debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -211,6 +211,12 @@ termux-install: termux-build
 	test -n "$(TERMUX_PREFIX)"
 	install -Dm755 $(TARGET) "$(DESTDIR)$(TERMUX_PREFIX)/bin/$(TARGET)"
 	install -Dm644 README.md "$(DESTDIR)$(TERMUX_PREFIX)/share/doc/milena/README.md"
+	install -Dm644 LICENSE "$(DESTDIR)$(TERMUX_PREFIX)/share/licenses/milena/LICENSE"
+
+# Host-side, reproducible contract. It checks the canonical binary and CLI
+# without pretending that a Linux runner is Android/Bionic hardware.
+termux-contract:
+	bash scripts/termux-native-contract.sh
 
 $(TARGET): $(OBJECTS) $(FUNCTION_OBJECTS)
 	$(CC) $(CFLAGS) $(OBJECTS) $(FUNCTION_OBJECTS) $(LDFLAGS) -o $@
@@ -239,3 +245,4 @@ clean:
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
 		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
 		tests/test_script_functions tests/test_user_functions tests/test_canonical_compiler reporte.json resultado.json
+

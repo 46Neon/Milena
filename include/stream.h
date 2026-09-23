@@ -21,6 +21,9 @@ typedef struct {
     size_t chunk_rows;
     size_t max_record_bytes;
     size_t max_columns;
+    /* 0 means unlimited; production callers should set both budgets. */
+    size_t max_rows;
+    double max_elapsed_milliseconds;
 } MilenaStreamOptions;
 
 typedef struct {
@@ -39,6 +42,9 @@ typedef struct {
     size_t header_columns;
     size_t max_record_bytes;
     size_t max_columns;
+    size_t max_rows;
+    double max_elapsed_milliseconds;
+    bool resource_limit_reached;
 } MilenaStreamReport;
 
 /*

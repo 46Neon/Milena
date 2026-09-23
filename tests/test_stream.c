@@ -57,6 +57,56 @@ int main(void) {
     assert(strstr(limited_error.message, "límite") != NULL);
     remove(large_input);
     remove(large_output);
+
+    const char *budget_input = "tests/.stream_budget.csv";
+    const char *budget_output = "tests/.stream_budget.json";
+    FILE *budget = fopen(budget_input, "wb");
+    assert(budget != NULL);
+    fputs("importe\n1\n2\n3\n", budget);
+    assert(fclose(budget) == 0);
+    MilenaStreamOptions budget_options = milena_stream_options_default();
+    budget_options.max_rows = 2;
+    MilenaError budget_error;
+    milena_error_clear(&budget_error);
+    MilenaStreamReport budget_report = {0};
+    assert(milena_stream_csv_summary_with_options(
+        budget_input, budget_output, metrics, 1, &budget_options,
+        &budget_report, &budget_error) == MILENA_ERR_OVERFLOW);
+    assert(budget_report.resource_limit_reached == true);
+    assert(strstr(budget_error.message, "filas") != NULL);
+    remove(budget_input);
+    remove(budget_output);
+
+    /* Duplicate names would make a metric reference ambiguous. */
+    const char *duplicate_input = "tests/.stream_duplicate.csv";
+    const char *duplicate_output = "tests/.stream_duplicate.json";
+    FILE *duplicate = fopen(duplicate_input, "wb");
+    assert(duplicate != NULL);
+    fputs("importe,importe\n1,2\n", duplicate);
+    assert(fclose(duplicate) == 0);
+    MilenaError duplicate_error;
+    milena_error_clear(&duplicate_error);
+    assert(milena_stream_csv_summary(duplicate_input, duplicate_output,
+                                     metrics, 1, 2, NULL,
+                                     &duplicate_error) == MILENA_ERR_DATA);
+    assert(strstr(duplicate_error.message, "duplicadas") != NULL);
+    remove(duplicate_input);
+    remove(duplicate_output);
+
+    /* A blank record is a valid one-field CSV record, not an out-of-bounds read. */
+    const char *blank_input = "tests/.stream_blank.csv";
+    const char *blank_output = "tests/.stream_blank.json";
+    FILE *blank = fopen(blank_input, "wb");
+    assert(blank != NULL);
+    fputs("importe\n\n", blank);
+    assert(fclose(blank) == 0);
+    MilenaError blank_error;
+    milena_error_clear(&blank_error);
+    assert(milena_stream_csv_summary(blank_input, blank_output,
+                                     metrics, 1, 2, NULL,
+                                     &blank_error) == MILENA_OK);
+    remove(blank_input);
+    remove(blank_output);
     puts("stream tests passed");
     return 0;
 }
