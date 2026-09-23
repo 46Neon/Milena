@@ -24,6 +24,7 @@ RUN_TIMEOUT_SECONDS = 300
 MEMORY_BUDGET_BYTES = 262_144
 MAX_KEY_BYTES = 128
 MAX_REPORT_BYTES = 1_073_741_824
+SPILL_QUOTA_MULTIPLIER = 16
 MAX_RUNS = 65_536
 
 
@@ -102,7 +103,8 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
         root = Path(td)
         csv_path = root / "rows.csv"
         byte_count = write_csv(csv_path, rows, groups)
-        quota = min(4_294_967_296, max(1_048_576, byte_count * 4))
+        quota = min(4_294_967_296,
+                    max(1_048_576, byte_count * SPILL_QUOTA_MULTIPLIER))
         measurements = []
         for repetition in range(repetitions):
             memory_script = root / f"memory-{repetition}.milena"

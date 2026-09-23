@@ -16,17 +16,17 @@ CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude
 LDFLAGS ?= -lm -pthread
 endif
 SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/dataset.c src/analysis.c src/script.c src/main.c \
-          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/language_runtime.c src/language_grouped_spill.c src/canonical_compiler.c src/interpreter.c \
+          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/language_runtime.c src/canonical_compiler.c src/interpreter.c \
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
-          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/partition_protocol.c src/partition_protocol_reduce.c src/spill_store.c src/mergeable_aggregate.c src/grouped_aggregate.c src/external_merge.c src/external_sort.c src/entrypoints.c
+          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/entrypoints.c src/query_plan.c
 OBJECTS = $(SOURCES:.c=.o)
 SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
+.PHONY: all benchmark benchmark-stream benchmark-stream-grouped clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-query-plan test-partition-protocol test-protocol-reduce test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -85,8 +85,8 @@ test-entrypoints: tests/test_entrypoints
 tests/test_entrypoints: tests/test_entrypoints.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-tests/test_stream: tests/test_stream.c src/stream.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c
-	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
+tests/test_stream: tests/test_stream.c src/stream.c src/common.c
+	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/common.c $(LDFLAGS) -o $@
 
 test-partition-plan: tests/test_partition_plan
 	./tests/test_partition_plan
@@ -124,53 +124,19 @@ test-partition-budget: tests/test_partition_budget
 tests/test_partition_budget: tests/test_partition_budget.c src/partition_executor.c src/partition_plan.c src/common.c
 	$(CC) $(CFLAGS) tests/test_partition_budget.c src/partition_executor.c src/partition_plan.c src/common.c $(LDFLAGS) -o $@
 
-test-partition-protocol: tests/test_partition_protocol
-	./tests/test_partition_protocol
-
-tests/test_partition_protocol: tests/test_partition_protocol.c src/partition_protocol.c src/common.c
-	$(CC) $(CFLAGS) tests/test_partition_protocol.c src/partition_protocol.c src/common.c $(LDFLAGS) -o $@
-
-test-protocol-reduce: tests/test_protocol_reduce
-	./tests/test_protocol_reduce
-
-tests/test_protocol_reduce: tests/test_protocol_reduce.c src/partition_protocol_reduce.c src/partition_protocol.c src/partition_reduce.c src/partition_plan.c src/common.c
-	$(CC) $(CFLAGS) tests/test_protocol_reduce.c src/partition_protocol_reduce.c src/partition_protocol.c src/partition_reduce.c src/partition_plan.c src/common.c $(LDFLAGS) -o $@
-
-test-spill-store: tests/test_spill_store
-	./tests/test_spill_store
-
-tests/test_spill_store: tests/test_spill_store.c src/spill_store.c src/common.c
-	$(CC) $(CFLAGS) tests/test_spill_store.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
-
-test-mergeable-aggregate: tests/test_mergeable_aggregate
-	./tests/test_mergeable_aggregate
-
-tests/test_mergeable_aggregate: tests/test_mergeable_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c
-	$(CC) $(CFLAGS) tests/test_mergeable_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
-
-test-grouped-aggregate: tests/test_grouped_aggregate
-	./tests/test_grouped_aggregate
-
-tests/test_grouped_aggregate: tests/test_grouped_aggregate.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c include/grouped_aggregate.h include/mergeable_aggregate.h include/spill_store.h
-	$(CC) $(CFLAGS) tests/test_grouped_aggregate.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
-
-test-external-merge: tests/test_external_merge
-	./tests/test_external_merge
-
-tests/test_external_merge: tests/test_external_merge.c src/external_merge.c src/spill_store.c src/common.c
-	$(CC) $(CFLAGS) tests/test_external_merge.c src/external_merge.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
-
-test-external-sort: tests/test_external_sort
-	./tests/test_external_sort
-
-tests/test_external_sort: tests/test_external_sort.c src/external_sort.c src/external_merge.c src/spill_store.c src/common.c
-	$(CC) $(CFLAGS) tests/test_external_sort.c src/external_sort.c src/external_merge.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
-
 test-process-executor: tests/test_process_executor
 	./tests/test_process_executor
 
 tests/test_process_executor: tests/test_process_executor.c src/process_executor.c src/partition_executor.c src/partition_plan.c src/common.c
 	$(CC) $(CFLAGS) tests/test_process_executor.c src/process_executor.c src/partition_executor.c src/partition_plan.c src/common.c $(LDFLAGS) -o $@
+
+.PHONY: test-query-plan
+
+test-query-plan: tests/test_query_plan
+	./tests/test_query_plan
+
+tests/test_query_plan: tests/test_query_plan.c src/query_plan.c src/ast.c src/common.c
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 .PHONY: test-finance
 
@@ -197,7 +163,7 @@ tests/test_lexer_safety: tests/test_lexer_safety.c src/lexer.c src/common.c
 test-language-runtime: tests/test_language_runtime
 	timeout --signal=TERM --kill-after=5s 60s ./tests/test_language_runtime
 
-tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c
+tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/query_plan.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 .PHONY: test-parser-array
@@ -293,10 +259,6 @@ benchmark-stream: $(TARGET)
 benchmark-stream-grouped: $(TARGET)
 	python3 benchmarks/grouped_stream_benchmark.py
 
-# Small deterministic memory-vs-spill check; large runs require --large-rows.
-benchmark-stream-grouped-spill: $(TARGET)
-	python3 benchmarks/grouped_spill_benchmark.py --repetitions 1
-
 # Build targets consumed by the Termux recipe. They never build tests or the
 # experimental compiler/IR/VM sources and never assume a Debian filesystem.
 termux-build:
@@ -330,7 +292,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-entrypoints \
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-entrypoints test-query-plan \
       test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics \
       test-parser-variables test-functions test-script-functions test-user-functions
 	./tests/run_tests.sh
@@ -338,8 +300,12 @@ test: check-source-manifest check-experimental-isolation check-stream-architectu
 clean:
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
-		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
+		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
 		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
-		tests/test_script_functions tests/test_user_functions tests/test_canonical_compiler reporte.json resultado.json
+		tests/test_script_functions tests/test_user_functions tests/test_query_plan tests/test_canonical_compiler reporte.json resultado.json
 
 
+# Opt-in scale gate; deliberately excluded from the ordinary `make test` suite.
+.PHONY: scale-million-row
+scale-million-row: $(TARGET)
+	python3 benchmarks/million_row_validation.py $(if $(SCALE_RESULT),--output $(SCALE_RESULT),)
