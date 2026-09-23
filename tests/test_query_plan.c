@@ -83,7 +83,11 @@ static void test_grouped_spill_stream_plan(void) {
     ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
     assert(group);
     assert(ast_add_child(group, leaf_with_value(AST_AGRUPACION_POR, "region")));
-    assert(ast_add_child(group, summary_block()));
+    ASTNode *summary = summary_block();
+    ASTNode *mean = leaf_with_value(AST_RESUMEN_METRICA, "otra");
+    mean->stream_operation = AST_STREAM_OPERATION_MEAN;
+    assert(ast_add_child(summary, mean));
+    assert(ast_add_child(group, summary));
     ASTNode *policy = leaf_with_value(AST_AGRUPACION_SPILL, "scratch.bin");
     policy->group_memory_budget_bytes = 4096;
     policy->group_spill_quota_bytes = 1024 * 1024;
@@ -100,6 +104,30 @@ static void test_grouped_spill_stream_plan(void) {
     assert(plan.group == group && plan.spill_policy == policy);
     assert(plan.group_key == group->children[0]);
     assert(plan.physical_operator == MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL);
+    ast_destroy(analysis);
+}
+
+static void test_grouped_spill_rejects_unsupported_metric(void) {
+    ASTNode *analysis = new_analysis();
+    ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
+    assert(group);
+    assert(ast_add_child(group, leaf_with_value(AST_AGRUPACION_POR, "region")));
+    ASTNode *summary = summary_block();
+    summary->children[0]->stream_operation = AST_STREAM_OPERATION_VARIANCE;
+    assert(ast_add_child(group, summary));
+    ASTNode *policy = leaf_with_value(AST_AGRUPACION_SPILL, "scratch.bin");
+    policy->group_memory_budget_bytes = 4096;
+    policy->group_spill_quota_bytes = 1024 * 1024;
+    policy->group_max_key_bytes = 128;
+    policy->group_max_output_groups = 100;
+    policy->group_max_output_bytes = 1073741824u;
+    policy->group_max_runs = 4096u;
+    assert(ast_add_child(group, policy));
+    assert(ast_add_child(analysis, group));
+    MilenaStreamExecutionPlan plan;
+    MilenaError error = {0};
+    assert(milena_stream_execution_plan_build(analysis, &plan, &error) ==
+           MILENA_ERR_UNSUPPORTED);
     ast_destroy(analysis);
 }
 
@@ -211,6 +239,7 @@ int main(void) {
     test_global_stream_plan();
     test_grouped_stream_plan();
     test_grouped_spill_stream_plan();
+    test_grouped_spill_rejects_unsupported_metric();
     test_filtered_grouped_stream_plan();
     test_numeric_filter_plan();
     test_legacy_global_summary_plan();

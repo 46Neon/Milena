@@ -3,6 +3,8 @@
 
 #include "common.h"
 
+#define MILENA_STREAM_MAX_METRICS 64u
+
 
 /*
  * Bounded-memory execution for large CSV inputs. The stream path keeps only
@@ -125,7 +127,8 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
                                        const char *input_path,
                                        const char *output_path,
                                        const char *group_column,
-                                       const MilenaStreamMetric *metric,
+                                       const MilenaStreamMetric *metrics,
+                                       size_t metric_count,
                                        const MilenaStreamOptions *options,
                                        const MilenaStreamSpillPolicy *policy,
                                        MilenaStreamReport *report,

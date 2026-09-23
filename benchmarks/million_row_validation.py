@@ -93,7 +93,7 @@ def validate_spill_report(report: dict[str, Any], malformed_expected: int,
     expected = expected_spill_groups()
     if report.get("modo") != "flujo_agrupado_spill":
         raise AssertionError(f"expected grouped spill mode, got {report.get('modo')!r}")
-    for field, value in {"filas": ROWS, "filas_validas": ROWS - malformed_expected,
+    for field, value in {"filas": ROWS, "filas_validas": ROWS,
                          "filas_malformadas": malformed_expected, "grupos": 128,
                          "limite_grupos": 128, "limite_salida_bytes": 16777216,
                          "bytes_entrada": input_bytes}.items():
@@ -117,16 +117,27 @@ def validate_spill_report(report: dict[str, Any], malformed_expected: int,
     for item in results:
         key = item["clave"]
         metrics = item.get("metricas")
-        if not isinstance(metrics, list) or len(metrics) != 1:
+        if not isinstance(metrics, list) or len(metrics) != 3:
             raise AssertionError(f"spill group {key} has invalid metric shape")
-        metric = metrics[0]
+        by_operation = {metric.get("operacion"): metric for metric in metrics}
+        if list(by_operation) != ["suma", "media", "conteo"]:
+            raise AssertionError(f"spill group {key} has missing or reordered metrics")
         values = expected[key]
-        target = values["ticks"] / 10.0
-        if (metric.get("operacion") != "suma" or
-                metric.get("valores_validos") != values["valid"] or
-                not isinstance(metric.get("valor"), (int, float)) or
-                not math.isclose(float(metric["valor"]), target, rel_tol=1e-12, abs_tol=1e-9)):
-            raise AssertionError(f"spill aggregate mismatch for {key}: {metric!r}")
+        total = values["ticks"] / 10.0
+        expected_values = {"suma": total,
+                           "media": total / values["valid"] if values["valid"] else None,
+                           "conteo": values["rows"]}
+        for operation, metric in by_operation.items():
+            valid = values["rows"] if operation == "conteo" else values["valid"]
+            invalid = 0 if operation == "conteo" else values["invalid"]
+            target = expected_values[operation]
+            if (metric.get("valores_validos") != valid or
+                    metric.get("valores_invalidos") != invalid or
+                    metric.get("valores_nulos") != 0 or
+                    not isinstance(metric.get("valor"), (int, float)) or
+                    not math.isclose(float(metric["valor"]), float(target),
+                                     rel_tol=1e-12, abs_tol=1e-9)):
+                raise AssertionError(f"spill {operation} mismatch for {key}: {metric!r}")
     return {"groups": len(results), "distinct_keys": 128,
             "configured_group_state_bytes": 4096,
             "scratch_quota_bytes": 134217728,
@@ -411,7 +422,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
         con tiempo hasta 600000 ms
         con grupos de 128
     agrupar por "grupo_spill" #spill({json.dumps(str(scratch_path), ensure_ascii=False)}, 4096, 134217728, 128, 128, 16777216, 4096)
-        resumir {{ suma de "importe"; }}
+        resumir {{ suma de "importe"; media de "importe"; contar de "importe"; }}
     guardar resultado en {json.dumps(str(spill_report_path), ensure_ascii=False)}
 }}
 '''
@@ -482,7 +493,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
                             "compiler": os.environ.get("CC", "make default CC"),
                             "commit": os.environ.get("GITHUB_SHA", "unknown")},
             "limitations": [
-                "This pass proves global and two-key aggregation plus grouped spill over 1,000,000 rows with bounded 128-key output and a 4 KiB reducer memory policy for the documented contiguous-key fixture, build and hardware.",
+                "This pass proves global and two-key aggregation plus grouped spill with three metrics over 1,000,000 rows with bounded 128-key output and a 4 KiB reducer memory policy for the documented contiguous-key fixture, build and hardware.",
                 "It does not prove arbitrary high-cardinality output, joins, general ETL, distributed/cloud execution, Arrow/Parquet or ML.",
                 "Throughput and peak RSS are observations; no universal latency or RSS threshold is asserted.",
             ],

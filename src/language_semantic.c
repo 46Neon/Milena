@@ -1,5 +1,6 @@
 #include "language_semantic.h"
 #include "grouped_aggregate.h"
+#include "stream.h"
 #include <string.h>
 #include <math.h>
 
@@ -164,32 +165,34 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                             "La métrica agrupada debe usar una operación de flujo tipada");
                 }
                 if (policies) {
-                    if (summary->child_count != 1)
+                    if (summary->child_count > MILENA_STREAM_MAX_METRICS)
                         return semantic_error(summary, error,
-                            "#spill de flujo admite una sola clave y una sola métrica por operación");
-                    const ASTNode *metric = summary->children[0];
-                    if (!grouped_spill_operation(metric->stream_operation))
-                        return semantic_error(metric, error,
-                            "#spill de flujo solo admite suma, media, minimo, maximo o conteo");
+                            "#spill de flujo admite como máximo 64 métricas por operación");
                     const ASTNode *key_decl = stream_find_column_declaration(
                         node->parent, key->value);
-                    const ASTNode *metric_decl = stream_find_column_declaration(
-                        node->parent, metric->value);
                     if (!key_decl || !key_decl->type_name ||
                         strcmp(key_decl->type_name, "texto") != 0)
                         return semantic_error(key, error,
                             "La clave de #spill en flujo debe declararse variable <columna> texto");
-                    if (!metric_decl || !metric_decl->type_name)
-                        return semantic_error(metric, error,
-                            "La métrica de #spill en flujo debe tener declaración tipada");
-                    if (metric->stream_operation != AST_STREAM_OPERATION_COUNT &&
-                        strcmp(metric_decl->type_name, "numerica") != 0)
-                        return semantic_error(metric, error,
-                            "Las métricas numéricas de #spill requieren variable <columna> numerica (FLOAT64)");
-                    if (strcmp(key->value, metric->value) == 0 &&
-                        metric->stream_operation != AST_STREAM_OPERATION_COUNT)
-                        return semantic_error(metric, error,
-                            "La clave textual de #spill no puede reutilizarse como métrica numérica");
+                    for (size_t i = 0; i < summary->child_count; ++i) {
+                        const ASTNode *metric = summary->children[i];
+                        if (!grouped_spill_operation(metric->stream_operation))
+                            return semantic_error(metric, error,
+                                "#spill de flujo solo admite suma, media, minimo, maximo o conteo");
+                        const ASTNode *metric_decl = stream_find_column_declaration(
+                            node->parent, metric->value);
+                        if (!metric_decl || !metric_decl->type_name)
+                            return semantic_error(metric, error,
+                                "Cada métrica de #spill debe tener declaración tipada");
+                        if (metric->stream_operation != AST_STREAM_OPERATION_COUNT &&
+                            strcmp(metric_decl->type_name, "numerica") != 0)
+                            return semantic_error(metric, error,
+                                "Las métricas numéricas de #spill requieren variable <columna> numerica (FLOAT64)");
+                        if (strcmp(key->value, metric->value) == 0 &&
+                            metric->stream_operation != AST_STREAM_OPERATION_COUNT)
+                            return semantic_error(metric, error,
+                                "La clave textual de #spill solo puede reutilizarse en una métrica contar");
+                    }
                     const ASTNode *stream_load = stream_find_load(node->parent);
                     if (!stream_load || stream_load->stream_row_limit == 0 ||
                         stream_load->stream_time_limit_ms <= 0.0)
@@ -201,7 +204,7 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                         policy->group_memory_budget_bytes > 536870912u ||
                         policy->group_spill_quota_bytes == 0 ||
                         policy->group_spill_quota_bytes > 4294967296u ||
-                        policy->group_max_key_bytes < 2u ||
+                        policy->group_max_key_bytes < 3u ||
                         policy->group_max_key_bytes > 1048576u ||
                         policy->group_max_output_groups == 0 ||
                         policy->group_max_output_groups > 1000000u ||

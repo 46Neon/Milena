@@ -21,7 +21,7 @@ cat > "$TMP_DIR/memory.milena" <<'MILENA'
   variable grupo texto
   variable valor numerica
   datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo" resumir { suma de "valor"; }
+  agrupar por "grupo" resumir { suma de "valor"; media de "valor"; contar de "valor"; }
   guardar resultado en "memory.json"
 }
 MILENA
@@ -30,7 +30,7 @@ cat > "$TMP_DIR/spill.milena" <<EOF_M
   variable grupo texto
   variable valor numerica
   datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo" #spill("$TMP_DIR/scratch.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { suma de "valor"; }
+  agrupar por "grupo" #spill("$TMP_DIR/scratch.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { suma de "valor"; media de "valor"; contar de "valor"; }
   guardar resultado en "spill.json"
 }
 EOF_M
@@ -42,19 +42,24 @@ p=pathlib.Path(sys.argv[1])
 a=json.loads((p/'memory.json').read_text())
 b=json.loads((p/'spill.json').read_text())
 def result(doc):
-    return {r['clave']: r['metricas'][0] for r in doc['resultados']}
+    return {r['clave']: {m['operacion']: m for m in r['metricas']} for r in doc['resultados']}
 ma, sb=result(a), result(b)
 assert set(ma)==set(sb), (len(ma),len(sb))
-for k,memory_metric in ma.items():
-    spill_metric=sb[k]
-    v,w=memory_metric['valor'],spill_metric['valor']
-    assert (v is None and w is None) or (v is not None and w is not None and math.isclose(v,w,rel_tol=1e-10,abs_tol=1e-10)), (k,v,w)
-    assert memory_metric['valores_validos']==spill_metric['valores_validos']
-    assert memory_metric['valores_nulos']==spill_metric['valores_nulos']
-    assert memory_metric['valores_invalidos']==spill_metric['valores_invalidos']
-assert sb['New, York\nMetro']['valor']==3.75
-assert sb['A']['valor'] is None
-assert sb['A']['valores_nulos']==1 and sb['A']['valores_invalidos']==1
+for k, memory_metrics in ma.items():
+    spill_metrics=sb[k]
+    assert list(memory_metrics)==list(spill_metrics)==['suma','media','conteo'], (k,memory_metrics,spill_metrics)
+    for operation, memory_metric in memory_metrics.items():
+        spill_metric=spill_metrics[operation]
+        v,w=memory_metric['valor'],spill_metric['valor']
+        assert (v is None and w is None) or (v is not None and w is not None and math.isclose(v,w,rel_tol=1e-10,abs_tol=1e-10)), (k,operation,v,w)
+        assert memory_metric['valores_validos']==spill_metric['valores_validos']
+        assert memory_metric['valores_nulos']==spill_metric['valores_nulos']
+        assert memory_metric['valores_invalidos']==spill_metric['valores_invalidos']
+assert sb['New, York\nMetro']['suma']['valor']==3.75
+assert sb['A']['suma']['valor'] is None
+assert sb['A']['suma']['valores_nulos']==1 and sb['A']['suma']['valores_invalidos']==1
+assert sb['A']['media']['valores_nulos']==1 and sb['A']['media']['valores_invalidos']==1
+assert sb['A']['conteo']['valor']==1 and sb['A']['conteo']['valores_nulos']==1
 assert [r['clave'] for r in b['resultados']]==sorted(sb, key=lambda x:x.encode())
 assert b['grupos']==len(sb)
 assert b['limite_salida_bytes']==1048576
@@ -177,7 +182,7 @@ EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run time-limit.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/time-limit.json" ] && [ ! -e "$TMP_DIR/time-limit.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'time-limit.json.part.*' | grep -q .
-# Explicit typed rejection for unsupported key/metric types and multi-metric spill.
+# Explicit typed rejection for unsupported key/metric types.
 cat > "$TMP_DIR/invalid-type.milena" <<EOF_M
 .analisis clave_invalida {
   variable grupo categorica
@@ -200,17 +205,21 @@ cat > "$TMP_DIR/invalid-metric.milena" <<EOF_M
 EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run invalid-metric.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/invalid-metric.json" ] && [ ! -e "$TMP_DIR/invalid-metric.bin" ]
-cat > "$TMP_DIR/multi.milena" <<EOF_M
-.analisis multi_metrica {
+# Multiple metrics still honor the atomic report-byte quota.
+printf 'old-multi-report' > "$TMP_DIR/multi-limit.json"
+cat > "$TMP_DIR/multi-limit.milena" <<EOF_M
+.analisis multi_metrica_limite {
   variable grupo texto
   variable valor numerica
-  datos desde "rows.csv"
-  agrupar por "grupo" #spill("$TMP_DIR/multi.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; media de "valor"; }
-  guardar resultado en "multi.json"
+  datos desde "rows.csv" con filas hasta 1000 con tiempo hasta 30000 ms
+  agrupar por "grupo" #spill("$TMP_DIR/multi-limit.bin", 4096, 1048576, 128, 100, 1024) resumir { suma de "valor"; media de "valor"; contar de "valor"; }
+  guardar resultado en "multi-limit.json"
 }
 EOF_M
-if (cd "$TMP_DIR" && "$MILENA_BIN" run multi.milena); then exit 1; fi
-[ ! -e "$TMP_DIR/multi.json" ] && [ ! -e "$TMP_DIR/multi.bin" ]
+if (cd "$TMP_DIR" && "$MILENA_BIN" run multi-limit.milena); then exit 1; fi
+[ "$(cat "$TMP_DIR/multi-limit.json")" = 'old-multi-report' ]
+[ ! -e "$TMP_DIR/multi-limit.bin" ]
+! find "$TMP_DIR" -maxdepth 1 -name 'multi-limit.json.part.*' | grep -q .
 # Canonical `milena run` filtering is evaluated by the CSV stream backend before
 # both in-memory and spill grouping, without materializing selected rows.
 python3 - "$TMP_DIR" <<'PY'

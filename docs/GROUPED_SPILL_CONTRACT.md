@@ -1,6 +1,6 @@
 # Contrato para spill-to-disk de agrupaciones en flujo
 
-**Estado:** hay dos cortes locales distintos. El `.agrupar` tabular canónico conserva su adaptador de tabla existente y sigue materializando la entrada/salida en RAM. La agrupación de CSV en el runtime streaming ahora tiene un primer corte de spill directo `stream.c → grouped_aggregate.c`: no crea `Dataset`/`MilenaTable`, reutiliza el lector CSV existente y emite el JSON desde callback ordenado a un staging file antes de publicarlo. En ambos casos se admite una sola clave de texto y una métrica por operación spill; no es una capacidad industrial general ni una ruta distribuida.
+**Estado:** hay dos cortes locales distintos. El `.agrupar` tabular canónico conserva su adaptador de tabla existente y sigue materializando la entrada/salida en RAM. La agrupación de CSV en el runtime streaming ahora tiene un primer corte de spill directo `stream.c → grouped_aggregate.c`: no crea `Dataset`/`MilenaTable`, reutiliza el lector CSV existente y emite el JSON desde un callback ordenado a un staging file antes de publicarlo. El adaptador tabular conserva una sola métrica. La ruta CSV streaming admite una sola clave de texto y hasta 64 métricas tipadas por operación spill, con el mismo reducer; no es una capacidad industrial general ni una ruta distribuida.
 
 ## Límite arquitectónico
 
@@ -25,7 +25,7 @@ La sintaxis humana sigue el bloque `agrupar por ... resumir { ... }` del modo st
   variable importe numerica
   datos desde "entrada.csv" con filas hasta 10000000 con tiempo hasta 300000 ms
   agrupar por "grupo" #spill("scratch.bin", 262144, 1073741824, 4096, 100000, 104857600, 4096)
-    resumir { suma de "importe"; }
+    resumir { suma de "importe"; media de "importe"; contar de "importe"; }
   guardar resultado en "reporte.json"
 }
 ```
@@ -34,20 +34,29 @@ En esta sintaxis de flujo, `#spill` contiene memoria del reductor, cuota de
 bytes del spill de entrada, bytes máximos de clave codificada y máximo de grupos.
 El sexto argumento fija el máximo de bytes del reporte final (opcional; `0`
 selecciona el default de 1 GiB), y el séptimo fija máximo de runs iniciales
-(opcional; default 4096, hard cap 65,536). El adaptador tabular acepta el valor
+(opcional; default 4096, hard cap 65,536). La clave codificada del reducer
+incluye el tag de tipo, la clave textual, un separador y el índice de métrica;
+por eso el límite de clave contabiliza ese framing interno. El adaptador tabular acepta el valor
 cero como marcador al especificar solo el séptimo argumento y rechaza una cuota
 JSON no nula. Los límites de filas y
 tiempo deben ser explícitos en `datos desde`; el registro CSV/cantidad de
-columnas conservan sus límites existentes. La política se valida en el AST y
-la semántica rechaza tipos de clave/métrica incompatibles, métricas no
-admitidas y más de una métrica antes del runtime.
+columnas conservan sus límites existentes. La política se valida en el AST y la semántica rechaza tipos de clave/métrica
+incompatibles y métricas no admitidas antes del runtime.
 
 El lector usa `stream_read_record` y `stream_split` compartidos, respetando
-comillas, comas y saltos de línea incrustados. Cada fila va directamente al
-reductor; ninguna fila se agrega a Dataset/Table. Al finalizar, el reducer
-invoca un callback por grupo de salida ya ordenado, que precomputa el tamaño
-JSON del grupo y verifica la cuota restante antes de escribirlo al archivo
-staging hermano. La publicación sustituye el destino atómicamente en POSIX y
+comillas, comas y saltos de línea incrustados. Cada fila alimenta hasta 64
+estados de métrica codificados como claves distintas dentro del mismo reducer;
+no hay un reducer por métrica y ninguna fila se agrega a Dataset/Table. El
+límite de salida cuenta claves base distintas. El reporte agrupa las métricas
+por clave y conserva su orden declarado. `contar` cuenta campos no vacíos,
+incluso si no son números; cada otra métrica numérica contabiliza vacío como
+nulo y texto no numérico como inválido. `filas_validas` cuenta filas con al
+menos una métrica válida y `filas_malformadas` filas con al menos un valor nulo
+o inválido; ambos contadores pueden solaparse, y el detalle por métrica se
+informa separadamente. Al finalizar, el reducer invoca un callback por estado ordenado grupo-métrica.
+El adaptador comprueba el orden/ausencia de duplicados, agrupa las métricas en
+una sola fila JSON por clave y verifica incrementalmente la cuota restante
+antes de escribir cada métrica al archivo staging hermano. La publicación sustituye el destino atómicamente en POSIX y
 con `MoveFileEx` en Windows, solo cuando lectura, límites, reducción, escritura
 y cierre finalizaron bien. En error se elimina staging, runs y scratch. La
 prueba E2E compara el valor del corte spill con el agrupamiento de referencia
@@ -73,7 +82,7 @@ pueden consumir hasta dos cuotas adicionales (hasta 3× la cuota en total),
 aparte del reporte staging. El reporte cuenta con una cuota independiente de
 bytes configurada en AST; no se mezcla con la cuota de scratch.
 
-No se agregan varias claves/métricas spill, clave compuesta, unión, ordenamiento
+No se agregan varias claves, claves compuestas tipadas, unión, ordenamiento
 de filas, Parquet/Arrow ni workers/red. Operaciones `Dataset` y `MilenaTable`
 siguen en memoria. La ruta scratch la proporciona el programa y se crea en modo exclusivo; si ya existe,
 se rechaza sin sobrescribirla. No se prometen nombres aleatorios privados ni
@@ -88,7 +97,7 @@ concurrencia de writers sobre la misma ruta. No se ha medido RSS global ni se pr
 
 ## Formato persistente
 
-El formato objetivo para corridas tipadas requiere una cabecera explícita con magic, versión, endianess, identificador de ejecución y esquema/operaciones de métricas. El estado de agregado actual ya tiene wire v3 determinista little-endian: contador de válidos, contador de nulos, contador de inválidos, seis campos binary64 y checksum; el tamaño es 84 bytes. No contiene todavía un esquema tipado de clave/métricas ni soporte de claves compuestas o métricas múltiples. Cada registro futuro debe usar longitudes y valores de ancho fijo definidos, nunca `fwrite` de structs C con padding o ABI dependiente. Checksums detectan corrupción, no autenticidad criptográfica.
+El estado de agregado actual usa wire v3 determinista little-endian: contador de válidos, contador de nulos, contador de inválidos, seis campos binary64 y checksum; el tamaño es 84 bytes. El reducer trata la clave como bytes opacos y no almacena un esquema de métricas: el adaptador CSV codifica el índice de métrica en la clave interna y usa el estado escalar existente. No hay clave compuesta tipada ni esquema persistente que permita cambiar la interpretación entre ejecuciones. Cualquier evolución del protocolo seguirá usando longitudes y valores de ancho fijo definidos, nunca `fwrite` de structs C con padding o ABI dependiente. Checksums detectan corrupción, no autenticidad criptográfica.
 
 ## Recursos y fallos
 
@@ -104,4 +113,4 @@ Crear temporales exclusivos con nombres impredecibles y permisos privados en un 
 4. Guardas de arquitectura, manifiesto y Makefile; sanitizers; suite completa y CI del head final. Documentar limits/defaults reales y benchmark reproducible con medición de pico RAM/bytes temporales.
 5. Mantener explícito que este contrato es local: no introduce red, clúster, cloud, Spark, Flink, Arrow ni Parquet.
 
-Hasta superar toda esta puerta, la afirmación correcta es específica: «un corte opt-in de una clave y una métrica ya transmite el CSV streaming al reducer spillable y publica la salida ordenada sin materializar grupos; el agrupador de Dataset/Table sigue en memoria y no hay soporte industrial/distribuido».
+Hasta superar toda esta puerta, la afirmación correcta es específica: «un corte opt-in de una clave y hasta 64 métricas ya transmite el CSV streaming al reducer spillable y publica la salida ordenada sin materializar grupos; el agrupador de Dataset/Table sigue en memoria y no hay soporte industrial/distribuido».

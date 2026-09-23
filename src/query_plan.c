@@ -1,4 +1,5 @@
 #include "query_plan.h"
+#include "stream.h"
 
 #include <string.h>
 #include <math.h>
@@ -22,7 +23,7 @@ static bool supported_analysis_child(ASTNodeType type) {
 
 static bool valid_summary(const ASTNode *summary, bool allow_legacy) {
     if (!summary || summary->type != AST_BLOQUE_RESUMIR ||
-        summary->child_count == 0 || summary->child_count > 64) return false;
+        summary->child_count == 0 || summary->child_count > MILENA_STREAM_MAX_METRICS) return false;
     for (size_t i = 0; i < summary->child_count; i++) {
         const ASTNode *metric = summary->children[i];
         if (!metric || metric->type != AST_RESUMEN_METRICA ||
@@ -134,7 +135,7 @@ MilenaStatus milena_stream_execution_plan_build(
                 if (plan->spill_policy || !child->value || !child->value[0] ||
                     child->group_memory_budget_bytes == 0 ||
                     child->group_spill_quota_bytes == 0 ||
-                    child->group_max_key_bytes < 2 ||
+                    child->group_max_key_bytes < 3 ||
                     child->group_max_output_groups == 0 ||
                     child->group_max_output_bytes == 0 ||
                     child->group_max_output_bytes > 1073741824u ||
@@ -150,6 +151,19 @@ MilenaStatus milena_stream_execution_plan_build(
         if (!plan->group_key || !valid_summary(plan->group_summary, false))
             return plan_error(error, MILENA_ERR_PARSE,
                               "El plan agrupado requiere clave y métricas tipadas");
+        if (plan->spill_policy) {
+            if (plan->group_summary->child_count > MILENA_STREAM_MAX_METRICS)
+                return plan_error(error, MILENA_ERR_UNSUPPORTED,
+                                  "El spill agrupado admite como máximo 64 métricas");
+            for (size_t i = 0; i < plan->group_summary->child_count; ++i) {
+                ASTStreamOperation op = plan->group_summary->children[i]->stream_operation;
+                if (op != AST_STREAM_OPERATION_SUM && op != AST_STREAM_OPERATION_MEAN &&
+                    op != AST_STREAM_OPERATION_MIN && op != AST_STREAM_OPERATION_MAX &&
+                    op != AST_STREAM_OPERATION_COUNT)
+                    return plan_error(error, MILENA_ERR_UNSUPPORTED,
+                                      "El plan spill solo admite suma, media, mínimo, máximo y contar");
+            }
+        }
         plan->summary = plan->group_summary;
         plan->physical_operator = plan->spill_policy
             ? MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL

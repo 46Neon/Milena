@@ -11,8 +11,8 @@ lenguaje de scripts, parser, CLI de datos ni runtime paralelo.
 
 PR #29 valida tres ejecuciones del lenguaje sobre un CSV determinista de
 exactamente 1.000.000 de filas: resumen global, agrupación streaming de dos
-claves y agrupación streaming con spill de 128 claves, todas por `milena run`
-y `.analisis`. Se comprueban resultados exactos, errores de datos, conteos,
+claves y agrupación streaming con spill de 128 claves y tres métricas (suma,
+media y contar), todas por `milena run` y `.analisis`. Se comprueban resultados exactos, errores de datos, conteos,
 límites declarados y limpieza; la corrida spill se repite para verificar
 salida semántica determinista. Se observa tiempo, bytes, buffers y RSS pico
 cuando el sistema lo permite. El resultado prueba únicamente estas operaciones,
@@ -22,20 +22,20 @@ universal ni una cota de RSS total.
 
 ## Relación honesta con PR #28
 
-PR #29 está apilado sobre la rama abierta `feature/massive-scalability-pr28`
-(head verificado `fed0ff803c27b145c75eba8607c1c78e6bd57df0`). Se preservaron
-ambos historiales con commits de merge normales y no se modificó PR #28. El
-planner tipado de PR #29 reconoce la configuración AST de spill y el runtime
-canónico delega a `milena_stream_csv_grouped_spill_with_options` de PR #28,
-reutilizando su lector CSV, reducer versionado, ordenamiento/fusión externos,
+PR #29 está basado en el snapshot fijado `pr29-base/pr28-46b2366`
+(commit `46b2366a09208bc1b2bf8f5f8426b4bfbeef1f32`), no en una punta móvil
+ni en cambios nuevos de PR #28. El planner tipado de PR #29 reconoce la configuración AST de spill y el runtime
+canónico delega a `milena_stream_csv_grouped_spill_with_options` del backend
+existente, reutilizando su lector CSV, reducer versionado, ordenamiento/fusión externos,
 cuotas y publicación transaccional; no hay copia paralela de almacenamiento o
-reducer. La política de AST incluye memoria, scratch, clave, grupos, bytes del
-reporte y máximo de runs. El adapter tabular existente también se conserva.
+reducer. La identidad de métrica se añade a la clave opaca del reducer único.
+La política de AST incluye memoria, scratch, clave codificada, grupos, bytes del
+reporte y máximo de runs. El adaptador tabular existente también se conserva.
 
-Los checks de PR #28 estaban verdes al inspeccionar ese head; PR #28 sigue
-abierto y no forma parte de `main`. La ruta apilada se revalidará con la CI de
-PR #29. Los resultados del millón de filas no validan escala arbitraria,
-plataformas no medidas ni cualquier otra operación de PR #28.
+PR #28 sigue abierto y no forma parte de `main`; PR #29 conserva como base el
+snapshot fijado indicado arriba. La CI de PR #29 valida este corte sin cambiar
+el head de PR #28. Los resultados del millón de filas no validan escala
+arbitraria, plataformas no medidas ni cualquier otra operación de PR #28.
 
 ## Fases y criterios de aceptación
 
@@ -90,19 +90,23 @@ un planner general de operadores, esquema, costos, filtros o formatos.
   registros multilínea; llevar presupuestos de filas, tiempo, columnas,
   registro, memoria y scratch desde sintaxis/AST hasta el backend.
 - Implementado en esta actualización: el plan físico canónico de `.analisis`
-  conecta la agrupación CSV con el API de spill existente de PR #28; usa una
-  clave texto y una métrica soportada, con presupuesto de memoria, cuota,
-  cardinalidad, tamaño de clave, tamaño de reporte y máximo de runs tipados.
-  No duplica almacén, serialización, estados mergeables, sort ni reducer.
+  conecta la agrupación CSV con el API de spill existente; usa una clave texto y
+  hasta 64 métricas suma/media/mínimo/máximo/contar declaradas y tipadas, con
+  identidad de métrica incluida en la clave opaca del mismo reductor. Respeta
+  memoria, scratch, longitud de clave codificada, cardinalidad de grupos de
+  salida, bytes del reporte y máximo de runs; no crea un reductor por métrica
+  ni materializa filas de entrada. No duplica almacén, serialización, estados
+  mergeables, sort ni reducer.
 - Sigue pendiente ampliar fuentes/operadores y los contratos de key/métricas;
   mantener límites de lectura y fallos explícitos en cada backend.
 - Aceptación continua: agregación global/agrupada y ejecución por lotes con
   resultados
   deterministas, cleanup transaccional y fallos por cuota explícitos. No
   materializar el input o todos los grupos para afirmar streaming.
-- Aceptación: pruebas `milena run` de equivalencia con y sin spill, claves
-  compuestas/tipos soportados según contrato, entradas inválidas y truncadas,
-  cuotas de memoria/scratch, reintentos, temporales limpios y conteos de filas;
+- Aceptación: pruebas `milena run` de equivalencia con y sin spill para suma,
+  media y contar, nulos/malformados por métrica, claves y tipos soportados,
+  límites de memoria/scratch/reporte/grupos/runs, temporales limpios y un
+  fixture de un millón de filas con tres métricas;
   benchmarks reproducibles reportan RSS/I/O/throughput sin prometer SLO no
   medidos.
 
@@ -167,7 +171,7 @@ un planner general de operadores, esquema, costos, filtros o formatos.
   para cada uno de esos tres workloads, con resultados por grupo y rechazo de
   límites de filas/grupos sin publicar reportes parciales.
 - El caso A/B conserva la semántica de `contar` sobre celdas no vacías aunque
-  otra métrica numérica las rechace; el caso spill verifica una métrica suma,
+  otra métrica numérica las rechace; el caso spill verifica suma, media y contar,
   128 grupos acotados, datos numéricos inválidos, salida ordenada, cuotas AST y
   limpieza/repetición determinista. Esto no prueba cardinalidad arbitraria ni
   RSS global acotada.

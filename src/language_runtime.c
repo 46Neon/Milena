@@ -1459,14 +1459,14 @@ static MilenaStatus run_stream_dataset_with_options(
                       "El resumen global no coincide con el plan lógico");
         return MILENA_ERR_INTERNAL;
     }
-    MilenaStreamMetric metrics[64];
-    char columns[64][128];
-    char operations[64][32];
-    char metric_names[64][160];
+    MilenaStreamMetric metrics[MILENA_STREAM_MAX_METRICS];
+    char columns[MILENA_STREAM_MAX_METRICS][128];
+    char operations[MILENA_STREAM_MAX_METRICS][32];
+    char metric_names[MILENA_STREAM_MAX_METRICS][160];
     size_t metric_count = 0;
     for (size_t j = 0; j < summary_block->child_count; j++) {
         const ASTNode *summary = summary_block->children[j];
-        if (!summary || !summary->value || metric_count >= 64) {
+        if (!summary || !summary->value || metric_count >= MILENA_STREAM_MAX_METRICS) {
             runtime_error(error, MILENA_ERR_PARSE,
                           "El resumen en modo flujo tiene una métrica inválida");
             return MILENA_ERR_PARSE;
@@ -1546,11 +1546,6 @@ static MilenaStatus run_stream_dataset_with_options(
     MilenaStreamReport report = {0};
     MilenaStatus status;
     if (spill_grouped) {
-        if (metric_count != 1) {
-            runtime_error(error, MILENA_ERR_UNSUPPORTED,
-                          "#spill agrupado en flujo admite exactamente una métrica");
-            return MILENA_ERR_UNSUPPORTED;
-        }
         const ASTNode *ast_policy = plan->spill_policy;
         MilenaStreamSpillPolicy policy = {
             ast_policy->value,
@@ -1562,8 +1557,8 @@ static MilenaStatus run_stream_dataset_with_options(
             ast_policy->group_max_runs
         };
         status = milena_stream_csv_grouped_spill_with_options(
-            input_path, output_path, group_key->value, &metrics[0], options,
-            &policy, &report, error);
+            input_path, output_path, group_key->value, metrics, metric_count,
+            options, &policy, &report, error);
     } else if (grouped) {
         status = milena_stream_csv_grouped_with_options(input_path, output_path,
             group_key->value, metrics, metric_count, options, &report, error);

@@ -220,7 +220,7 @@ int main(void) {
     MilenaStreamReport spill_report = {0};
     milena_error_clear(&grouped_error);
     assert(milena_stream_csv_grouped_spill_with_options(spill_input, spill_output,
-        "zona", &spill_metric, &spill_options, &spill_policy, &spill_report,
+        "zona", &spill_metric, 1, &spill_options, &spill_policy, &spill_report,
         &grouped_error) == MILENA_OK);
     assert(spill_report.groups == 200);
     assert(spill_report.spill_bytes > 0);
@@ -237,7 +237,7 @@ int main(void) {
     memset(&spill_report, 0xA5, sizeof(spill_report));
     milena_error_clear(&grouped_error);
     assert(milena_stream_csv_grouped_spill_with_options(spill_input, spill_output,
-        "zona", &spill_metric, &spill_options, &spill_policy, &spill_report,
+        "zona", &spill_metric, 1, &spill_options, &spill_policy, &spill_report,
         &grouped_error) != MILENA_OK);
     assert(spill_report.spill_bytes == 0);
     assert(spill_report.spill_records == 0);
