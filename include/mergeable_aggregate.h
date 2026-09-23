@@ -15,12 +15,29 @@ typedef struct {
     double max;
 } MilenaAggregateState;
 
+typedef struct {
+    uint64_t count;
+    double sum;
+    double mean;
+    double variance_population;
+    double stddev_population;
+    double variance_sample;
+    double stddev_sample;
+    double min;
+    double max;
+    bool has_values;
+    bool has_sample_variance;
+} MilenaAggregateResult;
+
 void milena_aggregate_state_init(MilenaAggregateState *state);
 MilenaStatus milena_aggregate_state_add(MilenaAggregateState *state,
                                         double value, MilenaError *error);
 MilenaStatus milena_aggregate_state_merge(MilenaAggregateState *target,
                                           const MilenaAggregateState *other,
                                           MilenaError *error);
+MilenaStatus milena_aggregate_state_finalize(const MilenaAggregateState *state,
+                                             MilenaAggregateResult *result,
+                                             MilenaError *error);
 MilenaStatus milena_aggregate_state_encode(const MilenaAggregateState *state,
                                            unsigned char *buffer,
                                            size_t capacity, size_t *written,

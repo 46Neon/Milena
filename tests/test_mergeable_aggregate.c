@@ -30,6 +30,19 @@ int main(void) {
     assert(fabs(left.mean - serial.mean) < 1e-12);
     assert(fabs(left.m2 - serial.m2) < 1e-12);
     assert(left.min == 1.0 && left.max == 6.0);
+    MilenaAggregateResult finalized;
+    assert(milena_aggregate_state_finalize(&left, &finalized, &error) == MILENA_OK);
+    assert(finalized.count == 6 && finalized.has_values && finalized.has_sample_variance);
+    assert(fabs(finalized.variance_population - (35.0 / 12.0)) < 1e-12);
+    assert(fabs(finalized.variance_sample - 3.5) < 1e-12);
+    assert(fabs(finalized.stddev_sample - sqrt(3.5)) < 1e-12);
+    MilenaAggregateState singleton; milena_aggregate_state_init(&singleton);
+    assert(milena_aggregate_state_add(&singleton, 4.0, &error) == MILENA_OK);
+    assert(milena_aggregate_state_finalize(&singleton, &finalized, &error) == MILENA_OK);
+    assert(finalized.has_values && !finalized.has_sample_variance && finalized.mean == 4.0);
+    MilenaAggregateState empty; milena_aggregate_state_init(&empty);
+    assert(milena_aggregate_state_finalize(&empty, &finalized, &error) == MILENA_OK);
+    assert(!finalized.has_values && finalized.count == 0);
 
     unsigned char wire[MILENA_AGGREGATE_WIRE_SIZE]; size_t written = 0;
     MilenaAggregateState decoded;

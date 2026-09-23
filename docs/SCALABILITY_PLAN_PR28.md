@@ -111,9 +111,11 @@ configurable ni incluye `GROUP BY` spillable.
 Esta fase incorpora un estado numérico mergeable con conteo, suma,
 media, M2 de Welford/Chan, mínimo y máximo. Puede actualizarse por filas,
 combinarse en orden determinista entre particiones y serializarse con versión,
-IEEE-754 binary64 canónico, endianness little-endian y checksum. Los estados
-parciales se almacenan como registros del spill y se reproducen de uno en uno
-para combinarlos sin materializar el conjunto de runs.
+IEEE-754 binary64 canónico, endianness little-endian y checksum. El finalizador
+expone conteo exacto, suma, media, varianza/desviación poblacional y muestral,
+mínimo y máximo; para una muestra vacía o un único valor señala cuándo la
+varianza muestral no está definida. Los estados parciales se almacenan como
+registros del spill y se reproducen de uno en uno sin materializar los runs.
 
 El contrato es un bloque de agregación global (no `GROUP BY` ilimitado). La
 agregación agrupada requerirá claves, particionado/hash y posterior merge

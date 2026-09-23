@@ -114,6 +114,36 @@ MilenaStatus milena_aggregate_state_merge(MilenaAggregateState *target,
     return MILENA_OK;
 }
 
+MilenaStatus milena_aggregate_state_finalize(const MilenaAggregateState *state,
+                                             MilenaAggregateResult *result,
+                                             MilenaError *error) {
+    if (!state || !result || !state_is_valid(state)) {
+        aggregate_error(error, MILENA_ERR_ARGUMENT, "Estado inválido para finalizar agregación");
+        return MILENA_ERR_ARGUMENT;
+    }
+    memset(result, 0, sizeof(*result));
+    result->count = state->count;
+    result->has_values = state->count > 0;
+    if (state->count == 0) { if (error) milena_error_clear(error); return MILENA_OK; }
+    result->sum = state->sum; result->mean = state->mean;
+    result->variance_population = state->m2 / (double)state->count;
+    result->stddev_population = sqrt(result->variance_population);
+    result->min = state->min; result->max = state->max;
+    if (state->count >= 2) {
+        result->variance_sample = state->m2 / (double)(state->count - 1);
+        result->stddev_sample = sqrt(result->variance_sample);
+        result->has_sample_variance = true;
+    }
+    if (!isfinite(result->variance_population) || !isfinite(result->stddev_population) ||
+        (result->has_sample_variance && (!isfinite(result->variance_sample) || !isfinite(result->stddev_sample)))) {
+        memset(result, 0, sizeof(*result));
+        aggregate_error(error, MILENA_ERR_OVERFLOW, "Desbordamiento al finalizar agregación");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}
+
 MilenaStatus milena_aggregate_state_encode(const MilenaAggregateState *state,
                                            unsigned char *buffer,
                                            size_t capacity, size_t *written,
