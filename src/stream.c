@@ -535,7 +535,7 @@ static bool stream_group_emit(FILE *output, const char *group_column,
                               size_t group_count, size_t group_limit,
                               size_t rows_read, size_t rows_valid,
                               size_t malformed, size_t input_bytes,
-                              size_t observed_record_bytes,
+                              size_t bytes_read, size_t observed_record_bytes,
                               size_t record_capacity, double elapsed_ms,
                               size_t max_rows, double max_elapsed_ms) {
     double seconds = elapsed_ms > 0.0 ? elapsed_ms / 1000.0 : 0.0;
@@ -548,12 +548,12 @@ static bool stream_group_emit(FILE *output, const char *group_column,
     if (fprintf(output,
         ",\"filas\":%zu,\"filas_validas\":%zu,\"filas_malformadas\":%zu,"
         "\"grupos\":%zu,\"limite_grupos\":%zu,\"bytes_entrada\":%zu,"
-        "\"filas_por_segundo\":%.6f,\"megabytes_por_segundo\":%.6f,"
+        "\"bytes_leidos\":%zu,\"filas_por_segundo\":%.6f,\"megabytes_por_segundo\":%.6f,"
         "\"limite_filas\":%zu,\"presupuesto_tiempo_ms\":%.3f,"
         "\"pico_registro_bytes\":%zu,\"capacidad_buffer_registro_bytes\":%zu,"
         "\"tiempo_ms\":%.3f,\"resultados\":[",
         rows_read, rows_valid, malformed, group_count, group_limit,
-        input_bytes, rows_per_second, megabytes_per_second, max_rows,
+        input_bytes, bytes_read, rows_per_second, megabytes_per_second, max_rows,
         max_elapsed_ms, observed_record_bytes, record_capacity, elapsed_ms) < 0) return false;
     for (size_t g = 0; g < group_count; g++) {
         if (g && fputc(',', output) == EOF) return false;
@@ -897,7 +897,7 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     double elapsed = stream_now_ms() - started;
     bool emitted = stream_group_emit(output, group_column, metrics, metric_count,
         groups, group_count, group_limit, rows_read, rows_valid, malformed,
-        input_bytes, observed_record_bytes, record_capacity, elapsed,
+        input_bytes, bytes_read, observed_record_bytes, record_capacity, elapsed,
         options->max_rows, options->max_elapsed_milliseconds);
     if (fclose(output) != 0) emitted = false;
     if (!emitted) {

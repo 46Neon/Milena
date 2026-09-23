@@ -87,8 +87,10 @@ mantiene fuera del producto los módulos experimentales de VM/IR/GC.
   línea no se parten en fronteras arbitrarias.
 - Rechaza columnas inexistentes, demasiadas columnas (máximo 4096), registros
   que exceden el límite y CSV con comillas sin cerrar.
-- Reporta filas leídas, filas válidas, filas malformadas, límite de registro,
-  límite de columnas, pico de búfer y tiempo observado.
+- Reporta filas leídas, filas válidas, filas malformadas, bytes de entrada y
+  bytes leídos, límite de registro, límite de columnas, pico de búfer y tiempo
+  observado. En una ejecución exitosa completa, los bytes leídos corresponden al
+  avance real del lector, no a un cálculo desde filas o tamaño del archivo.
 - No crea `Dataset`, `MilenaTable` ni una copia de todas las filas.
 
 ## Límites deliberados

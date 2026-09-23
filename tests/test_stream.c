@@ -194,6 +194,7 @@ int main(void) {
     assert(grouped_report.rows_with_valid_values == 4);
     assert(grouped_report.malformed_rows == 2);
     assert(grouped_report.input_bytes > 0);
+    assert(grouped_report.bytes_read == grouped_report.input_bytes);
     assert(grouped_report.groups == 2);
     assert(grouped_report.max_groups == 10);
     json = fopen(group_output, "rb");
@@ -212,6 +213,7 @@ int main(void) {
     assert(strstr(buffer,
         "\"nombre\":\"referencia_conteo\",\"valores_validos\":1,\"valores_nulos\":1,\"valores_invalidos\":0,\"valor\":1") != NULL);
     assert(strstr(buffer, "\"limite_grupos\":10") != NULL);
+    assert(strstr(buffer, "\"bytes_leidos\":") != NULL);
     remove(group_output);
 
     const char *spill_group_output = "tests/.stream_group_spill_report.json";
