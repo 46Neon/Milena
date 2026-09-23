@@ -101,6 +101,7 @@ typedef struct ASTNode {
     size_t group_max_output_groups;
     size_t group_max_output_bytes;
     size_t group_max_runs;
+    bool group_output_limit_explicit;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;

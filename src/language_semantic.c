@@ -216,8 +216,12 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                     const ASTNode *child = node->children[i];
                     if (!child) return semantic_error(node, error,
                         "Agrupación con nodo AST nulo");
-                    if (child->type == AST_AGRUPACION_SPILL) policies++;
-                    else if (child->type == AST_AGRUPACION_POR) keys++;
+                    if (child->type == AST_AGRUPACION_SPILL) {
+                        policies++;
+                        if (child->group_output_limit_explicit)
+                            return semantic_error(child, error,
+                                "El límite de bytes de reporte solo se admite en #spill de flujo");
+                    } else if (child->type == AST_AGRUPACION_POR) keys++;
                     else if (child->type == AST_RESUMEN_METRICA) summaries++;
                 }
                 if (keys != 1)
