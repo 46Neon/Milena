@@ -60,6 +60,14 @@ fase no se considera terminada por compilar solamente.
 
 ### Fase 1 — Plan lógico y físico unificado
 
+**Estado de PR #29:** se implementa un corte vertical limitado al streaming CSV
+actual: `src/query_plan.c` deriva, después de semántica/recursos, una secuencia
+lógica CSV-scan → aggregate global/agrupado → JSON-report y elige el backend
+físico global o agrupado que consume el runtime canónico. El AST sigue siendo la
+fuente de verdad para métricas, fuente y límites. Hay tests unitarios de plan
+válido, ambiguo/no soportado y compatibilidad global legacy. Esto no es todavía
+un planner general de operadores, esquema, costos, filtros o formatos.
+
 - Modelar lectura, proyección, filtros, agregaciones y límites como nodos
   tipados del AST/plan canónico; resolver nombres y tipos en semántica antes de
   ejecutar.

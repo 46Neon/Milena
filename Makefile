@@ -20,13 +20,13 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
-          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/entrypoints.c
+          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/entrypoints.c src/query_plan.c
 OBJECTS = $(SOURCES:.c=.o)
 SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all benchmark benchmark-stream benchmark-stream-grouped clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
+.PHONY: all benchmark benchmark-stream benchmark-stream-grouped clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-query-plan test-partition-protocol test-protocol-reduce test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
 
 test-array: tests/test_array
 	./tests/test_array
@@ -129,6 +129,14 @@ test-process-executor: tests/test_process_executor
 
 tests/test_process_executor: tests/test_process_executor.c src/process_executor.c src/partition_executor.c src/partition_plan.c src/common.c
 	$(CC) $(CFLAGS) tests/test_process_executor.c src/process_executor.c src/partition_executor.c src/partition_plan.c src/common.c $(LDFLAGS) -o $@
+
+.PHONY: test-query-plan
+
+test-query-plan: tests/test_query_plan
+	./tests/test_query_plan
+
+tests/test_query_plan: tests/test_query_plan.c src/query_plan.c src/ast.c src/common.c
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 .PHONY: test-finance
 
@@ -284,7 +292,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-entrypoints \
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-entrypoints test-query-plan \
       test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics \
       test-parser-variables test-functions test-script-functions test-user-functions
 	./tests/run_tests.sh
@@ -294,7 +302,7 @@ clean:
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
 		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
-		tests/test_script_functions tests/test_user_functions tests/test_canonical_compiler reporte.json resultado.json
+		tests/test_script_functions tests/test_user_functions tests/test_query_plan tests/test_canonical_compiler reporte.json resultado.json
 
 
 # Opt-in scale gate; deliberately excluded from the ordinary `make test` suite.
