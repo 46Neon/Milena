@@ -27,6 +27,9 @@ typedef struct {
     double max_elapsed_milliseconds;
     /* Hard-capped per-operation group budget; 0 selects the default. */
     size_t max_groups;
+    /* Optional canonical exact string equality predicate; borrowed for call. */
+    const char *filter_column;
+    const char *filter_value;
 } MilenaStreamOptions;
 
 typedef struct {

@@ -276,7 +276,7 @@ static void stream_free_headers(char **headers, size_t count) {
 MilenaStreamOptions milena_stream_options_default(void) {
     MilenaStreamOptions options = {4096u, STREAM_DEFAULT_MAX_RECORD,
                                    STREAM_DEFAULT_MAX_COLUMNS, 0u, 0.0,
-                                   STREAM_DEFAULT_MAX_GROUPS};
+                                   STREAM_DEFAULT_MAX_GROUPS, NULL, NULL};
     return options;
 }
 
@@ -297,7 +297,9 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS ||
         options->max_elapsed_milliseconds < 0.0 ||
         !isfinite(options->max_elapsed_milliseconds) ||
-        options->max_groups > STREAM_HARD_MAX_GROUPS)
+        options->max_groups > STREAM_HARD_MAX_GROUPS ||
+        (options->filter_column && (!options->filter_column[0] || !options->filter_value)) ||
+        (!options->filter_column && options->filter_value))
         return MILENA_ERR_ARGUMENT;
     if (error) milena_error_clear(error);
     double started = stream_now_ms();
@@ -357,6 +359,13 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
             status = MILENA_ERR_DATA; goto finish;
         }
     }
+    int filter_index = options->filter_column
+        ? stream_column_index(headers, column_count, options->filter_column) : -1;
+    if (options->filter_column && filter_index < 0) {
+        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
+                         "La columna del filtro no existe en el CSV");
+        status = MILENA_ERR_DATA; goto finish;
+    }
     while ((status = stream_read_record(input, &record, &record_capacity,
             options->max_record_bytes, &record_length, error)) == MILENA_OK) {
         long position = ftell(input);
@@ -388,6 +397,8 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         status = stream_split(record, ',', fields, options->max_columns, &field_count, error);
         if (status != MILENA_OK) break;
         if (field_count != column_count) { malformed++; continue; }
+        if (filter_index >= 0 && strcmp(fields[filter_index], options->filter_value) != 0)
+            continue;
         bool row_valid = true;
         for (size_t i = 0; i < metric_count; i++) {
             double value = 0.0;
@@ -640,7 +651,9 @@ MilenaStatus milena_stream_csv_grouped_with_options(
         options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS ||
         options->max_elapsed_milliseconds < 0.0 ||
         !isfinite(options->max_elapsed_milliseconds) ||
-        group_limit > STREAM_HARD_MAX_GROUPS) {
+        group_limit > STREAM_HARD_MAX_GROUPS ||
+        (options->filter_column && (!options->filter_column[0] || !options->filter_value)) ||
+        (!options->filter_column && options->filter_value)) {
         milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
                          "Opciones inválidas para agrupación CSV en flujo");
         return MILENA_ERR_ARGUMENT;
@@ -723,6 +736,14 @@ MilenaStatus milena_stream_csv_grouped_with_options(
             goto grouped_finish;
         }
     }
+    int filter_index = options->filter_column
+        ? stream_column_index(headers, column_count, options->filter_column) : -1;
+    if (options->filter_column && filter_index < 0) {
+        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
+                         "La columna del filtro no existe en el CSV");
+        status = MILENA_ERR_DATA;
+        goto grouped_finish;
+    }
     if (group_limit > SIZE_MAX / sizeof(*groups)) {
         milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                          "El límite de grupos desborda el estado de flujo");
@@ -797,6 +818,8 @@ MilenaStatus milena_stream_csv_grouped_with_options(
             status = MILENA_ERR_DATA;
             break;
         }
+        if (filter_index >= 0 && strcmp(fields[filter_index], options->filter_value) != 0)
+            continue;
 
         size_t slot = (size_t)stream_group_hash(fields[group_index]) &
                       (group_slot_capacity - 1);
@@ -1199,6 +1222,8 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS ||
         options->max_elapsed_milliseconds < 0.0 ||
         !isfinite(options->max_elapsed_milliseconds) ||
+        (options->filter_column && (!options->filter_column[0] || !options->filter_value)) ||
+        (!options->filter_column && options->filter_value) ||
         policy->memory_budget_bytes < 4096u ||
         policy->memory_budget_bytes > 536870912u ||
         policy->spill_quota_bytes == 0 ||
@@ -1274,6 +1299,13 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
             : "La clave textual no puede reutilizarse como métrica numérica en #spill");
         status = MILENA_ERR_UNSUPPORTED; goto spill_finish;
     }
+    int filter_index = options->filter_column
+        ? stream_column_index(headers, column_count, options->filter_column) : -1;
+    if (options->filter_column && filter_index < 0) {
+        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
+                         "La columna del filtro no existe en el CSV");
+        status = MILENA_ERR_DATA; goto spill_finish;
+    }
     status = milena_grouped_aggregate_open_with_max_runs(policy->scratch_path,
         policy->memory_budget_bytes, policy->max_key_bytes,
         policy->spill_quota_bytes, policy->max_runs, &reducer, error);
@@ -1313,6 +1345,8 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
                 "Fila CSV agrupada con cantidad incorrecta de columnas");
             status = MILENA_ERR_DATA; break;
         }
+        if (filter_index >= 0 && strcmp(fields[filter_index], options->filter_value) != 0)
+            continue;
         size_t key_length = strlen(fields[group_index]);
         if (key_length >= policy->max_key_bytes) {
             milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,

@@ -211,3 +211,62 @@ cat > "$TMP_DIR/multi.milena" <<EOF_M
 EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run multi.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/multi.json" ] && [ ! -e "$TMP_DIR/multi.bin" ]
+# Canonical `milena run` filtering is evaluated by the CSV stream backend before
+# both in-memory and spill grouping, without materializing selected rows.
+python3 - "$TMP_DIR" <<'PY'
+import csv,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+with (p/'filter.csv').open('w',newline='') as f:
+    w=csv.writer(f)
+    w.writerow(['grupo','region','valor'])
+    w.writerow(['New, York\nMetro','keep','1.5'])
+    w.writerow(['New, York\nMetro','keep','2.25'])
+    w.writerow(['A','skip','100'])
+    w.writerow(['A','keep','1'])
+PY
+cat > "$TMP_DIR/filter-memory.milena" <<'MILENA'
+.analisis filtro_en_memoria {
+  variable grupo texto
+  variable region texto
+  variable valor numerica
+  datos desde "filter.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  filtrar "region" == "keep";
+  agrupar por "grupo" resumir { suma de "valor"; }
+  guardar resultado en "filter-memory.json"
+}
+MILENA
+cat > "$TMP_DIR/filter-spill.milena" <<EOF_M
+.analisis filtro_con_spill {
+  variable grupo texto
+  variable region texto
+  variable valor numerica
+  datos desde "filter.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  filtrar "region" == "keep";
+  agrupar por "grupo" #spill("$TMP_DIR/filter-scratch.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
+  guardar resultado en "filter-spill.json"
+}
+EOF_M
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-memory.milena)
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-spill.milena)
+python3 - "$TMP_DIR" <<'PY'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+a=json.load(open(p/'filter-memory.json'))
+b=json.load(open(p/'filter-spill.json'))
+def values(doc):
+    return {r['clave']:r['metricas'][0]['valor'] for r in doc['resultados']}
+assert values(a)==values(b)=={'A':1,'New, York\nMetro':3.75}, (values(a),values(b))
+assert b['runs_spill'] >= 0 and b['bytes_spill'] >= 0
+PY
+[ ! -e "$TMP_DIR/filter-scratch.bin" ]
+# An empty match set still produces a valid empty grouped report through spill.
+sed 's/== "keep"/== "missing"/' "$TMP_DIR/filter-spill.milena" > "$TMP_DIR/filter-empty.milena"
+sed -i 's/filter-spill.json/filter-empty.json/' "$TMP_DIR/filter-empty.milena"
+sed -i 's/filter-scratch.bin/filter-empty-scratch.bin/' "$TMP_DIR/filter-empty.milena"
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-empty.milena)
+python3 - "$TMP_DIR/filter-empty.json" <<'PY'
+import json,sys
+doc=json.load(open(sys.argv[1]))
+assert doc['resultados']==[] and doc['grupos']==0
+PY
+[ ! -e "$TMP_DIR/filter-empty-scratch.bin" ]

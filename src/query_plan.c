@@ -12,6 +12,7 @@ static bool supported_analysis_child(ASTNodeType type) {
     return type == AST_LLAMADA_CARGAR ||
            type == AST_BLOQUE_RESUMIR ||
            type == AST_BLOQUE_AGRUPAR ||
+           type == AST_STREAM_FILTER ||
            type == AST_BLOQUE_EXPORTAR ||
            type == AST_DECLARACION_VARIABLE ||
            type == AST_DECLARACION_ENTRADA ||
@@ -63,6 +64,12 @@ MilenaStatus milena_stream_execution_plan_build(
                 return plan_error(error, MILENA_ERR_PARSE,
                                   "El plan de flujo requiere una fuente CSV en modo flujo");
             plan->source = node;
+            break;
+        case AST_STREAM_FILTER:
+            if (plan->filter || !node->value || !node->value[0] || !node->type_name)
+                return plan_error(error, MILENA_ERR_PARSE,
+                                  "El plan admite un único filtro de igualdad exacta con texto");
+            plan->filter = node;
             break;
         case AST_BLOQUE_RESUMIR:
             if (global_summary)
@@ -148,7 +155,17 @@ MilenaStatus milena_stream_execution_plan_build(
     }
 
     plan->logical_operators[0] = MILENA_LOGICAL_CSV_SCAN;
-    plan->logical_operators[2] = MILENA_LOGICAL_JSON_REPORT;
-    plan->logical_operator_count = 3;
+    if (plan->filter) {
+        plan->logical_operators[1] = MILENA_LOGICAL_FILTER;
+        plan->logical_operators[2] = plan->group
+            ? MILENA_LOGICAL_GROUP_AGGREGATE : MILENA_LOGICAL_GLOBAL_AGGREGATE;
+        plan->logical_operators[3] = MILENA_LOGICAL_JSON_REPORT;
+        plan->logical_operator_count = 4;
+    } else {
+        plan->logical_operators[1] = plan->group
+            ? MILENA_LOGICAL_GROUP_AGGREGATE : MILENA_LOGICAL_GLOBAL_AGGREGATE;
+        plan->logical_operators[2] = MILENA_LOGICAL_JSON_REPORT;
+        plan->logical_operator_count = 3;
+    }
     return MILENA_OK;
 }

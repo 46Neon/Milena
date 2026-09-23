@@ -1428,22 +1428,33 @@ static MilenaStatus run_stream_dataset_with_options(
                          MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL;
     bool grouped = plan->physical_operator == MILENA_PHYSICAL_CSV_STREAM_GROUPED ||
                    spill_grouped;
+    MilenaLogicalOperator aggregate_operator = grouped
+        ? MILENA_LOGICAL_GROUP_AGGREGATE : MILENA_LOGICAL_GLOBAL_AGGREGATE;
+    bool valid_logical_shape = plan->filter
+        ? plan->logical_operator_count == 4 &&
+          plan->logical_operators[1] == MILENA_LOGICAL_FILTER &&
+          plan->logical_operators[2] == aggregate_operator &&
+          plan->logical_operators[3] == MILENA_LOGICAL_JSON_REPORT
+        : plan->logical_operator_count == 3 &&
+          plan->logical_operators[1] == aggregate_operator &&
+          plan->logical_operators[2] == MILENA_LOGICAL_JSON_REPORT;
     if ((!grouped && plan->physical_operator != MILENA_PHYSICAL_CSV_STREAM_SUMMARY) ||
         grouped != (group_block != NULL) || (grouped && !group_key) ||
         spill_grouped != (plan->spill_policy != NULL) ||
-        plan->logical_operator_count != 3 ||
         plan->logical_operators[0] != MILENA_LOGICAL_CSV_SCAN ||
-        plan->logical_operators[2] != MILENA_LOGICAL_JSON_REPORT) {
+        !valid_logical_shape) {
         runtime_error(error, MILENA_ERR_INTERNAL,
                       "El plan físico del flujo no coincide con su contrato lógico");
         return MILENA_ERR_INTERNAL;
     }
-    if (grouped && plan->logical_operators[1] != MILENA_LOGICAL_GROUP_AGGREGATE) {
+    if (grouped && plan->logical_operators[plan->filter ? 2 : 1] !=
+                   MILENA_LOGICAL_GROUP_AGGREGATE) {
         runtime_error(error, MILENA_ERR_INTERNAL,
                       "El operador agrupado no coincide con el plan lógico");
         return MILENA_ERR_INTERNAL;
     }
-    if (!grouped && plan->logical_operators[1] != MILENA_LOGICAL_GLOBAL_AGGREGATE) {
+    if (!grouped && plan->logical_operators[plan->filter ? 2 : 1] !=
+                    MILENA_LOGICAL_GLOBAL_AGGREGATE) {
         runtime_error(error, MILENA_ERR_INTERNAL,
                       "El resumen global no coincide con el plan lógico");
         return MILENA_ERR_INTERNAL;
@@ -1666,6 +1677,10 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 options.max_rows = load->stream_row_limit;
             if (load->stream_time_limit_ms > 0.0)
                 options.max_elapsed_milliseconds = load->stream_time_limit_ms;
+            if (stream_plan.filter) {
+                options.filter_column = stream_plan.filter->value;
+                options.filter_value = stream_plan.filter->type_name;
+            }
             status = run_stream_dataset_with_options(&stream_plan, input, output_path,
                                                      &options, output, error);
         }

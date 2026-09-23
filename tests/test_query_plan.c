@@ -102,6 +102,41 @@ static void test_grouped_spill_stream_plan(void) {
     ast_destroy(analysis);
 }
 
+static void test_filtered_grouped_stream_plan(void) {
+    ASTNode *analysis = new_analysis();
+    ASTNode *filter = leaf_with_value(AST_STREAM_FILTER, "region");
+    filter->type_name = milena_strdup("North");
+    assert(filter->type_name);
+    assert(ast_add_child(analysis, filter));
+    ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
+    assert(group);
+    assert(ast_add_child(group, leaf_with_value(AST_AGRUPACION_POR, "region")));
+    assert(ast_add_child(group, summary_block()));
+    assert(ast_add_child(analysis, group));
+
+    MilenaStreamExecutionPlan plan;
+    MilenaError error = {0};
+    assert(milena_stream_execution_plan_build(analysis, &plan, &error) == MILENA_OK);
+    assert(plan.filter == filter && plan.group == group);
+    assert(plan.logical_operator_count == 4);
+    assert(plan.logical_operators[0] == MILENA_LOGICAL_CSV_SCAN);
+    assert(plan.logical_operators[1] == MILENA_LOGICAL_FILTER);
+    assert(plan.logical_operators[2] == MILENA_LOGICAL_GROUP_AGGREGATE);
+    assert(plan.logical_operators[3] == MILENA_LOGICAL_JSON_REPORT);
+    ast_destroy(analysis);
+
+    analysis = new_analysis();
+    filter = leaf_with_value(AST_STREAM_FILTER, "region");
+    filter->type_name = milena_strdup("North");
+    assert(filter->type_name && ast_add_child(analysis, filter));
+    ASTNode *duplicate = leaf_with_value(AST_STREAM_FILTER, "region");
+    duplicate->type_name = milena_strdup("South");
+    assert(duplicate->type_name && ast_add_child(analysis, duplicate));
+    assert(ast_add_child(analysis, summary_block()));
+    assert(milena_stream_execution_plan_build(analysis, &plan, &error) == MILENA_ERR_PARSE);
+    ast_destroy(analysis);
+}
+
 static void test_legacy_global_summary_plan(void) {
     ASTNode *analysis = new_analysis();
     ASTNode *summary = ast_create(AST_BLOQUE_RESUMIR);
@@ -147,6 +182,7 @@ int main(void) {
     test_global_stream_plan();
     test_grouped_stream_plan();
     test_grouped_spill_stream_plan();
+    test_filtered_grouped_stream_plan();
     test_legacy_global_summary_plan();
     test_ambiguous_and_unsupported_plans();
     puts("Canonical logical/physical stream plans validated.");

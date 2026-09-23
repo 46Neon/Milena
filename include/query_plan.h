@@ -10,6 +10,7 @@ typedef enum {
     MILENA_LOGICAL_CSV_SCAN = 1,
     MILENA_LOGICAL_GLOBAL_AGGREGATE,
     MILENA_LOGICAL_GROUP_AGGREGATE,
+    MILENA_LOGICAL_FILTER,
     MILENA_LOGICAL_JSON_REPORT
 } MilenaLogicalOperator;
 
@@ -21,13 +22,14 @@ typedef enum {
 
 typedef struct {
     const ASTNode *source;
+    const ASTNode *filter;
     const ASTNode *sink;
     const ASTNode *summary;
     const ASTNode *group;
     const ASTNode *group_key;
     const ASTNode *group_summary;
     const ASTNode *spill_policy;
-    MilenaLogicalOperator logical_operators[3];
+    MilenaLogicalOperator logical_operators[4];
     size_t logical_operator_count;
     MilenaPhysicalOperator physical_operator;
 } MilenaStreamExecutionPlan;

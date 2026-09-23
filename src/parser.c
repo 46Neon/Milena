@@ -792,6 +792,36 @@ fail:
     return NULL;
 }
 
+static ASTNode *parse_human_stream_filter(Parser *parser) {
+    if (!parser_expect(parser, TOKEN_KW_FILTRAR, "Se esperaba 'filtrar'")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA,
+                       "Se esperaba el nombre de columna entre comillas")) return NULL;
+    char column[MAX_TOKEN_LEN];
+    strncpy(column, parser->previous.lexeme, sizeof(column) - 1);
+    column[sizeof(column) - 1] = '\0';
+    if (!parser_expect(parser, TOKEN_IGUAL_IGUAL,
+                       "El filtro de flujo solo admite igualdad exacta '=='")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA,
+                       "El filtro de flujo requiere un valor de texto entre comillas")) return NULL;
+    char value[MAX_TOKEN_LEN];
+    strncpy(value, parser->previous.lexeme, sizeof(value) - 1);
+    value[sizeof(value) - 1] = '\0';
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después del filtro de flujo")) return NULL;
+    ASTNode *filter = ast_create_leaf(AST_STREAM_FILTER, column);
+    if (!filter) {
+        parser_error(parser, "Sin memoria para el filtro de flujo");
+        return NULL;
+    }
+    filter->type_name = milena_strdup(value);
+    if (!filter->type_name) {
+        ast_destroy(filter);
+        parser_error(parser, "Sin memoria para el valor del filtro de flujo");
+        return NULL;
+    }
+    return filter;
+}
+
 static ASTNode *parse_human_stream_export(Parser *parser) {
     parser_advance(parser);
     if (!parser_expect_word(parser, "resultado", "Se esperaba 'resultado'")) return NULL;
@@ -824,6 +854,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             ASTNode *load = parse_human_stream_load(parser);
             if (load && !parser_add_child(parser, node, load,
                                            "Sin memoria para cargar datos")) break;
+        } else if (parser_match(parser, TOKEN_KW_FILTRAR)) {
+            ASTNode *filter = parse_human_stream_filter(parser);
+            if (filter && !parser_add_child(parser, node, filter,
+                                             "Sin memoria para el filtro de flujo")) break;
         } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
             ASTNode *group = parse_stream_group(parser);
             if (group && !parser_add_child(parser, node, group,

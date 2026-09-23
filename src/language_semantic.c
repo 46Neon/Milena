@@ -235,6 +235,22 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                         "La política #spill de #agrupar requiere exactamente una métrica");
             }
             break;
+        case AST_STREAM_FILTER: {
+            if (!node->value || !node->value[0] || !node->type_name)
+                return semantic_error(node, error,
+                    "El filtro de flujo requiere columna y literal de texto para igualdad exacta");
+            if (!node->parent || node->parent->type != AST_BLOQUE_ANALISIS ||
+                !stream_find_load(node->parent))
+                return semantic_error(node, error,
+                    "filtrar solo se admite dentro de un análisis con datos desde en modo flujo");
+            const ASTNode *column = stream_find_column_declaration(
+                node->parent, node->value);
+            if (!column || !column->type_name ||
+                strcmp(column->type_name, "texto") != 0)
+                return semantic_error(node, error,
+                    "La columna de filtrar debe declararse variable <columna> texto");
+            break;
+        }
         case AST_AGRUPACION_POR:
         case AST_AGRUPACION_SPILL:
         case AST_RESUMEN_METRICA:

@@ -208,3 +208,10 @@ cloud/Arrow/Parquet/ETL general, distributed execution and ML remain future work
 ## Reducer spill telemetry
 
 The canonical grouped-spill JSON report now exposes `bytes_spill`, `registros_spill`, and `runs_spill`. The first two are actual append-store bytes (including framing) and records; the third is the initial sorted-run count written by the reducer, not a configured maximum or estimate. The values are snapshotted from reducer/store state before close and are only published with a fully successful staged report. The 1,000,000-row, 4 KiB-budget validation requires positive source-spill bytes and records (and an actual sort run), proving that this fixture exercised the reducer spill path. These counters and timing are workload observations, not performance thresholds or general scale guarantees. Arrow/Parquet, cloud, general ETL, network/distributed execution, and ML remain outside the implemented scope.
+
+
+## Filtro CSV canónico (slice incremental)
+
+El flujo de `milena run` admite ahora una única condición `filtrar "columna" == "texto";` dentro de `.analisis` con una fuente `datos desde` en modo streaming. La columna debe declararse `variable <columna> texto`; la comparación es igualdad exacta byte a byte del valor CSV ya decodificado (incluidas comillas CSV y comas dentro del campo). La condición aparece tipada en el AST y en el plan lógico entre lectura y agregación, y se aplica durante el recorrido del lector existente antes de agregación global, agrupación en memoria o agrupación con spill. Solo se soporta una condición textual `==`; operadores relacionales, valores numéricos, expresiones, condiciones múltiples, regex y coerción se rechazan antes de ejecutar. La cabecera CSV ausente/duplicada se rechaza y una columna de filtro no presente en ella produce error de datos. Los límites de filas/tiempo se siguen midiendo sobre registros leídos, incluso los descartados por filtro; lector CSV, agrupadores, spill y publicación conservan sus rutas actuales.
+
+Esta capacidad no implica ETL general, filtros de expresión arbitraria, Arrow/Parquet, cloud, ejecución distribuida ni ML; son fases futuras de la hoja de ruta.
