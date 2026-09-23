@@ -1,6 +1,7 @@
 #include "stream.h"
 #include "grouped_aggregate.h"
 #include "group_key_codec.h"
+#include "source_reader.h"
 
 #include <float.h>
 #include <time.h>
@@ -13,7 +14,6 @@
 
 #define STREAM_MAX_COLUMNS 4096u
 #define STREAM_MAX_METRICS MILENA_STREAM_MAX_METRICS
-#define STREAM_IO_BUFFER (64u * 1024u)
 #define STREAM_INITIAL_RECORD 4096u
 #define STREAM_DEFAULT_MAX_RECORD (64u * 1024u * 1024u)
 #define STREAM_DEFAULT_MAX_COLUMNS STREAM_MAX_COLUMNS
@@ -50,87 +50,6 @@ const char *milena_stream_operation_name(MilenaStreamOperation operation) {
     case MILENA_STREAM_STDDEV: return "desviacion_estandar";
     default: return "desconocida";
     }
-}
-
-static MilenaStatus grow_record(char **record, size_t *capacity,
-                                size_t needed, size_t max_record_bytes,
-                                MilenaError *error) {
-    if (needed <= *capacity) return MILENA_OK;
-    if (needed > max_record_bytes) {
-        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
-                         "El registro CSV supera el límite configurado del flujo");
-        return MILENA_ERR_OVERFLOW;
-    }
-    size_t next = *capacity ? *capacity : STREAM_INITIAL_RECORD;
-    while (next < needed) {
-        if (next > max_record_bytes / 2) {
-            next = max_record_bytes;
-            break;
-        }
-        next *= 2;
-    }
-    char *grown = (char *)realloc(*record, next);
-    if (!grown) {
-        milena_error_set(error, MILENA_ERR_MEMORY, 0, 0, 0,
-                         "Memoria insuficiente para el registro CSV");
-        return MILENA_ERR_MEMORY;
-    }
-    *record = grown;
-    *capacity = next;
-    return MILENA_OK;
-}
-
-/* Reads one complete CSV record and reuses the same bounded buffer. */
-static MilenaStatus stream_read_record(FILE *file, char **record,
-                                       size_t *capacity, size_t max_record_bytes,
-                                       size_t *record_length,
-                                       MilenaError *error) {
-    if (!file || !record || !capacity || !record_length) return MILENA_ERR_ARGUMENT;
-    size_t length = 0;
-    bool in_quotes = false;
-    int ch;
-    while ((ch = fgetc(file)) != EOF) {
-        if (ch == '"') {
-            MilenaStatus status = grow_record(record, capacity, length + 2, max_record_bytes, error);
-            if (status != MILENA_OK) return status;
-            (*record)[length++] = (char)ch;
-            if (in_quotes) {
-                int next = fgetc(file);
-                if (next == '"') {
-                    status = grow_record(record, capacity, length + 2, max_record_bytes, error);
-                    if (status != MILENA_OK) return status;
-                    (*record)[length++] = (char)next;
-                } else {
-                    if (next != EOF) (void)ungetc(next, file);
-                    in_quotes = false;
-                }
-            } else {
-                in_quotes = true;
-            }
-        } else if (ch == '\n' || ch == '\r') {
-            if (ch == '\r') {
-                int next = fgetc(file);
-                if (next != '\n' && next != EOF) (void)ungetc(next, file);
-            }
-            if (!in_quotes) break;
-            MilenaStatus status = grow_record(record, capacity, length + 2, max_record_bytes, error);
-            if (status != MILENA_OK) return status;
-            (*record)[length++] = '\n';
-        } else {
-            MilenaStatus status = grow_record(record, capacity, length + 2, max_record_bytes, error);
-            if (status != MILENA_OK) return status;
-            (*record)[length++] = (char)ch;
-        }
-    }
-    if (ch == EOF && length == 0) return MILENA_ERR_IO;
-    if (in_quotes) {
-        milena_error_set(error, MILENA_ERR_PARSE, 0, 0, 0,
-                         "CSV con comillas sin cerrar en modo flujo");
-        return MILENA_ERR_PARSE;
-    }
-    (*record)[length] = '\0';
-    *record_length = length;
-    return MILENA_OK;
 }
 
 /* Splits in place; field pointers remain valid until the next record. */
@@ -339,13 +258,9 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         return MILENA_ERR_ARGUMENT;
     if (error) milena_error_clear(error);
     double started = stream_now_ms();
-    FILE *input = fopen(input_path, "rb");
-    if (!input) {
-        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                         "No se pudo abrir el CSV para lectura en flujo");
-        return MILENA_ERR_IO;
-    }
-    (void)setvbuf(input, NULL, _IOFBF, STREAM_IO_BUFFER);
+    MilenaSourceReader input = {0};
+    MilenaStatus status = milena_source_reader_open_local_csv(&input, input_path, error);
+    if (status != MILENA_OK) return status;
     char *record = NULL;
     size_t record_capacity = 0;
     char **fields = NULL;
@@ -357,10 +272,10 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
     size_t record_length = 0, observed_record_bytes = 0;
     size_t input_bytes = 0, bytes_read = 0;
     bool resource_limit_reached = false;
-    MilenaStatus status = stream_read_record(input, &record, &record_capacity,
+    status = milena_source_reader_read_record(&input, &record, &record_capacity,
         options->max_record_bytes, &record_length, error);
     if (status != MILENA_OK) {
-        if (status == MILENA_ERR_IO && feof(input)) {
+        if (status == MILENA_ERR_IO && milena_source_reader_at_end(&input)) {
             milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0, "El CSV no tiene cabecera");
             status = MILENA_ERR_DATA;
         }
@@ -402,10 +317,10 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
                          "La columna del filtro no existe en el CSV");
         status = MILENA_ERR_DATA; goto finish;
     }
-    while ((status = stream_read_record(input, &record, &record_capacity,
+    while ((status = milena_source_reader_read_record(&input, &record, &record_capacity,
             options->max_record_bytes, &record_length, error)) == MILENA_OK) {
-        long position = ftell(input);
-        if (position >= 0) bytes_read = (size_t)position;
+        size_t position = 0;
+        if (milena_source_reader_position_bytes(&input, &position)) bytes_read = position;
         if (options->max_rows != 0 && rows_read >= options->max_rows) {
             milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                              "El flujo alcanzó el máximo de filas configurado");
@@ -448,11 +363,11 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         if (row_valid) rows_valid++;
         else malformed++;
     }
-    if (status == MILENA_ERR_IO && feof(input)) status = MILENA_OK;
-    long measured_bytes = ftell(input);
-    if (measured_bytes >= 0) {
-        input_bytes = (size_t)measured_bytes;
-        bytes_read = (size_t)measured_bytes;
+    if (status == MILENA_ERR_IO && milena_source_reader_at_end(&input)) status = MILENA_OK;
+    size_t measured_bytes = 0;
+    if (milena_source_reader_position_bytes(&input, &measured_bytes)) {
+        input_bytes = measured_bytes;
+        bytes_read = measured_bytes;
     }
     if (status == MILENA_OK && options->max_elapsed_milliseconds > 0.0 &&
         stream_now_ms() - started >= options->max_elapsed_milliseconds) {
@@ -526,7 +441,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
     }
 
 finish:
-    if (fclose(input) != 0 && status == MILENA_OK) status = MILENA_ERR_IO;
+    if (milena_source_reader_close(&input) != MILENA_OK && status == MILENA_OK) status = MILENA_ERR_IO;
     if (report && status != MILENA_OK) {
         report->rows_read = rows_read;
         report->rows_with_valid_values = rows_valid;
@@ -697,13 +612,14 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     if (error) milena_error_clear(error);
 
     double started = stream_now_ms();
-    FILE *input = fopen(input_path, "rb");
-    if (!input) {
-        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                         "No se pudo abrir el CSV agrupado");
-        return MILENA_ERR_IO;
+    MilenaSourceReader input = {0};
+    MilenaStatus open_status = milena_source_reader_open_local_csv(&input, input_path, error);
+    if (open_status != MILENA_OK) {
+        if (open_status == MILENA_ERR_IO)
+            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                             "No se pudo abrir el CSV agrupado");
+        return open_status;
     }
-    (void)setvbuf(input, NULL, _IOFBF, STREAM_IO_BUFFER);
     char *record = NULL;
     char **fields = NULL;
     char **headers = NULL;
@@ -717,10 +633,10 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     bool resource_limit_reached = false;
     MilenaStatus status = MILENA_OK;
 
-    status = stream_read_record(input, &record, &record_capacity,
+    status = milena_source_reader_read_record(&input, &record, &record_capacity,
                                 options->max_record_bytes, &record_length, error);
     if (status != MILENA_OK) {
-        if (status == MILENA_ERR_IO && feof(input)) {
+        if (status == MILENA_ERR_IO && milena_source_reader_at_end(&input)) {
             milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
                              "El CSV agrupado no tiene cabecera");
             status = MILENA_ERR_DATA;
@@ -820,10 +736,10 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     if (!groups || !group_slots) { status = MILENA_ERR_MEMORY; goto grouped_finish; }
     group_state_bytes = group_array_bytes + slot_bytes;
 
-    while ((status = stream_read_record(input, &record, &record_capacity,
+    while ((status = milena_source_reader_read_record(&input, &record, &record_capacity,
             options->max_record_bytes, &record_length, error)) == MILENA_OK) {
-        long position = ftell(input);
-        if (position >= 0) bytes_read = (size_t)position;
+        size_t position = 0;
+        if (milena_source_reader_position_bytes(&input, &position)) bytes_read = position;
         if ((options->max_rows != 0 && rows_read >= options->max_rows) ||
             (options->max_elapsed_milliseconds > 0.0 &&
              stream_now_ms() - started >= options->max_elapsed_milliseconds)) {
@@ -945,10 +861,11 @@ MilenaStatus milena_stream_csv_grouped_with_options(
         if (row_valid) rows_valid++;
         if (row_malformed) malformed++;
     }
-    if (status == MILENA_ERR_IO && feof(input)) status = MILENA_OK;
+    if (status == MILENA_ERR_IO && milena_source_reader_at_end(&input)) status = MILENA_OK;
     {
-        long position = ftell(input);
-        if (position >= 0) input_bytes = bytes_read = (size_t)position;
+        size_t position = 0;
+        if (milena_source_reader_position_bytes(&input, &position))
+            input_bytes = bytes_read = position;
     }
     if (status == MILENA_OK && options->max_elapsed_milliseconds > 0.0 &&
         stream_now_ms() - started >= options->max_elapsed_milliseconds) {
@@ -981,10 +898,11 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     }
 
 grouped_finish:
-    if (input) {
-        long position = ftell(input);
-        if (position >= 0) input_bytes = bytes_read = (size_t)position;
-        if (fclose(input) != 0 && status == MILENA_OK) status = MILENA_ERR_IO;
+    if (input.ops) {
+        size_t position = 0;
+        if (milena_source_reader_position_bytes(&input, &position))
+            input_bytes = bytes_read = position;
+        if (milena_source_reader_close(&input) != MILENA_OK && status == MILENA_OK) status = MILENA_ERR_IO;
     }
     if (report) {
         report->rows_read = rows_read;
@@ -1471,7 +1389,8 @@ MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options(
         policy->max_output_bytes : STREAM_DEFAULT_SPILL_OUTPUT_BYTES;
     if (error) milena_error_clear(error);
     double started = stream_now_ms();
-    FILE *input = NULL, *staged = NULL;
+    MilenaSourceReader input = {0};
+    FILE *staged = NULL;
     char *record = NULL, *staging_path = NULL;
     char **fields = NULL, **headers = NULL;
     size_t record_capacity = 0, record_length = 0, column_count = 0;
@@ -1487,17 +1406,17 @@ MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options(
     MilenaGroupedAggregate reducer = {0};
     MilenaStatus status = MILENA_OK;
 
-    input = fopen(input_path, "rb");
-    if (!input) {
-        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                         "No se pudo abrir el CSV para spill agrupado");
-        status = MILENA_ERR_IO; goto spill_finish;
+    status = milena_source_reader_open_local_csv(&input, input_path, error);
+    if (status != MILENA_OK) {
+        if (status == MILENA_ERR_IO)
+            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                             "No se pudo abrir el CSV para spill agrupado");
+        goto spill_finish;
     }
-    (void)setvbuf(input, NULL, _IOFBF, STREAM_IO_BUFFER);
-    status = stream_read_record(input, &record, &record_capacity,
+    status = milena_source_reader_read_record(&input, &record, &record_capacity,
                                 options->max_record_bytes, &record_length, error);
     if (status != MILENA_OK) {
-        if (status == MILENA_ERR_IO && feof(input)) {
+        if (status == MILENA_ERR_IO && milena_source_reader_at_end(&input)) {
             milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
                              "El CSV agrupado no tiene cabecera");
             status = MILENA_ERR_DATA;
@@ -1564,10 +1483,10 @@ MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options(
     reducer_open = true;
     scratch_owned = true;
 
-    while ((status = stream_read_record(input, &record, &record_capacity,
+    while ((status = milena_source_reader_read_record(&input, &record, &record_capacity,
             options->max_record_bytes, &record_length, error)) == MILENA_OK) {
-        long position = ftell(input);
-        if (position >= 0) bytes_read = (size_t)position;
+        size_t position = 0;
+        if (milena_source_reader_position_bytes(&input, &position)) bytes_read = position;
         if ((options->max_rows && rows_read >= options->max_rows) ||
             (options->max_elapsed_milliseconds > 0.0 &&
              stream_now_ms() - started >= options->max_elapsed_milliseconds)) {
@@ -1661,18 +1580,16 @@ MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options(
         if (row_malformed) malformed++;
         if (status != MILENA_OK) break;
     }
-    if (status == MILENA_ERR_IO && feof(input)) status = MILENA_OK;
+    if (status == MILENA_ERR_IO && milena_source_reader_at_end(&input)) status = MILENA_OK;
     {
-        long position = ftell(input);
-        if (position >= 0) input_bytes = bytes_read = (size_t)position;
+        size_t position = 0;
+        if (milena_source_reader_position_bytes(&input, &position))
+            input_bytes = bytes_read = position;
     }
-    if (input) {
-        if (fclose(input) != 0) {
-            input = NULL;
-            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
-                             "No se pudo cerrar el CSV agrupado spill");
-            status = MILENA_ERR_IO;
-        } else input = NULL;
+    if (input.ops && milena_source_reader_close(&input) != MILENA_OK) {
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "No se pudo cerrar el CSV agrupado spill");
+        status = MILENA_ERR_IO;
     }
     if (status == MILENA_OK && options->max_elapsed_milliseconds > 0.0 &&
         stream_now_ms() - started >= options->max_elapsed_milliseconds) {
@@ -1839,10 +1756,11 @@ MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options(
         report->spill_runs = spill_runs;
     }
 spill_finish:
-    if (input) {
-        long position = ftell(input);
-        if (position >= 0) input_bytes = bytes_read = (size_t)position;
-        if (fclose(input) != 0 && status == MILENA_OK) status = MILENA_ERR_IO;
+    if (input.ops) {
+        size_t position = 0;
+        if (milena_source_reader_position_bytes(&input, &position))
+            input_bytes = bytes_read = position;
+        if (milena_source_reader_close(&input) != MILENA_OK && status == MILENA_OK) status = MILENA_ERR_IO;
     }
     if (staged) fclose(staged);
     if (reducer_open) {

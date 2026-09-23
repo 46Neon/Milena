@@ -56,12 +56,15 @@ es 4096 filas.
 
 ## Contrato arquitectónico
 
-`stream.c` es un backend interno del runtime canónico. No tiene un ejecutable,
+`stream.c` es un backend interno del runtime canónico y delega la apertura y
+lectura de registros CSV a la interfaz interna `MilenaSourceReader`; hoy solo
+está implementado el adaptador de archivos CSV locales. No tiene un ejecutable,
 parser, lector de scripts ni ruta CLI propios: la única ruta de producto es
-`lexer → parser → AST → semántica → milena_run_dataset_program → stream.c`.
+`lexer → parser → AST → semántica → milena_run_dataset_program → stream.c → source_reader.c`.
 La sintaxis humana conserva en el AST la operación, columna, tamaño de lote y
-límites de registro, columnas, grupos, filas y tiempo; `stream.c` recibe
-únicamente ese contrato tipado. Las pruebas directas del backend son pruebas unitarias, no una
+límites de registro, columnas, grupos, filas y tiempo; el backend recibe
+únicamente ese contrato tipado. Esta interfaz no anuncia compatibilidad remota,
+cloud, Arrow ni Parquet. Las pruebas directas del backend son pruebas unitarias, no una
 segunda interfaz de usuario. SST, finanzas y análisis siguen siendo comandos
 AST del mismo runtime (`AST_COMANDO_SST`, tablas y `finance.c`); el manifiesto
 mantiene fuera del producto los módulos experimentales de VM/IR/GC.

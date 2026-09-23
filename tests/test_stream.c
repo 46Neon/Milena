@@ -1,5 +1,6 @@
 #include "stream.h"
 #include "grouped_aggregate.h"
+#include "source_reader.h"
 
 #include <assert.h>
 
@@ -28,7 +29,39 @@ static void write_fixture(const char *path) {
     assert(fclose(file) == 0);
 }
 
+static void test_local_source_reader(void) {
+    const char *path = "tests/.source_reader_fixture.csv";
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL);
+    fputs("id,nota\r\n1,\"linea uno\r\nlinea dos\"\r\n2,final", file);
+    assert(fclose(file) == 0);
+
+    MilenaSourceReader reader = {0};
+    MilenaError error;
+    milena_error_clear(&error);
+    assert(milena_source_reader_open_local_csv(&reader, path, &error) == MILENA_OK);
+    char *record = NULL;
+    size_t capacity = 0, length = 0, position = 0;
+    assert(milena_source_reader_read_record(&reader, &record, &capacity,
+        4096, &length, &error) == MILENA_OK);
+    assert(length == strlen("id,nota") && strcmp(record, "id,nota") == 0);
+    assert(milena_source_reader_position_bytes(&reader, &position) && position == 9);
+    assert(milena_source_reader_read_record(&reader, &record, &capacity,
+        4096, &length, &error) == MILENA_OK);
+    assert(strcmp(record, "1,\"linea uno\nlinea dos\"") == 0);
+    assert(milena_source_reader_read_record(&reader, &record, &capacity,
+        4096, &length, &error) == MILENA_OK);
+    assert(strcmp(record, "2,final") == 0);
+    assert(milena_source_reader_read_record(&reader, &record, &capacity,
+        4096, &length, &error) == MILENA_ERR_IO);
+    assert(milena_source_reader_at_end(&reader));
+    assert(milena_source_reader_close(&reader) == MILENA_OK);
+    free(record);
+    assert(remove(path) == 0);
+}
+
 int main(void) {
+    test_local_source_reader();
     const char *input = "tests/.stream_fixture.csv";
     const char *output = "tests/.stream_report.json";
     write_fixture(input);

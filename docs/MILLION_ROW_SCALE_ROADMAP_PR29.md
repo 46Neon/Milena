@@ -133,6 +133,8 @@ un planner general de operadores, esquema, costos, filtros o formatos.
 
 ### Fase 3 — Fuentes y formatos columnares
 
+**Slice local inicial en PR #29:** el runtime y las tres entradas de streaming CSV usan ahora la interfaz interna `MilenaSourceReader` para abrir, leer registros acotados, consultar EOF/posición y cerrar una fuente. La implementación disponible es únicamente CSV local; la ruta de usuario sigue siendo lexer → parser → AST → semántica/recursos → planner → runtime → backend. La abstracción no introduce otro parser ni almacenamiento, y no habilita fuentes remotas, cloud, Arrow o Parquet. Las pruebas de streaming conservan la cobertura CSV y verifican además registros multilínea y finales sin salto de línea por la interfaz.
+
 - Definir una abstracción de fuente interna que conserve la misma semántica y
   AST para rutas locales y fuentes remotas/nube; resolver autenticación mediante
   configuración segura, no literales de secretos en scripts/reportes.
