@@ -66,9 +66,13 @@ bytes configurada en AST; no se mezcla con la cuota de scratch.
 
 No se agregan varias claves/métricas spill, clave compuesta, unión, ordenamiento
 de filas, Parquet/Arrow ni workers/red. Operaciones `Dataset` y `MilenaTable`
-siguen en memoria. La ruta scratch la proporciona el programa y se crea en modo exclusivo; si ya existe,
-se rechaza sin sobrescribirla. No se prometen nombres aleatorios privados ni
-concurrencia de writers sobre la misma ruta. No se ha medido RSS global ni se promete latencia.
+siguen en memoria. El workflow `Grouped spill million-row validation` ejecuta
+un workload determinista de 1.000.000 de filas por la ruta canónica y compara
+la salida en memoria con spill; el artefacto registra el entorno y tiempos
+observados, pero no mide RSS global ni establece un SLO o una garantía de
+rendimiento. La ruta scratch la proporciona el programa y se crea en modo
+exclusivo; si ya existe, se rechaza sin sobrescribirla. No se prometen nombres
+aleatorios privados ni concurrencia de writers sobre la misma ruta.
 
 ## Semántica y determinismo
 

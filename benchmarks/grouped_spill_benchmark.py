@@ -79,6 +79,24 @@ def values(report: dict, expected_mode: str, expected_groups: int) -> dict[str, 
     return result
 
 
+def assert_row_contract(report: dict, rows: int, groups: int) -> None:
+    if report.get("filas") != rows or report.get("filas_validas") != rows:
+        raise AssertionError(f"row count mismatch: expected {rows}, got {report.get('filas')} / {report.get('filas_validas')}")
+    if report.get("filas_malformadas") != 0 or report.get("limite_grupos") != groups:
+        raise AssertionError("malformed-row or configured-group limit mismatch")
+    observed = {item["clave"]: item["metricas"][0] for item in report["resultados"]}
+    if len(observed) != groups:
+        raise AssertionError(f"expected {groups} result groups, got {len(observed)}")
+    for index in range(groups):
+        key = f"G{index:06d}"
+        expected = rows // groups + (1 if index < rows % groups else 0)
+        metric = observed.get(key)
+        if metric is None or metric.get("valores_validos") != expected:
+            raise AssertionError(f"valid-row count mismatch for {key}")
+        if metric.get("valores_nulos") != 0 or metric.get("valores_invalidos") != 0:
+            raise AssertionError(f"unexpected null/invalid rows for {key}")
+
+
 def run_case(rows: int, groups: int, repetitions: int) -> dict:
     with tempfile.TemporaryDirectory(prefix="milena-grouped-spill-bench-") as td:
         root = Path(td)
@@ -97,6 +115,8 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
                 scratch=scratch, spill_quota=quota), encoding="utf-8")
             memory_report, memory_seconds = run(BINARY, memory_script, root)
             spill_report, spill_seconds = run(BINARY, spill_script, root)
+            assert_row_contract(memory_report, rows, groups)
+            assert_row_contract(spill_report, rows, groups)
             memory_values = values(memory_report, "flujo_agrupado", groups)
             spill_values = values(spill_report, "flujo_agrupado_spill", groups)
             if memory_values.keys() != spill_values.keys():
