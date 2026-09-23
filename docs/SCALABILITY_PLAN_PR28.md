@@ -123,7 +123,8 @@ resuelve por sí mismo una cardinalidad ilimitada de claves.
 
 ## Primer agregado agrupado con spill
 
-`grouped_aggregate.c` añade una API canónica de producto para claves opacas de
+`grouped_aggregate.c` añade una API C de producto, todavía no integrada al
+lenguaje canónico, para claves opacas de
 bytes y un valor binary64 por fila. El mapa residente tiene capacidad calculada
 desde un presupuesto de memoria explícito que incluye slots, almacenamiento de
 claves, índice hash y buffers temporales internos acotados; al llenarse, serializa estados mergeables al spill
@@ -151,6 +152,5 @@ los escritores concurrentes sobre una misma ruta no están soportados, y esta
 fusión local no equivale a hash partitioning distribuido ni a una promesa de
 rendimiento industrial. Las pruebas cubren derrames, múltiples pasadas para
 120 claves distintas, reducción repetida, orden determinista, clave vacía,
-fallo de cuota y rechazo de una configuración de memoria insuficiente. La API
-sigue sin estar expuesta en sintaxis `.milena` o en el AST/runtime canónico.
+fallo de cuota y rechazo de una configuración de memoria insuficiente. El lenguaje ya tiene sintaxis/AST para `#agrupar` y el runtime canónico la ejecuta con `milena_table_group_by` en memoria. La API nueva de agregación agrupada con spill descrita aquí todavía no está conectada a ese operador: acepta una clave opaca y un solo valor `binary64` por llamada, mientras el operador existente debe generar una `MilenaTable` con esquema y puede contener varias métricas. Falta diseñar un adaptador de filas/columnas y de presupuesto/ruta scratch que pase por el AST, semántica y runtime existentes, con pruebas end-to-end; no se añadió un parser o runtime paralelo.
 
