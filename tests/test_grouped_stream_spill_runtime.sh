@@ -191,7 +191,7 @@ cat > "$TMP_DIR/composite-key-pending.milena" <<EOF_M
   variable grupo texto
   variable periodo numerica
   variable valor numerica
-  datos desde "missing-composite-input.csv" con filas hasta 1000 con tiempo hasta 30000 ms
+  datos desde "missing-composite-input.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
   agrupar por "grupo", "periodo" #spill("$TMP_DIR/composite-key.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
   guardar resultado en "composite-key.json"
 }
