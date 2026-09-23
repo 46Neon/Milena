@@ -3,6 +3,7 @@
 #include "array.h"
 #include "dataset.h"
 #include "stream.h"
+#include "language_grouped_spill.h"
 #include "query_plan.h"
 #include "analysis.h"
 #include "schema.h"

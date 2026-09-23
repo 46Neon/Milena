@@ -9,36 +9,33 @@ semántica/recursos → runtime → backend**. Los backends son implementaciones
 internas seleccionadas por el AST/plan tipado; no pueden introducir otro
 lenguaje de scripts, parser, CLI de datos ni runtime paralelo.
 
-PR #29 valida dos ejecuciones del lenguaje sobre un CSV determinista de
-exactamente 1.000.000 de filas: resumen global y agrupación streaming de
-cardinalidad dos por `milena run` con sintaxis `.analisis`. Ambas comprueban
-resultados, conteos y el límite del búfer; también se prueba rechazo sin reporte
-parcial al exceder el límite de filas y al declarar menos grupos que los que
-requiere la entrada. El reporte observa tiempo, bytes, búfer y RSS pico cuando
-el sistema lo permite. La pasada exitosa prueba únicamente esa operación, entrada, build y
-hardware; no prueba Big Data arbitrario, agrupación con spill, joins, ETL,
-Arrow/Parquet, nube, ejecución distribuida ni ML, y no establece una latencia
-universal.
+PR #29 valida tres ejecuciones del lenguaje sobre un CSV determinista de
+exactamente 1.000.000 de filas: resumen global, agrupación streaming de dos
+claves y agrupación streaming con spill de 128 claves, todas por `milena run`
+y `.analisis`. Se comprueban resultados exactos, errores de datos, conteos,
+límites declarados y limpieza; la corrida spill se repite para verificar
+salida semántica determinista. Se observa tiempo, bytes, buffers y RSS pico
+cuando el sistema lo permite. El resultado prueba únicamente estas operaciones,
+entrada, build y hardware: no prueba cardinalidad arbitraria, joins, ETL general,
+Arrow/Parquet, nube, ejecución distribuida ni ML, y no establece latencia
+universal ni una cota de RSS total.
 
 ## Relación honesta con PR #28
 
-PR #28 sigue abierto y no forma parte de la base `main` de este PR. No se copia
-ni se rehace aquí su implementación. Su head incluye protocolo de resultados,
-spill append-only y replay, agregados mergeables, ordenamiento externo y una
-primera sección vertical de agrupación con spill conectada al `.agrupar`
-existente (con pruebas `milena run` para los casos cubiertos). La propia rama
-marca como pendientes optimizar/conectar la reducción externa agrupada al
-planner, integrar el spill con la agrupación streaming y completar guardas y
-benchmarks/SLO end-to-end. En la consulta de PR #29, la CI activa del head actual
-de PR #28 está verde, pero la rama sigue abierta y no está en `main`; sus cambios
-se deben revalidar tras cualquier actualización antes de depender de ellos. Esos cambios deben pasar revisión/CI y fusionarse antes de que PR
-#29 pueda apoyarse en ellos. El millón de filas de este PR usa el resumen global
-CSV streaming que ya existe en `main`; no reivindica cobertura del trabajo de
-spill/particionado local de PR #28 ni usa sus APIs nuevas.
+PR #29 está apilado sobre la rama abierta `feature/massive-scalability-pr28`
+(head verificado `fed0ff803c27b145c75eba8607c1c78e6bd57df0`). Se preservaron
+ambos historiales con commits de merge normales y no se modificó PR #28. El
+planner tipado de PR #29 reconoce la configuración AST de spill y el runtime
+canónico delega a `milena_stream_csv_grouped_spill_with_options` de PR #28,
+reutilizando su lector CSV, reducer versionado, ordenamiento/fusión externos,
+cuotas y publicación transaccional; no hay copia paralela de almacenamiento o
+reducer. La política de AST incluye memoria, scratch, clave, grupos, bytes del
+reporte y máximo de runs. El adapter tabular existente también se conserva.
 
-Después de fusionar PR #28, esta hoja deberá reconciliarse con el contrato y
-las APIs efectivamente integradas; no se debe resolver la dependencia suponiendo
-que el head abierto ya está en `main`.
+Los checks de PR #28 estaban verdes al inspeccionar ese head; PR #28 sigue
+abierto y no forma parte de `main`. La ruta apilada se revalidará con la CI de
+PR #29. Los resultados del millón de filas no validan escala arbitraria,
+plataformas no medidas ni cualquier otra operación de PR #28.
 
 ## Fases y criterios de aceptación
 
@@ -92,10 +89,15 @@ un planner general de operadores, esquema, costos, filtros o formatos.
 - Mantener el lector CSV incremental con soporte correcto de comillas y
   registros multilínea; llevar presupuestos de filas, tiempo, columnas,
   registro, memoria y scratch desde sintaxis/AST hasta el backend.
-- Integrar spill y merge externos en operaciones del lenguaje únicamente tras
-  revisar las APIs y límites realmente fusionados de PR #28. Evitar duplicar su
-  almacén, serialización, estados mergeables, sort o reducer.
-- Conectar agregación global/agrupada y ejecución por lotes con resultados
+- Implementado en esta actualización: el plan físico canónico de `.analisis`
+  conecta la agrupación CSV con el API de spill existente de PR #28; usa una
+  clave texto y una métrica soportada, con presupuesto de memoria, cuota,
+  cardinalidad, tamaño de clave, tamaño de reporte y máximo de runs tipados.
+  No duplica almacén, serialización, estados mergeables, sort ni reducer.
+- Sigue pendiente ampliar fuentes/operadores y los contratos de key/métricas;
+  mantener límites de lectura y fallos explícitos en cada backend.
+- Aceptación continua: agregación global/agrupada y ejecución por lotes con
+  resultados
   deterministas, cleanup transaccional y fallos por cuota explícitos. No
   materializar el input o todos los grupos para afirmar streaming.
 - Aceptación: pruebas `milena run` de equivalencia con y sin spill, claves
@@ -160,22 +162,18 @@ un planner general de operadores, esquema, costos, filtros o formatos.
 
 ## Estado de implementación de PR #29
 
-- Implementado en este PR: planner tipado inicial para el corte CSV streaming
-  actual y validación end-to-end de un millón de filas para resumen global y
-  agrupado con presupuesto explícito de grupos y prueba de rechazo por cuota.
-- Implementado en esta actualización: repetir la escala por el backend de
-  agrupación streaming con dos claves, validar por grupo los valores y conteos
-  (incluida la semántica de `contar` sobre celdas no vacías), y comprobar desde
-  `.analisis` que un límite de un grupo rechaza la segunda clave sin publicar
-  un reporte parcial. Los contadores de fila pueden solaparse cuando una métrica
-  (`contar`) acepta una celda no vacía y otra (`suma`) la rechaza como no
-  numérica; la validación verifica por separado el conteo y los errores por
-  métrica. Esto demuestra solo agregación de cardinalidad acotada, no spill ni
-  cardinalidad arbitraria.
-- Las fases 2–6 siguen siendo trabajo futuro: no se marcan como completas solo
-  porque estén descritas aquí. Los contratos de spill del PR #28 son externos a
-  este PR mientras no estén fusionados en `main`; deben revalidarse antes de
-  integrar sus APIs.
+- Implementados: planner lógico/físico tipado para resumen global, agrupación
+  regular y agrupación con spill; validación end-to-end de un millón de filas
+  para cada uno de esos tres workloads, con resultados por grupo y rechazo de
+  límites de filas/grupos sin publicar reportes parciales.
+- El caso A/B conserva la semántica de `contar` sobre celdas no vacías aunque
+  otra métrica numérica las rechace; el caso spill verifica una métrica suma,
+  128 grupos acotados, datos numéricos inválidos, salida ordenada, cuotas AST y
+  limpieza/repetición determinista. Esto no prueba cardinalidad arbitraria ni
+  RSS global acotada.
+- Las demás capacidades descritas en fases 2–6 —formatos/fuentes, ETL general,
+  paralelismo, cloud, Arrow/Parquet, distribuido y ML— siguen pendientes y no
+  se marcan completas por estar planificadas.
 
 ## Ejecución reproducible del hito de este PR
 
@@ -194,10 +192,14 @@ adjunta el JSON del resultado cuando el job termina correctamente. El proceso fa
 esperados o si el informe no acredita el búfer acotado.
 
 
-## Actual integration with PR #28 (PR #29 stacked)
+## Spill workload resource contract
 
-PR #29 is now based on the open PR #28 branch `feature/massive-scalability-pr28` at verified dependency head `6cd1a763a172298b407c70dacd28cd1d068ec7cc`. Its history is preserved with a normal two-parent merge commit; PR #28 itself is not modified. The typed physical planner recognizes the AST spill policy and routes `.analisis` streaming groups to PR #28's `milena_stream_csv_grouped_spill_with_options` API, reusing its bounded CSV parser, versioned spill store, deterministic reducer/finalizer and transactional report publishing rather than copying storage/reducer code. The table runtime continues to use PR #28's canonical language adapter.
-
-The opt-in million-row validation now exercises 128 distinct spill groups with `con grupos de 128`, 4,096 bytes of reducer memory, an explicit 128 MiB scratch quota, 128-byte key cap, 16 MiB staged-report cap, 4,096-run cap, one-million row cap, and 1 MiB record cap. It checks all group sums/counts/malformed values, sorted deterministic keys, successful scratch cleanup, and identical output on a repeated run. Existing PR #28 end-to-end tests cover row, time, disk-quota, group-quota and invalid-type/multi-metric rejections with no partial report or stale files. These configured limits bound reducer state, output cardinality and scratch use; they are not a process-wide RSS guarantee.
-
-The task `make scale-million-row` remains an opt-in workflow rather than part of `make test`; its result is observational and has no portable throughput threshold. Cloud/Arrow/Parquet/ETL, distributed execution and ML remain future phases.
+The opt-in spill benchmark uses 128 keys, 4 KiB reducer memory, a 128 MiB
+scratch quota, 128-byte key cap, 16 MiB output cap, 4,096-run cap, one-million
+row cap and 1 MiB record cap. It validates group sums and malformed rows,
+sorted deterministic keys, cleanup and repeated semantic output. The small
+end-to-end spill suite in `make test` covers row, time, scratch, group, report
+bytes, run-count, unsupported type and multi-metric failures without partial
+reports or stale files. These limits bound configured operator state/output,
+not process-wide RSS. Timings remain observations without portable thresholds;
+cloud/Arrow/Parquet/ETL general, distributed execution and ML remain future work.

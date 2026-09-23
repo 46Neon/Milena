@@ -8,7 +8,7 @@ La única ruta de producto seguirá siendo `lexer → parser → AST tipado → 
 
 ## Corte vertical implementado en #agrupar tabular
 
-La sintaxis canónica admite `#spill("ruta-nueva", memoria_bytes, cuota_spill_bytes, max_key_bytes, max_grupos[, max_salida_bytes[, max_runs]])` dentro de `.agrupar dataset { ... }`. Los límites numéricos son enteros tipados en el AST y se validan antes de ejecutar: memoria 4 KiB–512 MiB, cuota 1 B–4 GiB, clave 2 B–1 MiB, grupos de salida 1–1,000,000, reporte 1 B–1 GiB (1 GiB por defecto) y runs 1–65,536 (default 4096); la ruta scratch queda limitada a 220 bytes. La política es opt-in; sin ella sigue el camino histórico de `milena_table_group_by`. Una solicitud explícita que no esté soportada falla y nunca vuelve silenciosamente al backend en memoria.
+La sintaxis del adaptador tabular admite `#spill("ruta-nueva", memoria_bytes, cuota_spill_bytes, max_key_bytes, max_grupos[, 0, max_runs])` dentro de `.agrupar dataset { ... }`. Los límites numéricos son enteros tipados en el AST: memoria 4 KiB–512 MiB, cuota 1 B–4 GiB, clave 2 B–1 MiB, grupos 1–1,000,000 y runs 1–65,536 (default 4096); la ruta scratch queda limitada a 220 bytes. En el sexto parámetro solo se admite `0` (sin cuota de reporte JSON para esta salida `MilenaTable`); un límite no nulo se rechaza en semántica porque el adaptador no produce un reporte JSON. La política es opt-in; sin ella sigue el camino histórico de `milena_table_group_by`. Una solicitud explícita que no esté soportada falla y nunca vuelve silenciosamente al backend en memoria.
 
 El adaptador usa una clave STRING (una clave únicamente) y una métrica; `conteo` acepta cualquier columna y las otras cuatro métricas requieren FLOAT64. La clave nula no colisiona con texto vacío; la clave vacía observada sí es válida. Valores métricos nulos conservan grupos y producen null (o conteo cero); la entrada numérica que el cargador clasifica inválida sigue la semántica de null canónica. La salida es una `MilenaTable` materializada con tope de grupos y sale en orden lexicográfico binario; el backend histórico conserva orden de primera aparición. La suma/media con reducer mergeable puede diferir por redondeo del backend anterior; la equivalencia numérica se comprueba con tolerancia, no bit a bit.
 
@@ -30,10 +30,13 @@ La sintaxis humana sigue el bloque `agrupar por ... resumir { ... }` del modo st
 }
 ```
 
-`#spill` contiene memoria del reductor, cuota de bytes del spill de entrada,
-bytes máximos de clave codificada, máximo de grupos, límite de bytes del
-reporte final (opcional; 1 GiB por defecto) y máximo de runs iniciales
-(opcional; default 4096, hard cap 65,536). Los límites de filas y
+En esta sintaxis de flujo, `#spill` contiene memoria del reductor, cuota de
+bytes del spill de entrada, bytes máximos de clave codificada y máximo de grupos.
+El sexto argumento fija el máximo de bytes del reporte final (opcional; `0`
+selecciona el default de 1 GiB), y el séptimo fija máximo de runs iniciales
+(opcional; default 4096, hard cap 65,536). El adaptador tabular acepta el valor
+cero como marcador al especificar solo el séptimo argumento y rechaza una cuota
+JSON no nula. Los límites de filas y
 tiempo deben ser explícitos en `datos desde`; el registro CSV/cantidad de
 columnas conservan sus límites existentes. La política se valida en el AST y
 la semántica rechaza tipos de clave/métrica incompatibles, métricas no

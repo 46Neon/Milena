@@ -383,6 +383,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
         scratch_path = work / "spill.bin"
         spill_script_path = work / "spill_millon.milena"
         spill_source = f'''.analisis validacion_spill_millon_filas {{
+    variable grupo_spill texto
     datos desde {csv_literal}
         procesar por lotes de {CHUNK_ROWS} filas
         con registros de hasta 1 MiB

@@ -90,6 +90,7 @@ static void test_grouped_spill_stream_plan(void) {
     policy->group_max_output_groups = 100;
     policy->group_max_output_bytes = 1073741824u;
     policy->group_max_runs = 4096u;
+    policy->group_output_limit_explicit = true;
     assert(ast_add_child(group, policy));
     assert(ast_add_child(analysis, group));
     MilenaStreamExecutionPlan plan;

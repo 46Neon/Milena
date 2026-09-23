@@ -27,7 +27,7 @@ cat > "$TMP_DIR/spill.milena" <<EOF
   dataset cargar datos("rows.csv")
   variable grupo texto
   variable valor numerica
-  .agrupar dataset { #por("grupo") #spill("$TMP_DIR/scratch.bin", 262144, 1048576, 128, 32, 1073741824, 4096) #suma("valor") }
+  .agrupar dataset { #por("grupo") #spill("$TMP_DIR/scratch.bin", 262144, 1048576, 128, 32, 0, 4096) #suma("valor") }
   .exportar { ("one.json") }
 }
 EOF
@@ -46,6 +46,13 @@ assert rows(b)==expected, rows(b)
 assert [r["grupo"] for r in b["datos"]]==[None,"A","B","Bad","Z"]
 assert not (p/"scratch.bin").exists(), "spill no eliminado en éxito"
 PY
+# The table adapter is not a JSON reporter: zero selects its unused default,
+# but a nonzero report-byte quota is rejected instead of being ignored.
+sed 's|, 0, 4096)|, 1024, 4096)|' "$TMP_DIR/spill.milena" > "$TMP_DIR/output-quota.milena"
+if (cd "$TMP_DIR" && "$MILENA_BIN" run output-quota.milena); then
+  echo 'el spill tabular aceptó una cuota de reporte no aplicable' >&2; exit 1
+fi
+[ ! -e "$TMP_DIR/scratch.bin" ]
 # In-memory multi-metric behavior is retained; the same explicit spill request
 # is rejected by semantic validation rather than silently falling back.
 cat > "$TMP_DIR/multi.milena" <<EOF
