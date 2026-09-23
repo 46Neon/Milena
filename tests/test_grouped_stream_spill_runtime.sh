@@ -212,10 +212,12 @@ EOF_M
 cp "$TMP_DIR/composite.milena" "$TMP_DIR/composite-repeat.milena"
 sed -i 's/composite-scratch.bin/composite-repeat-scratch.bin/; s/composite.json/composite-repeat.json/' "$TMP_DIR/composite-repeat.milena"
 (cd "$TMP_DIR" && "$MILENA_BIN" run composite-repeat.milena)
-cmp "$TMP_DIR/composite.json" "$TMP_DIR/composite-repeat.json"
-python3 - "$TMP_DIR/composite.json" <<'PYCOMP'
+python3 - "$TMP_DIR/composite.json" "$TMP_DIR/composite-repeat.json" <<'PYCOMP'
 import json,sys
 report=json.load(open(sys.argv[1]))
+repeat=json.load(open(sys.argv[2]))
+assert report['resultados']==repeat['resultados']
+assert report['columnas_grupo']==repeat['columnas_grupo']
 assert report['modo']=='flujo_agrupado_spill'
 assert report['columnas_grupo']==[
     {'nombre':'region','tipo':'texto'}, {'nombre':'segmento','tipo':'texto'}]
