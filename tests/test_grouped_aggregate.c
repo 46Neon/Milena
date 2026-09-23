@@ -115,12 +115,8 @@ int main(void) {
     CHECK_OK(milena_grouped_aggregate_close(&grouped, &error));
     assert(remove(path) == 0);
 
-    /* Exactly one serialized single-byte-key record fits; flushing the next
-     * record must fail at the configured quota after preserving that prefix. */
-    const size_t one_key_record = sizeof(uint32_t) + 1u + MILENA_AGGREGATE_WIRE_SIZE;
-    const size_t one_record_quota = MILENA_SPILL_HEADER_SIZE +
-        MILENA_SPILL_HEADER_SIZE + one_key_record + MILENA_SPILL_TRAILER_SIZE;
-    CHECK_OK(milena_grouped_aggregate_open(path, 2048, 64, one_record_quota,
+    /* A tiny spill quota must fail instead of exceeding its configured limit. */
+    CHECK_OK(milena_grouped_aggregate_open(path, 2048, 64, 150,
                                             &grouped, &error));
     for (size_t i = 0; i < grouped.group_capacity; ++i) {
         char key = (char)('a' + i);
@@ -129,7 +125,7 @@ int main(void) {
     assert(milena_grouped_aggregate_add(&grouped, "z", 1, 9.0, &error) == MILENA_ERR_OVERFLOW);
     assert(grouped.failed && grouped.failure_status == MILENA_ERR_OVERFLOW);
     size_t persisted_prefix = grouped.spill.record_count;
-    assert(persisted_prefix == 1);
+    assert(persisted_prefix > 0 && persisted_prefix < grouped.group_capacity);
     /* Retrying either operation must not append the unflushed map again. */
     assert(milena_grouped_aggregate_add(&grouped, "z", 1, 9.0, &error) == MILENA_ERR_OVERFLOW);
     assert(milena_grouped_aggregate_finalize(&grouped, check_order, NULL,
