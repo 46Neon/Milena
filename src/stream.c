@@ -301,9 +301,18 @@ static void stream_free_headers(char **headers, size_t count) {
 }
 
 MilenaStreamOptions milena_stream_options_default(void) {
-    MilenaStreamOptions options = {4096u, STREAM_DEFAULT_MAX_RECORD,
-                                   STREAM_DEFAULT_MAX_COLUMNS, 0u, 0.0,
-                                   STREAM_DEFAULT_MAX_GROUPS, NULL, NULL};
+    MilenaStreamOptions options = {
+        .chunk_rows = 4096u,
+        .max_record_bytes = STREAM_DEFAULT_MAX_RECORD,
+        .max_columns = STREAM_DEFAULT_MAX_COLUMNS,
+        .max_rows = 0u,
+        .max_elapsed_milliseconds = 0.0,
+        .max_groups = STREAM_DEFAULT_MAX_GROUPS,
+        .filter_column = NULL,
+        .filter_value = NULL,
+        .filter_kind = MILENA_STREAM_FILTER_NONE,
+        .filter_number = 0.0
+    };
     return options;
 }
 
