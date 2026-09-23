@@ -164,7 +164,50 @@ static int run_dataset_pipeline(void) {
     CHECK(read_file("test-language-runtime-data.json.interes_simple.json", text, sizeof(text)),
           "dataset: no se creó interés simple");
 
-    remove(csv); remove(right); remove(output);
+    const char *limited_join =
+        ".analisis join_limit {\n"
+        "  dataset cargar datos(\"test-language-runtime-data.csv\")\n"
+        "  variable ciudad texto\n"
+        "  .unir { #derecha(\"test-language-runtime-right.csv\") #clave(\"ciudad\") #limites(67108864, 1) }\n"
+        "  .exportar { (\"test-language-runtime-limited.json\") }\n"
+        "}\n";
+    remove("test-language-runtime-limited.json");
+    CHECK(milena_run_dataset_program(limited_join,
+        "test-language-runtime-limit.milena", NULL, &error) == MILENA_ERR_OVERFLOW,
+        "join: debió rechazar la salida por superar el límite AST de filas");
+    FILE *unexpected = fopen("test-language-runtime-limited.json", "rb");
+    if (unexpected) fclose(unexpected);
+    CHECK(unexpected == NULL,
+        "join: publicó salida parcial después del límite");
+
+    const char *large_right = "test-language-runtime-join-large.csv";
+    char large_content[6000];
+    const char *large_header = "ciudad,region\nCaracas,";
+    size_t header_length = strlen(large_header);
+    memcpy(large_content, large_header, header_length);
+    memset(large_content + header_length, 'x', 5000);
+    large_content[header_length + 5000] = '\n';
+    large_content[header_length + 5001] = '\0';
+    CHECK(write_file(large_right, large_content),
+          "join: no se pudo crear el CSV de presupuesto");
+    const char *memory_limited_join =
+        ".analisis join_memory_limit {\n"
+        "  dataset cargar datos(\"test-language-runtime-data.csv\")\n"
+        "  variable ciudad texto\n"
+        "  .unir { #derecha(\"test-language-runtime-join-large.csv\") #clave(\"ciudad\") #limites(4096, 100) }\n"
+        "  .exportar { (\"test-language-runtime-memory-limited.json\") }\n"
+        "}\n";
+    remove("test-language-runtime-memory-limited.json");
+    CHECK(milena_run_dataset_program(memory_limited_join,
+        "test-language-runtime-memory-limit.milena", NULL, &error) ==
+        MILENA_ERR_OVERFLOW,
+        "join: debió rechazar la estimación de memoria sobre el presupuesto");
+    unexpected = fopen("test-language-runtime-memory-limited.json", "rb");
+    if (unexpected) fclose(unexpected);
+    CHECK(unexpected == NULL,
+        "join: publicó salida parcial después del límite de memoria");
+
+    remove(csv); remove(right); remove(large_right); remove(output);
     remove("test-language-runtime-data.json.sst.json");
     remove("test-language-runtime-data.json.histograma.json");
     remove("test-language-runtime-data.json.tasa.json");
@@ -173,6 +216,8 @@ static int run_dataset_pipeline(void) {
     remove("test-language-runtime-data.json.riesgo.json");
     remove("test-language-runtime-data.json.modelo_sst.json");
     remove("test-language-runtime-data.json.interes_simple.json");
+    remove("test-language-runtime-limited.json");
+    remove("test-language-runtime-memory-limited.json");
     return 0;
 }
 

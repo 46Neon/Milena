@@ -1,5 +1,6 @@
 #include "parser.h"
 #include "grouped_aggregate.h"
+#include "table.h"
 
 void parser_init(Parser *parser, Lexer *lexer) {
     parser->lexer = lexer;
@@ -1294,6 +1295,12 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         parser_advance(parser);
                         ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
                                                        (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
+                        if (filtrar && joining) {
+                            filtrar->join_memory_budget_bytes =
+                                MILENA_TABLE_JOIN_DEFAULT_MEMORY_BYTES;
+                            filtrar->join_max_output_rows =
+                                MILENA_TABLE_JOIN_DEFAULT_MAX_OUTPUT_ROWS;
+                        }
                         while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                                !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                             if (parser_match(parser, TOKEN_KW_DATASET) ||
@@ -1305,7 +1312,33 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de filtrar");
                             } else if (parser_match(parser, TOKEN_NUMERAL)) {
                                 parser_advance(parser);
-                                if (selecting && parser_is_identifier(parser) &&
+                                if (joining && parser_is_identifier(parser) &&
+                                    strcmp(parser->current.lexeme, "limites") == 0) {
+                                    parser_advance(parser);
+                                    size_t memory_bytes = 0, output_rows = 0;
+                                    bool limits_ok = filtrar && !filtrar->join_limits_explicit;
+                                    if (!limits_ok) parser_error(parser,
+                                        "El join admite una sola política #limites");
+                                    if (limits_ok) limits_ok = parser_expect(parser,
+                                        TOKEN_PAR_IZQ, "Se esperaba '(' después de #limites");
+                                    if (limits_ok) limits_ok = parser_spill_size(parser,
+                                        4096u, MILENA_TABLE_JOIN_HARD_MEMORY_BYTES,
+                                        &memory_bytes,
+                                        "Memoria join debe estar entre 4096 bytes y 1 GiB");
+                                    if (limits_ok) limits_ok = parser_expect(parser,
+                                        TOKEN_COMA, "Se esperaba coma antes del límite de filas");
+                                    if (limits_ok) limits_ok = parser_spill_size(parser, 1u,
+                                        MILENA_TABLE_JOIN_HARD_MAX_OUTPUT_ROWS,
+                                        &output_rows,
+                                        "Límite de salida join debe estar entre 1 y 10000000 filas");
+                                    if (limits_ok) limits_ok = parser_expect(parser,
+                                        TOKEN_PAR_DER, "Se esperaba ')' después de #limites");
+                                    if (limits_ok) {
+                                        filtrar->join_memory_budget_bytes = memory_bytes;
+                                        filtrar->join_max_output_rows = output_rows;
+                                        filtrar->join_limits_explicit = true;
+                                    }
+                                } else if (selecting && parser_is_identifier(parser) &&
                                     strcmp(parser->current.lexeme, "columnas") == 0) {
                                     parser_advance(parser);
                                     if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {

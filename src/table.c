@@ -1780,22 +1780,133 @@ static char *unique_right_name(const MilenaTable *table, const char *base,
     return NULL;
 }
 
-MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
-                               const MilenaTable *right,
-                               const char *const *left_keys,
-                               const char *const *right_keys,
-                               size_t key_count, MilenaJoinType join_type,
-                               MilenaError *error) {
+
+static bool join_table_size_estimate(const MilenaTable *table,
+                                     size_t *max_row_bytes,
+                                     size_t *static_bytes) {
+    size_t max_row = 0, fixed = 0;
+    size_t column_bytes = 0;
+    if (!milena_size_mul(table->column_count,
+                         2u * sizeof(MilenaTableColumn), &column_bytes) ||
+        !milena_size_add(fixed, column_bytes, &fixed)) return false;
+    for (size_t c = 0; c < table->column_count; ++c) {
+        const MilenaTableColumn *column = &table->columns[c];
+        size_t name_bytes = column->name ? strlen(column->name) + 1u : 0u;
+        /* Count the output column name and the temporary right-side name used
+         * while resolving collisions. The extra 32 bytes cover the fixed
+         * suffix and decimal disambiguator. */
+        if (!milena_size_add(fixed, name_bytes, &fixed) ||
+            !milena_size_add(fixed, 32u, &fixed)) return false;
+        for (size_t m = 0; m < column->metadata_count; ++m) {
+            size_t bytes = sizeof(MilenaTableMetadata);
+            if (column->metadata[m].key &&
+                !milena_size_add(bytes, strlen(column->metadata[m].key) + 1u, &bytes))
+                return false;
+            if (column->metadata[m].value &&
+                !milena_size_add(bytes, strlen(column->metadata[m].value) + 1u, &bytes))
+                return false;
+            /* metadata_set() grows this output metadata array while cloning;
+             * include one additional pointer-record copy for realloc peaks. */
+            if (!milena_size_add(fixed, bytes, &fixed) ||
+                !milena_size_add(fixed, sizeof(MilenaTableMetadata), &fixed))
+                return false;
+        }
+        if (column->type == MILENA_COLUMN_CATEGORICAL) {
+            size_t dictionary_ptrs = 0;
+            if (!milena_size_mul(column->dictionary_size, sizeof(char *),
+                                 &dictionary_ptrs) ||
+                !milena_size_add(fixed, dictionary_ptrs, &fixed)) return false;
+            for (size_t d = 0; d < column->dictionary_size; ++d)
+                if (column->dictionary[d] &&
+                    !milena_size_add(fixed, strlen(column->dictionary[d]) + 1u,
+                                     &fixed)) return false;
+        }
+    }
+    for (size_t row = 0; row < table->row_count; ++row) {
+        size_t row_bytes = 0;
+        for (size_t c = 0; c < table->column_count; ++c) {
+            const MilenaTableColumn *column = &table->columns[c];
+            /* add_column_rows builds a staging buffer and then copies it into
+             * the destination. Include both sets of per-row storage: values
+             * plus validity for array columns, and staging/output string
+             * pointer arrays plus validity for text columns. */
+            size_t cell_bytes = 2u * sizeof(bool);
+            if (column->type == MILENA_COLUMN_STRING) {
+                if (!milena_size_add(cell_bytes, 2u * sizeof(char *), &cell_bytes))
+                    return false;
+                if (column->validity[row] && column->strings[row]) {
+                    size_t text_bytes = strlen(column->strings[row]) + 1u;
+                    if (!milena_size_add(cell_bytes, text_bytes, &cell_bytes))
+                        return false;
+                }
+            } else {
+                size_t values_bytes = 0;
+                if (!milena_size_mul(column->values.itemsize, 2u,
+                                     &values_bytes) ||
+                    !milena_size_add(cell_bytes, values_bytes, &cell_bytes))
+                    return false;
+            }
+            if (!milena_size_add(row_bytes, cell_bytes, &row_bytes)) return false;
+        }
+        if (row_bytes > max_row) max_row = row_bytes;
+    }
+    *max_row_bytes = max_row;
+    *static_bytes = fixed;
+    return true;
+}
+
+static bool join_estimated_peak_bytes(
+    const MilenaTable *left, const MilenaTable *right, size_t pair_count,
+    size_t index_bytes, size_t *estimated) {
+    size_t left_row = 0, right_row = 0, left_static = 0, right_static = 0;
+    size_t row_bytes = 0, output_rows_bytes = 0, row_maps = 0;
+    size_t output_columns = 0, total = index_bytes;
+    if (!join_table_size_estimate(left, &left_row, &left_static) ||
+        !join_table_size_estimate(right, &right_row, &right_static) ||
+        !milena_size_add(left_row, right_row, &row_bytes) ||
+        !milena_size_mul(pair_count, row_bytes, &output_rows_bytes) ||
+        !milena_size_mul(pair_count, 2u * sizeof(size_t), &row_maps) ||
+        !milena_size_add(left->column_count, right->column_count, &output_columns) ||
+        !milena_size_mul(output_columns, sizeof(MilenaTableColumn),
+                         &output_columns) ||
+        !milena_size_add(total, row_maps, &total) ||
+        !milena_size_add(total, output_rows_bytes, &total) ||
+        !milena_size_add(total, left_static, &total) ||
+        !milena_size_add(total, right_static, &total) ||
+        !milena_size_add(total, output_columns, &total) ||
+        !milena_size_add(total, sizeof(MilenaTable), &total)) return false;
+    *estimated = total;
+    return true;
+}
+
+static MilenaStatus table_join_impl(
+    MilenaTable *out, const MilenaTable *left, const MilenaTable *right,
+    const char *const *left_keys, const char *const *right_keys,
+    size_t key_count, MilenaJoinType join_type,
+    size_t memory_budget_bytes, size_t max_output_rows,
+    bool enforce_limits, MilenaError *error) {
     if (out == NULL || left == NULL || right == NULL || out == left ||
         out == right || left_keys == NULL || right_keys == NULL ||
         key_count == 0 || join_type < MILENA_JOIN_INNER ||
-        join_type > MILENA_JOIN_FULL) {
+        join_type > MILENA_JOIN_FULL ||
+        (enforce_limits &&
+         (memory_budget_bytes < 4096u ||
+          memory_budget_bytes > MILENA_TABLE_JOIN_HARD_MEMORY_BYTES ||
+          max_output_rows == 0 ||
+          max_output_rows > MILENA_TABLE_JOIN_HARD_MAX_OUTPUT_ROWS))) {
         table_error(error, MILENA_ERR_ARGUMENT, "Join inválido o con alias de salida");
         return MILENA_ERR_ARGUMENT;
     }
     MilenaStatus status = milena_table_validate(left, error);
     if (status == MILENA_OK) status = milena_table_validate(right, error);
     if (status != MILENA_OK) return status;
+    size_t key_bytes = 0;
+    if (!milena_size_mul(key_count, 2u * sizeof(size_t), &key_bytes) ||
+        key_bytes > memory_budget_bytes) {
+        table_error(error, MILENA_ERR_OVERFLOW,
+                    "El presupuesto del join no alcanza para los índices de clave");
+        return MILENA_ERR_OVERFLOW;
+    }
     size_t *lk = (size_t *)malloc(key_count * sizeof(size_t));
     size_t *rk = (size_t *)malloc(key_count * sizeof(size_t));
     if (lk == NULL || rk == NULL) status = MILENA_ERR_MEMORY;
@@ -1817,6 +1928,20 @@ MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
     }
     size_t capacity = 0;
     status = hash_capacity(right->row_count, &capacity, error);
+    size_t slots_bytes = 0, right_rows_bytes = 0, index_bytes = key_bytes;
+    if (status == MILENA_OK &&
+        (!milena_size_mul(capacity, sizeof(JoinHashSlot), &slots_bytes) ||
+         !milena_size_mul(right->row_count, sizeof(size_t) + sizeof(bool),
+                          &right_rows_bytes) ||
+         !milena_size_add(index_bytes, slots_bytes, &index_bytes) ||
+         !milena_size_add(index_bytes, right_rows_bytes, &index_bytes)))
+        status = MILENA_ERR_OVERFLOW;
+    if (status == MILENA_OK && index_bytes > memory_budget_bytes) {
+        status = MILENA_ERR_OVERFLOW;
+        table_error(error, status,
+                    "El join excede su presupuesto de índice hash y filas auxiliares");
+    }
+    if (status != MILENA_OK) { free(lk); free(rk); return status; }
     JoinHashSlot *slots = status == MILENA_OK ?
         (JoinHashSlot *)calloc(capacity, sizeof(JoinHashSlot)) : NULL;
     size_t *next = right->row_count == 0 ? NULL :
@@ -1859,8 +1984,12 @@ MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
         }
         size_t addition = matches != 0 ? matches :
             ((join_type == MILENA_JOIN_LEFT || join_type == MILENA_JOIN_FULL) ? 1 : 0);
-        if (!milena_size_add(pair_count, addition, &pair_count))
+        if (addition > max_output_rows - pair_count ||
+            !milena_size_add(pair_count, addition, &pair_count)) {
             status = MILENA_ERR_OVERFLOW;
+            table_error(error, status,
+                        "El join superó el límite configurado de filas de salida");
+        }
     }
     if (status == MILENA_OK &&
         (join_type == MILENA_JOIN_RIGHT || join_type == MILENA_JOIN_FULL)) {
@@ -1874,9 +2003,24 @@ MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
                 for (size_t r = slots[slot].head_plus_one - 1;
                      r != SIZE_MAX; r = next[r]) matched[r] = true;
         }
-        for (size_t r = 0; r < right->row_count; ++r)
-            if (!matched[r] && !milena_size_add(pair_count, 1, &pair_count))
-                status = MILENA_ERR_OVERFLOW;
+        for (size_t r = 0; status == MILENA_OK && r < right->row_count; ++r)
+            if (!matched[r]) {
+                if (pair_count >= max_output_rows ||
+                    !milena_size_add(pair_count, 1, &pair_count)) {
+                    status = MILENA_ERR_OVERFLOW;
+                    table_error(error, status,
+                                "El join superó el límite configurado de filas de salida");
+                }
+            }
+    }
+    size_t estimated_peak = 0;
+    if (status == MILENA_OK &&
+        (!join_estimated_peak_bytes(left, right, pair_count, index_bytes,
+                                    &estimated_peak) ||
+         estimated_peak > memory_budget_bytes)) {
+        status = MILENA_ERR_OVERFLOW;
+        table_error(error, status,
+                    "El join excede su presupuesto estimado de resultado y mapas de filas");
     }
     size_t *left_rows = NULL; size_t *right_rows = NULL;
     if (status == MILENA_OK && pair_count != 0) {
@@ -1935,6 +2079,27 @@ MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
     free(lk); free(rk); free(slots); free(next); free(matched);
     free(left_rows); free(right_rows);
     return status;
+}
+
+MilenaStatus milena_table_join_with_limits(
+    MilenaTable *out, const MilenaTable *left, const MilenaTable *right,
+    const char *const *left_keys, const char *const *right_keys,
+    size_t key_count, MilenaJoinType join_type,
+    size_t memory_budget_bytes, size_t max_output_rows, MilenaError *error) {
+    return table_join_impl(out, left, right, left_keys, right_keys, key_count,
+        join_type, memory_budget_bytes, max_output_rows, true, error);
+}
+
+MilenaStatus milena_table_join(MilenaTable *out, const MilenaTable *left,
+                               const MilenaTable *right,
+                               const char *const *left_keys,
+                               const char *const *right_keys,
+                               size_t key_count, MilenaJoinType join_type,
+                               MilenaError *error) {
+    /* Preserve the legacy C API's unlimited row-count contract. Language
+     * joins use the explicit bounded entry point with typed defaults. */
+    return table_join_impl(out, left, right, left_keys, right_keys, key_count,
+        join_type, SIZE_MAX, SIZE_MAX, false, error);
 }
 
 MilenaStatus milena_table_unpivot(MilenaTable *out,

@@ -13,7 +13,9 @@ import math
 import os
 import platform
 import subprocess
+import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -55,17 +57,91 @@ def render_script(csv_path: Path, report_name: str, groups: int,
 '''.lstrip()
 
 
-def run(binary: Path, script: Path, cwd: Path) -> tuple[dict, float]:
-    started = time.perf_counter()
-    process = subprocess.run([str(binary), "run", str(script)], cwd=cwd,
-        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        timeout=RUN_TIMEOUT_SECONDS)
+_MEASURE_CHILD = r"""
+import json, platform, subprocess, sys, time
+try:
+    import resource
+except ImportError:
+    resource = None
+command = json.loads(sys.argv[1])
+started = time.perf_counter()
+try:
+    process = subprocess.run(command, text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, timeout=int(sys.argv[2]))
     elapsed = time.perf_counter() - started
-    if process.returncode:
-        raise SystemExit(process.stderr or process.stdout or
-                         f"Milena exited with status {process.returncode}")
-    return json.loads((cwd / script.with_suffix(".json").name).read_text(
-        encoding="utf-8")), elapsed
+    try:
+        if resource is None:
+            peak = None
+        else:
+            peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+            if platform.system() == "Linux": peak = int(peak * 1024)
+            elif platform.system() == "Darwin": peak = int(peak)
+            else: peak = None
+    except (AttributeError, OSError):
+        peak = None
+    print(json.dumps({"returncode": process.returncode, "stdout": process.stdout,
+        "stderr": process.stderr, "elapsed": elapsed,
+        "peak_rss_bytes": peak}))
+except subprocess.TimeoutExpired as error:
+    print(json.dumps({"timeout": True, "stdout": error.stdout or "",
+        "stderr": error.stderr or ""}))
+    sys.exit(124)
+"""
+
+
+def _scratch_size(scratch: Path | None) -> int:
+    if scratch is None:
+        return 0
+    total = 0
+    for candidate in scratch.parent.glob(scratch.name + "*"):
+        try:
+            if candidate.is_file():
+                total += candidate.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def run(binary: Path, script: Path, cwd: Path,
+        scratch: Path | None = None) -> tuple[dict, float, int | None, int]:
+    command = [str(binary), "run", str(script)]
+    stop = threading.Event()
+    observed_scratch = [0]
+
+    def sample_scratch() -> None:
+        while not stop.wait(0.01):
+            observed_scratch[0] = max(observed_scratch[0],
+                                      _scratch_size(scratch))
+
+    sampler = threading.Thread(target=sample_scratch, daemon=True)
+    sampler.start()
+    started = time.perf_counter()
+    try:
+        wrapper = subprocess.run(
+            [sys.executable, "-c", _MEASURE_CHILD,
+             json.dumps(command), str(RUN_TIMEOUT_SECONDS)],
+            cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=RUN_TIMEOUT_SECONDS + 15)
+    finally:
+        stop.set()
+        sampler.join()
+        observed_scratch[0] = max(observed_scratch[0], _scratch_size(scratch))
+    elapsed_wrapper = time.perf_counter() - started
+    try:
+        measured = json.loads(wrapper.stdout)
+    except json.JSONDecodeError as error:
+        raise SystemExit(wrapper.stderr or wrapper.stdout or
+                         "Benchmark child runner returned invalid JSON") from error
+    if measured.get("timeout"):
+        raise SystemExit("Milena benchmark run timed out")
+    if wrapper.returncode or measured.get("returncode"):
+        raise SystemExit(measured.get("stderr") or measured.get("stdout") or
+                         wrapper.stderr or
+                         f"Milena exited with status {measured.get('returncode')}")
+    report_path = cwd / script.with_suffix(".json").name
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    return (report, float(measured.get("elapsed", elapsed_wrapper)),
+            measured.get("peak_rss_bytes"), observed_scratch[0])
 
 
 def values(report: dict, expected_mode: str, expected_groups: int) -> dict[str, float | None]:
@@ -115,8 +191,10 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
             spill_script.write_text(render_script(csv_path,
                 f"spill-{repetition}.json", groups, rows + 1,
                 scratch=scratch, spill_quota=quota), encoding="utf-8")
-            memory_report, memory_seconds = run(BINARY, memory_script, root)
-            spill_report, spill_seconds = run(BINARY, spill_script, root)
+            memory_report, memory_seconds, memory_rss, _ = run(
+                BINARY, memory_script, root)
+            spill_report, spill_seconds, spill_rss, scratch_peak = run(
+                BINARY, spill_script, root, scratch=scratch)
             assert_row_contract(memory_report, rows, groups)
             assert_row_contract(spill_report, rows, groups)
             memory_values = values(memory_report, "flujo_agrupado", groups)
@@ -141,6 +219,9 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
                 "spill_backend_elapsed_ms": spill_report.get("tiempo_ms"),
                 "spill_report_bytes": spill_report.get("bytes_salida"),
                 "spill_limit_bytes": spill_report.get("limite_salida_bytes"),
+                "memory_peak_rss_bytes": memory_rss,
+                "spill_peak_rss_bytes": spill_rss,
+                "spill_scratch_peak_bytes_sampled": scratch_peak,
             })
         return {"rows": rows, "groups": groups, "input_bytes": byte_count,
                 "spill_memory_budget_bytes": MEMORY_BUDGET_BYTES,
@@ -166,7 +247,7 @@ def main() -> int:
         cases.append(("large-opt-in", args.large_rows,
                       min(args.large_rows, 1_000)))
     payload = {
-        "schema": "milena-grouped-spill-benchmark-v1",
+        "schema": "milena-grouped-spill-benchmark-v2",
         "workloads": [{"fixture": name, **run_case(rows, groups,
                                                        args.repetitions)}
                       for name, rows, groups in cases],
@@ -176,9 +257,12 @@ def main() -> int:
                         "commit": os.environ.get("GITHUB_SHA", "unknown")},
         "methodology": ("Deterministic generated CSV; canonical lexer-parser-AST-"
                         "semantic-runtime-stream backend; compare in-memory and "
-                        "spill output values and record wall-clock observations."),
+                        "spill output values, wall-clock time, per-process child "
+                        "peak RSS where resource.getrusage is supported, and "
+                        "sample scratch bytes every 10 ms during spill runs."),
         "limitations": [
-            "No RSS measurement or global memory guarantee; configured reducer memory is not total process RSS.",
+            "Peak RSS is per-process child ru_maxrss (or null on unsupported platforms), not aggregate cgroup/system RSS or a memory guarantee.",
+            "Scratch peak is a 10 ms sampled sum of files prefixed by the configured path; short-lived peaks can be missed and final scratch is cleaned up.",
             "No SLO or performance guarantee; results apply only to the recorded environment and workload.",
             "No CSV-aware partition execution, Arrow/Parquet, cloud or distributed execution is measured.",
         ],

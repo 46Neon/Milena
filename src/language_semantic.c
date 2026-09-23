@@ -1,4 +1,5 @@
 #include "language_semantic.h"
+#include "table.h"
 #include "grouped_aggregate.h"
 #include <string.h>
 
@@ -131,6 +132,28 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Carga de dataset sin archivo");
             break;
+        case AST_BLOQUE_UNIR: {
+            size_t right_count = 0, key_count = 0;
+            for (size_t i = 0; i < node->child_count; ++i) {
+                const ASTNode *child = node->children[i];
+                if (!child) return semantic_error(node, error,
+                    "Join con nodo AST nulo");
+                if (child->type == AST_COMANDO_DERECHA) right_count++;
+                else if (child->type == AST_COMANDO_CLAVE) key_count++;
+                else return semantic_error(child, error,
+                    "El join solo admite #derecha, #clave y #limites");
+            }
+            if (right_count != 1 || key_count != 1 ||
+                node->join_memory_budget_bytes < 4096u ||
+                node->join_memory_budget_bytes >
+                    MILENA_TABLE_JOIN_HARD_MEMORY_BYTES ||
+                node->join_max_output_rows == 0 ||
+                node->join_max_output_rows >
+                    MILENA_TABLE_JOIN_HARD_MAX_OUTPUT_ROWS)
+                return semantic_error(node, error,
+                    "Join requiere origen, clave y límites de memoria/salida válidos");
+            break;
+        }
         case AST_BLOQUE_AGRUPAR:
             if (node->type_name && strcmp(node->type_name, "flujo") == 0) {
                 size_t keys = 0, summaries = 0, policies = 0;

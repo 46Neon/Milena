@@ -2061,9 +2061,11 @@ MilenaStatus milena_run_dataset_program(const char *source,
                         const char *right_keys[1] = {key_node->value};
                         MilenaTable joined = {0};
                         milena_table_init(&joined);
-                        status = milena_table_join(&joined, &canonical_table,
-                                                   &right_table, left_keys, right_keys,
-                                                   1, MILENA_JOIN_INNER, error);
+                        status = milena_table_join_with_limits(
+                            &joined, &canonical_table, &right_table, left_keys,
+                            right_keys, 1, MILENA_JOIN_INNER,
+                            block->join_memory_budget_bytes,
+                            block->join_max_output_rows, error);
                         if (status == MILENA_OK) {
                             milena_table_swap(&canonical_table, &joined);
                             for (size_t j = 0; j < canonical_table.column_count; j++) {

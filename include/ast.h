@@ -102,6 +102,10 @@ typedef struct ASTNode {
     size_t group_max_output_bytes;
     size_t group_max_runs;
     bool group_output_limit_explicit;
+    /* Resource limits for canonical table joins. */
+    size_t join_memory_budget_bytes;
+    size_t join_max_output_rows;
+    bool join_limits_explicit;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;
