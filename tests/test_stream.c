@@ -171,16 +171,16 @@ static void test_grouped_spill(void) {
     char *expected = read_all(memory_output); char *actual = read_all(spill_output);
     /* The only intentional difference is the execution mode marker. */
     char *p = strstr(expected, "\"derramado\":false");
-    assert(p != NULL); memcpy(p + strlen("\"derramado\":"), "true", 4); memmove(p + strlen("\"derramado\":") + 4, p + strlen("\"derramado\":") + 5, strlen(p + strlen("\"derramado\":") + 5) + 1);
-    assert(strcmp(expected, actual) == 0);
+    assert(p != NULL); memcpy(p + strlen("\"derramado\":"), "true", 4);
+    if (strcmp(expected, actual) != 0) { fprintf(stderr, "EXPECTED=[%s]\nACTUAL=[%s]\n", expected, actual); abort(); }
     free(expected); free(actual);
     /* Repeating the same run must produce byte-for-byte deterministic output. */
     assert(milena_stream_csv_grouped_with_options(input, spill_output, "grupo",
         metrics, 2, &spill, NULL, &error) == MILENA_OK);
     actual = read_all(spill_output); expected = read_all(memory_output);
     p = strstr(expected, "\"derramado\":false"); assert(p != NULL);
-    memcpy(p + strlen("\"derramado\":"), "true", 4); memmove(p + strlen("\"derramado\":") + 4, p + strlen("\"derramado\":") + 5, strlen(p + strlen("\"derramado\":") + 5) + 1);
-    assert(strcmp(expected, actual) == 0); free(expected); free(actual);
+    memcpy(p + strlen("\"derramado\":"), "true", 4);
+    if (strcmp(expected, actual) != 0) { fprintf(stderr, "EXPECTED=[%s]\nACTUAL=[%s]\n", expected, actual); abort(); } free(expected); free(actual);
     remove(input); remove(memory_output); remove(spill_output);
 }
 
