@@ -1,5 +1,6 @@
 #include "spill_store.h"
 
+#include <errno.h>
 #include <stdint.h>
 
 #ifdef _WIN32
@@ -7,7 +8,11 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <fcntl.h>
+#include <io.h>
 #else
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -345,6 +350,92 @@ MilenaStatus milena_spill_store_visit(const char *path, size_t quota_bytes,
     }
     if (status == MILENA_OK && error) milena_error_clear(error);
     return status;
+}
+
+static FILE *spill_create_file_exclusive(const char *path, bool *exists) {
+    if (exists) *exists = false;
+#ifdef _WIN32
+    HANDLE handle = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                                CREATE_NEW, FILE_ATTRIBUTE_TEMPORARY, NULL);
+    if (handle == INVALID_HANDLE_VALUE) {
+        DWORD code = GetLastError();
+        if (exists && (code == ERROR_FILE_EXISTS || code == ERROR_ALREADY_EXISTS))
+            *exists = true;
+        return NULL;
+    }
+    int descriptor = _open_osfhandle((intptr_t)handle, _O_BINARY | _O_RDWR);
+    if (descriptor < 0) {
+        CloseHandle(handle);
+        (void)DeleteFileA(path);
+        return NULL;
+    }
+    FILE *file = _fdopen(descriptor, "w+b");
+    if (!file) {
+        _close(descriptor);
+        (void)DeleteFileA(path);
+    }
+    return file;
+#else
+    int flags = O_CREAT | O_EXCL | O_RDWR;
+#ifdef O_NOFOLLOW
+    flags |= O_NOFOLLOW;
+#endif
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    int descriptor = open(path, flags, S_IRUSR | S_IWUSR);
+    if (descriptor < 0) {
+        if (exists && errno == EEXIST) *exists = true;
+        return NULL;
+    }
+    FILE *file = fdopen(descriptor, "w+b");
+    if (!file) {
+        int saved_errno = errno;
+        (void)close(descriptor);
+        (void)unlink(path);
+        errno = saved_errno;
+    }
+    return file;
+#endif
+}
+
+MilenaStatus milena_spill_store_create_exclusive(
+    const char *path, size_t quota_bytes, size_t max_record_bytes,
+    MilenaSpillStore *store, MilenaError *error) {
+    if (!path || !path[0] || !store || max_record_bytes == 0 ||
+        quota_bytes < MILENA_SPILL_HEADER_SIZE + MILENA_SPILL_TRAILER_SIZE) {
+        spill_error(error, MILENA_ERR_ARGUMENT, "Parámetros inválidos para crear spill exclusivo");
+        return MILENA_ERR_ARGUMENT;
+    }
+    memset(store, 0, sizeof(*store));
+    bool existed = false;
+    FILE *file = spill_create_file_exclusive(path, &existed);
+    if (!file) {
+        MilenaStatus status = existed ? MILENA_ERR_ARGUMENT : MILENA_ERR_IO;
+        spill_error(error, status, existed ? "La ruta spill ya existe" :
+                    "No se pudo crear spill exclusivo");
+        return status;
+    }
+    char *store_path = milena_strdup(path);
+    if (!store_path) {
+        (void)fclose(file);
+#ifdef _WIN32
+        (void)DeleteFileA(path);
+#else
+        (void)unlink(path);
+#endif
+        spill_error(error, MILENA_ERR_MEMORY, "Memoria insuficiente para crear spill");
+        return MILENA_ERR_MEMORY;
+    }
+    store->path = store_path;
+    store->file = file;
+    store->quota_bytes = quota_bytes;
+    store->max_record_bytes = max_record_bytes;
+    store->bytes_used = 0;
+    store->record_count = 0;
+    store->failed = false;
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
 }
 
 MilenaStatus milena_spill_store_open(const char *path, size_t quota_bytes,

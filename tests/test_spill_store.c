@@ -1,6 +1,13 @@
+#ifndef _WIN32
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "spill_store.h"
 
 #include <assert.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
     size_t count;
@@ -102,6 +109,39 @@ int main(void) {
     assert(milena_spill_store_append(&store, "cuatro", 6, &error) == MILENA_OK);
     assert(milena_spill_store_append(&store, "12345678901234567890", 20, &error) == MILENA_ERR_OVERFLOW);
     assert(milena_spill_store_close(&store, &error) == MILENA_OK);
+
+    /* Exclusive creation refuses existing paths without modifying user data. */
+    const char *exclusive_path = "milena-test-spill-exclusive.bin";
+    (void)remove(exclusive_path);
+    MilenaSpillStore exclusive = {0};
+    assert(milena_spill_store_create_exclusive(exclusive_path, 1024, 128,
+                                               &exclusive, &error) == MILENA_OK);
+    assert(milena_spill_store_append(&exclusive, "owned", 5, &error) == MILENA_OK);
+    assert(milena_spill_store_close(&exclusive, &error) == MILENA_OK);
+#ifndef _WIN32
+    struct stat exclusive_info;
+    assert(stat(exclusive_path, &exclusive_info) == 0);
+    assert((exclusive_info.st_mode & 0077) == 0);
+    const char *symlink_target = "milena-test-spill-target.bin";
+    const char *symlink_path = "milena-test-spill-link.bin";
+    FILE *target_file = fopen(symlink_target, "wb");
+    assert(target_file != NULL);
+    assert(fwrite("keep", 1, 4, target_file) == 4);
+    assert(fclose(target_file) == 0);
+    (void)remove(symlink_path);
+    assert(symlink(symlink_target, symlink_path) == 0);
+    assert(milena_spill_store_create_exclusive(symlink_path, 1024, 128,
+                                               &exclusive, &error) == MILENA_ERR_ARGUMENT);
+    assert(file_size(symlink_target) == 4);
+    assert(remove(symlink_path) == 0);
+    assert(remove(symlink_target) == 0);
+#endif
+    size_t exclusive_size = file_size(exclusive_path);
+    assert(milena_spill_store_create_exclusive(exclusive_path, 1024, 128,
+                                               &exclusive, &error) == MILENA_ERR_ARGUMENT);
+    assert(file_size(exclusive_path) == exclusive_size);
+    (void)remove(exclusive_path);
+
     (void)remove(path);
     puts("spill store tests passed");
     return 0;

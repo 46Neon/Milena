@@ -40,6 +40,13 @@ MilenaStatus milena_spill_store_open(const char *path, size_t quota_bytes,
                                      size_t max_record_bytes,
                                      MilenaSpillStore *store,
                                      MilenaError *error);
+/* Creates a brand-new spill atomically; refuses an existing file or symlink.
+ * POSIX files are created mode 0600. Use for caller-owned temporary runs. */
+MilenaStatus milena_spill_store_create_exclusive(const char *path,
+                                     size_t quota_bytes,
+                                     size_t max_record_bytes,
+                                     MilenaSpillStore *store,
+                                     MilenaError *error);
 MilenaStatus milena_spill_store_append(MilenaSpillStore *store,
                                        const void *data, size_t length,
                                        MilenaError *error);

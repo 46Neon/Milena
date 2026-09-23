@@ -129,16 +129,6 @@ MilenaStatus milena_grouped_aggregate_open(
         group_error(error, MILENA_ERR_ARGUMENT, "Configuración inválida para agregación agrupada");
         return MILENA_ERR_ARGUMENT;
     }
-    FILE *existing = fopen(spill_path, "rb");
-    if (existing) {
-        fclose(existing);
-        group_error(error, MILENA_ERR_ARGUMENT, "La ruta scratch debe ser nueva para esta agregación");
-        return MILENA_ERR_ARGUMENT;
-    }
-    if (errno != ENOENT) {
-        group_error(error, MILENA_ERR_IO, "No se pudo validar la ruta scratch agrupada");
-        return MILENA_ERR_IO;
-    }
     memset(grouped, 0, sizeof(*grouped));
     size_t max_record;
     if (!milena_size_add(GROUP_RECORD_FIXED, max_key_bytes, &max_record) ||
@@ -207,7 +197,7 @@ MilenaStatus milena_grouped_aggregate_open(
     grouped->max_key_bytes = max_key_bytes;
     grouped->group_capacity = capacity;
     grouped->table_capacity = table_capacity;
-    MilenaStatus status = milena_spill_store_open(spill_path, spill_quota_bytes,
+    MilenaStatus status = milena_spill_store_create_exclusive(spill_path, spill_quota_bytes,
                                                    max_record, &grouped->spill, error);
     if (status != MILENA_OK) {
         milena_grouped_aggregate_close(grouped, NULL);
@@ -361,7 +351,8 @@ static MilenaStatus write_group_run(const char *path, const GroupRunBatch *batch
     }
     MilenaSpillStore output = {0};
     size_t max_record = GROUP_RECORD_FIXED + batch->max_key_bytes;
-    MilenaStatus status = milena_spill_store_open(path, quota, max_record, &output, error);
+    MilenaStatus status = milena_spill_store_create_exclusive(path, quota, max_record, &output, error);
+    bool output_created = status == MILENA_OK;
     for (size_t i = 0; status == MILENA_OK && i < batch->count; ++i) {
         const unsigned char *record = batch->records + i * batch->stride;
         status = milena_spill_store_append(&output, record, record_length(record), error);
@@ -370,9 +361,9 @@ static MilenaStatus write_group_run(const char *path, const GroupRunBatch *batch
         MilenaStatus close_status = milena_spill_store_close(&output, error);
         if (status == MILENA_OK) status = close_status;
     }
-    if (status != MILENA_OK) { (void)remove(path); return status; }
+    if (status != MILENA_OK) { if (output_created) (void)remove(path); return status; }
     if (!file_size(path, bytes_written)) {
-        (void)remove(path);
+        if (output_created) (void)remove(path);
         group_error(error, MILENA_ERR_IO, "No se pudo medir run agrupado");
         return MILENA_ERR_IO;
     }
@@ -409,10 +400,14 @@ static MilenaStatus merge_group_runs(const char *left_path, const char *right_pa
     }
     MilenaSpillReader a = {0}, b = {0};
     MilenaSpillStore output = {0};
+    bool output_created = false;
     MilenaStatus status = milena_spill_reader_open(left_path, input_quota, record_capacity, &a, error);
     if (status == MILENA_OK) status = milena_spill_reader_open(right_path, input_quota, record_capacity, &b, error);
-    if (status == MILENA_OK) status = milena_spill_store_open(output_path, output_quota,
-        record_capacity, &output, error);
+    if (status == MILENA_OK) {
+        status = milena_spill_store_create_exclusive(output_path, output_quota,
+            record_capacity, &output, error);
+        output_created = status == MILENA_OK;
+    }
     bool have_a = false, have_b = false;
     if (status == MILENA_OK) status = read_group_record(&a, left, record_capacity, &have_a, max_key_bytes, error);
     if (status == MILENA_OK) status = read_group_record(&b, right, record_capacity, &have_b, max_key_bytes, error);
@@ -447,9 +442,9 @@ static MilenaStatus merge_group_runs(const char *left_path, const char *right_pa
     if (a.file) { MilenaStatus close_status = milena_spill_reader_close(&a, error); if (status == MILENA_OK) status = close_status; }
     if (b.file) { MilenaStatus close_status = milena_spill_reader_close(&b, error); if (status == MILENA_OK) status = close_status; }
     if (output.file) { MilenaStatus close_status = milena_spill_store_close(&output, error); if (status == MILENA_OK) status = close_status; }
-    if (status != MILENA_OK) { (void)remove(output_path); return status; }
+    if (status != MILENA_OK) { if (output_created) (void)remove(output_path); return status; }
     if (!file_size(output_path, bytes_written)) {
-        (void)remove(output_path);
+        if (output_created) (void)remove(output_path);
         group_error(error, MILENA_ERR_IO, "No se pudo medir la fusión agrupada");
         return MILENA_ERR_IO;
     }
@@ -576,7 +571,7 @@ MilenaStatus milena_grouped_aggregate_finalize(
         }
     }
     free(batch_memory);
-    if (status != MILENA_OK) { remove_run_set(grouped->spill_path, 0, run_count + 1u); return status; }
+    if (status != MILENA_OK) { remove_run_set(grouped->spill_path, 0, run_count); return status; }
     if (run_count == 0) { if (error) milena_error_clear(error); return MILENA_OK; }
 
     size_t pass = 0;
@@ -628,7 +623,7 @@ MilenaStatus milena_grouped_aggregate_finalize(
             if (status != MILENA_OK) break;
         }
         free(merge_buffers);
-        if (status != MILENA_OK) { remove_run_set(grouped->spill_path, pass + 1u, created + 1u); break; }
+        if (status != MILENA_OK) { remove_run_set(grouped->spill_path, pass + 1u, created); break; }
         run_count = next_count;
         run_bytes = next_bytes;
         pass++;
