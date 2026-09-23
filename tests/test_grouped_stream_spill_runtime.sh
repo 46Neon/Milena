@@ -203,7 +203,7 @@ cat > "$TMP_DIR/composite.milena" <<EOF_M
   variable region texto
   variable segmento texto
   variable valor numerica
-  datos desde "composite.csv" con grupos de 100 con filas hasta 2000 con tiempo hasta 30000 ms
+  datos desde "composite.csv" con grupos de 1000 con filas hasta 2000 con tiempo hasta 30000 ms
   agrupar por "region", "segmento" #spill("$TMP_DIR/composite-scratch.bin", 4096, 1048576, 128, 1000, 1048576, 4096) resumir { suma de "valor"; contar de "valor"; }
   guardar resultado en "composite.json"
 }
@@ -239,6 +239,7 @@ assert values[('shared','key-0000')]['metricas'][0]['valor']==1
 assert values[('shared','key-0599')]['metricas'][0]['valor']==600
 assert all([m['operacion'] for m in r['metricas']]==['suma','conteo'] for r in rows)
 assert report['grupos']==604
+assert report['limite_grupos']==1000
 assert report['bytes_spill']>0 and report['registros_spill']>0 and report['runs_spill']>0, report
 PYCOMP
 [ ! -e "$TMP_DIR/composite-scratch.bin" ] && [ ! -e "$TMP_DIR/composite-repeat-scratch.bin" ]
