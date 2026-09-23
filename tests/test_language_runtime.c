@@ -357,8 +357,9 @@ static int run_grouped_human_stream_pipeline(void) {
           strstr(text, "\"limite_grupos\":4") != NULL &&
           strstr(text, "\"limite_filas\":10") != NULL &&
           strstr(text, "\"presupuesto_tiempo_ms\":30000.000") != NULL &&
-          strstr(text, "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":5") != NULL &&
-          strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2") != NULL,
+          strstr(text, "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_nulos\":0,\"valores_invalidos\":1,\"valor\":5") != NULL &&
+          strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":2") != NULL &&
+          strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":1,\"valores_nulos\":1,\"valores_invalidos\":0,\"valor\":1") != NULL,
           "agrupación de flujo: AST, orden o semántica de valores inválidos incorrectos");
     remove(csv);
     remove(output);

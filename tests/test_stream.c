@@ -176,7 +176,7 @@ int main(void) {
         "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_nulos\":0,\"valores_invalidos\":1,\"valor\":7") != NULL);
     assert(strstr(buffer,
         "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":2") != NULL);
-    /* Z's last row has an empty final field; it counts as one invalid value. */
+    /* Z's last row has an empty final field; it counts as one null value. */
     assert(strstr(buffer,
         "\"nombre\":\"referencia_conteo\",\"valores_validos\":1,\"valores_nulos\":1,\"valores_invalidos\":0,\"valor\":1") != NULL);
     assert(strstr(buffer, "\"limite_grupos\":10") != NULL);
