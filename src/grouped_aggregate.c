@@ -626,7 +626,12 @@ MilenaStatus milena_grouped_aggregate_finalize(
         }
     }
     free(batch_memory);
-    if (status != MILENA_OK) { remove_run_set(grouped->spill_path, 0, run_count); return status; }
+    if (status != MILENA_OK) {
+        if (error && error->code == MILENA_OK)
+            group_error(error, status, "Error sin detalle al leer spill y crear runs ordenados");
+        remove_run_set(grouped->spill_path, 0, run_count);
+        return status;
+    }
     if (run_count == 0) { if (error) milena_error_clear(error); return MILENA_OK; }
 
     size_t pass = 0;
@@ -683,7 +688,12 @@ MilenaStatus milena_grouped_aggregate_finalize(
         run_bytes = next_bytes;
         pass++;
     }
-    if (status != MILENA_OK) { remove_run_set(grouped->spill_path, pass, run_count); return status; }
+    if (status != MILENA_OK) {
+        if (error && error->code == MILENA_OK)
+            group_error(error, status, "Error sin detalle al fusionar runs agrupados");
+        remove_run_set(grouped->spill_path, pass, run_count);
+        return status;
+    }
 
     char *final_path = sorted_run_path(grouped->spill_path, pass, 0);
     if (!final_path) {
@@ -725,6 +735,8 @@ MilenaStatus milena_grouped_aggregate_finalize(
     remove_run_set(grouped->spill_path, pass, 1u);
     if (groups_emitted) *groups_emitted = emitted;
     if (status == MILENA_OK && error) milena_error_clear(error);
+    else if (status != MILENA_OK && error && error->code == MILENA_OK)
+        group_error(error, status, "Error sin detalle al emitir resultados ordenados");
     return status;
 }
 
