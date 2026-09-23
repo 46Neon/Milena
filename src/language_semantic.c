@@ -57,6 +57,16 @@ static MilenaStatus validate_sst_arguments(const ASTNode *node,
     return MILENA_OK;
 }
 
+static bool known_stream_operation(ASTStreamOperation operation) {
+    return operation == AST_STREAM_OPERATION_SUM ||
+           operation == AST_STREAM_OPERATION_MEAN ||
+           operation == AST_STREAM_OPERATION_MIN ||
+           operation == AST_STREAM_OPERATION_MAX ||
+           operation == AST_STREAM_OPERATION_COUNT ||
+           operation == AST_STREAM_OPERATION_VARIANCE ||
+           operation == AST_STREAM_OPERATION_STDDEV;
+}
+
 static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
     if (!node) return semantic_error(node, error, "Nodo AST nulo");
     if (node->type == AST_COMANDO_SST) {
@@ -78,13 +88,58 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                 (node->stream_record_limit != 0 &&
                  node->stream_record_limit < 4096u))
                 return semantic_error(node, error, "Límite de registro de flujo inválido");
-            if (node->stream_column_limit > 4096u)
-                return semantic_error(node, error, "Límite de columnas de flujo inválido");
+            if (node->stream_column_limit > 4096u ||
+                node->stream_group_limit > 100000u ||
+                node->stream_row_limit > 1000000000u ||
+                (node->stream_time_limit_ms != 0.0 &&
+                 (!isfinite(node->stream_time_limit_ms) ||
+                  node->stream_time_limit_ms < 1.0 ||
+                  node->stream_time_limit_ms > 3600000.0)))
+                return semantic_error(node, error,
+                    "Límite de columnas, grupos, filas o tiempo de flujo inválido");
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Carga de dataset sin archivo");
             break;
+        case AST_BLOQUE_AGRUPAR:
+            if (node->type_name && strcmp(node->type_name, "flujo") == 0) {
+                size_t keys = 0, summaries = 0;
+                const ASTNode *summary = NULL;
+                for (size_t i = 0; i < node->child_count; i++) {
+                    const ASTNode *child = node->children[i];
+                    if (!child) return semantic_error(node, error,
+                        "Agrupación de flujo con nodo AST nulo");
+                    if (child->type == AST_AGRUPACION_POR) keys++;
+                    else if (child->type == AST_BLOQUE_RESUMIR) {
+                        summaries++;
+                        summary = child;
+                    } else return semantic_error(node, error,
+                        "La agrupación de flujo solo admite clave y resumen tipado");
+                }
+                if (keys != 1 || summaries != 1 || !summary ||
+                    summary->child_count == 0 || summary->child_count > 64)
+                    return semantic_error(node, error,
+                        "La agrupación de flujo requiere una clave y entre 1 y 64 métricas");
+                for (size_t i = 0; i < summary->child_count; i++) {
+                    const ASTNode *metric = summary->children[i];
+                    if (!metric || metric->type != AST_RESUMEN_METRICA ||
+                        !metric->value || !metric->value[0] ||
+                        !known_stream_operation(metric->stream_operation) ||
+                        metric->stream_operation == AST_STREAM_OPERATION_NONE)
+                        return semantic_error(metric, error,
+                            "La métrica agrupada debe usar una operación de flujo tipada");
+                }
+            }
+            break;
         case AST_AGRUPACION_POR:
         case AST_RESUMEN_METRICA:
+            if (node->type == AST_RESUMEN_METRICA &&
+                node->stream_operation != AST_STREAM_OPERATION_NONE &&
+                !known_stream_operation(node->stream_operation))
+                return semantic_error(node, error,
+                    "Operación de flujo no registrada en el AST canónico");
+            if (!node->value || !node->value[0])
+                return semantic_error(node, error, "Operación AST sin argumento");
+            break;
         case AST_COMANDO_COLUMNAS:
         case AST_COMANDO_DERECHA:
         case AST_COMANDO_CLAVE:

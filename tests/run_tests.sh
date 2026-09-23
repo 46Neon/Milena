@@ -224,4 +224,58 @@ grep -q 'MEDIANA(valores) = 2.5' "$tmp_dir/integracion_arrays.out"
 grep -q 'PERCENTIL(valores) = 3.25' "$tmp_dir/integracion_arrays.out"
 grep -q 'shape=(1)' "$tmp_dir/integracion_arrays.out"
 
+cat > "$tmp_dir/grouped.csv" <<'CSV'
+zona,importe
+Norte,5
+Sur,1
+Norte,4
+CSV
+
+cat > "$tmp_dir/grouped.milena" <<'MILENA'
+.analisis ventas_agrupadas {
+    datos desde "grouped.csv"
+        procesar por lotes de 2 filas
+        con grupos de 2
+        con filas hasta 10
+        con tiempo hasta 30000 ms
+    agrupar por "zona" resumir { suma de "importe"; }
+    guardar resultado en "grouped.json"
+}
+MILENA
+
+./milena run "$tmp_dir/grouped.milena" > "$tmp_dir/grouped.out"
+grep -q '"modo":"flujo_agrupado"' "$tmp_dir/grouped.json"
+grep -q '"grupos":2,"limite_grupos":2' "$tmp_dir/grouped.json"
+grep -q '"limite_filas":10,"presupuesto_tiempo_ms":30000.000' "$tmp_dir/grouped.json"
+grep -q '"clave":"Norte".*"valor":9' "$tmp_dir/grouped.json"
+grep -q '"clave":"Sur".*"valor":1' "$tmp_dir/grouped.json"
+
+cat > "$tmp_dir/grouped-row-limit.milena" <<'MILENA'
+.analisis limite_filas {
+    datos desde "grouped.csv" procesar por lotes de 2 filas con grupos de 2 con filas hasta 1
+    agrupar por "zona" resumir { suma de "importe"; }
+    guardar resultado en "grouped-row-limit.json"
+}
+MILENA
+if ./milena run "$tmp_dir/grouped-row-limit.milena" > "$tmp_dir/grouped-row-limit.out" 2>&1; then
+    echo 'Se excedió silenciosamente el presupuesto de filas del flujo agrupado' >&2
+    exit 1
+fi
+grep -q 'máximo de filas configurado' "$tmp_dir/grouped-row-limit.out"
+test ! -e "$tmp_dir/grouped-row-limit.json"
+
+cat > "$tmp_dir/grouped-group-limit.milena" <<'MILENA'
+.analisis limite_grupos {
+    datos desde "grouped.csv" procesar por lotes de 2 filas con grupos de 1
+    agrupar por "zona" resumir { suma de "importe"; }
+    guardar resultado en "grouped-group-limit.json"
+}
+MILENA
+if ./milena run "$tmp_dir/grouped-group-limit.milena" > "$tmp_dir/grouped-group-limit.out" 2>&1; then
+    echo 'Se excedió silenciosamente el presupuesto de grupos del flujo agrupado' >&2
+    exit 1
+fi
+grep -q 'límite máximo de grupos' "$tmp_dir/grouped-group-limit.out"
+test ! -e "$tmp_dir/grouped-group-limit.json"
+
 printf 'OK: pruebas con datos sintéticos temporales completadas\n'

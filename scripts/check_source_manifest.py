@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verifica que cada fuente C pertenezca a una capa conocida de Milena."""
+"""Verifica cobertura exacta y exclusión mutua del inventario de fuentes C.\n\nLas categorías describen archivos que existen en src/; módulos planificados no\nse listan como si fueran código presente. Cualquier fuente nueva sin dueño o\ncualquier entrada obsoleta falla, nunca se omite silenciosamente.\n"""
 from pathlib import Path
 import sys
 
@@ -59,4 +59,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
