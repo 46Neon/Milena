@@ -142,8 +142,8 @@ test-spill-store: tests/test_spill_store
 test-group-key-codec: tests/test_group_key_codec
 	./tests/test_group_key_codec
 
-tests/test_group_key_codec: tests/test_group_key_codec.c src/group_key_codec.c src/common.c include/group_key_codec.h
-	$(CC) $(CFLAGS) tests/test_group_key_codec.c src/group_key_codec.c src/common.c $(LDFLAGS) -o $@
+tests/test_group_key_codec: tests/test_group_key_codec.c tests/support/group_key_codec.c src/common.c include/group_key_codec.h
+	$(CC) $(CFLAGS) tests/test_group_key_codec.c tests/support/group_key_codec.c src/common.c $(LDFLAGS) -o $@
 
 tests/test_spill_store: tests/test_spill_store.c src/spill_store.c src/common.c
 	$(CC) $(CFLAGS) tests/test_spill_store.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
