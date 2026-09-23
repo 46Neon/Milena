@@ -744,6 +744,17 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
     load->type_name = milena_strdup("flujo");
     load->stream_chunk_rows = 4096u;
     if (!load->type_name) { ast_destroy(load); parser_error(parser, "Sin memoria para modo flujo"); return NULL; }
+    if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "formato") == 0) {
+        parser_advance(parser);
+        if (!parser_expect_word(parser, "arrow_stream",
+                                "El primer formato columnar admitido es arrow_stream")) goto fail;
+        free(load->type_name);
+        load->type_name = milena_strdup("arrow_ipc_stream");
+        if (!load->type_name) {
+            parser_error(parser, "Sin memoria para modo Arrow IPC STREAM");
+            goto fail;
+        }
+    }
     if (parser_match(parser, TOKEN_KW_PROCESAR)) {
         parser_advance(parser);
         if (!parser_expect(parser, TOKEN_KW_POR, "Se esperaba 'por' en 'procesar por lotes'")) goto fail;
@@ -781,6 +792,16 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
                 parser_error(parser, "El límite de grupos debe ser un entero entre 1 y 100000"); goto fail;
             }
             load->stream_group_limit = (size_t)groups;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "lote") == 0) {
+            if (strcmp(load->type_name, "arrow_ipc_stream") != 0) {
+                parser_error(parser, "El límite de bytes de lote solo se admite con formato arrow_stream"); goto fail;
+            }
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de lote")) goto fail;
+            if (!parser_spill_size(parser, 1u, 67108864u,
+                                  &load->stream_batch_limit_bytes,
+                                  "El límite del lote debe ser 1..67108864 bytes")) goto fail;
+            if (!parser_expect_word(parser, "bytes", "Se esperaba la unidad 'bytes'")) goto fail;
         } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "columnas") == 0) {
             parser_advance(parser);
             if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de columnas")) goto fail;
@@ -809,8 +830,25 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
             }
             if (!parser_expect_word(parser, "ms", "Se esperaba la unidad 'ms'")) goto fail;
             load->stream_time_limit_ms = milliseconds;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "bytes") == 0) {
+            if (strcmp(load->type_name, "arrow_ipc_stream") != 0) {
+                parser_error(parser, "El límite de bytes de Arrow solo se admite con formato arrow_stream"); goto fail;
+            }
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de bytes")) goto fail;
+            if (!parser_spill_size(parser, 1u, 67108864u, &load->stream_input_limit_bytes,
+                                  "El límite de entrada Arrow debe ser 1..67108864 bytes")) goto fail;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "salida") == 0) {
+            if (strcmp(load->type_name, "arrow_ipc_stream") != 0) {
+                parser_error(parser, "El límite de salida de Arrow solo se admite con formato arrow_stream"); goto fail;
+            }
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de salida")) goto fail;
+            if (!parser_spill_size(parser, 1u, 67108864u, &load->stream_output_limit_bytes,
+                                  "El límite de salida Arrow debe ser 1..67108864 bytes")) goto fail;
+            if (!parser_expect_word(parser, "bytes", "Se esperaba 'bytes' después del límite de salida")) goto fail;
         } else {
-            parser_error(parser, "Se esperaba 'registros', 'grupos', 'columnas', 'filas' o 'tiempo' después de 'con'"); goto fail;
+            parser_error(parser, "Se esperaba 'registros', 'grupos', 'lote', 'columnas', 'filas', 'tiempo' o un límite Arrow después de 'con'"); goto fail;
         }
     }
     if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
@@ -874,6 +912,43 @@ static ASTNode *parse_human_stream_filter(Parser *parser) {
     return filter;
 }
 
+static ASTNode *parse_arrow_projection(Parser *parser) {
+    if (!parser || !parser_expect_word(parser, "proyectar",
+                                        "Se esperaba proyectar")) return NULL;
+    if (!parser_expect(parser, TOKEN_LLAVE_IZQ,
+                       "Se esperaba '{' después de proyectar")) return NULL;
+    ASTNode *projection = ast_create(AST_COLUMNAR_PROJECT);
+    if (!projection) {
+        parser_error(parser, "Sin memoria para la proyección Arrow");
+        return NULL;
+    }
+    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "La proyección Arrow requiere nombres de campo entre comillas")) break;
+        ASTNode *field = ast_create_leaf(AST_COLUMNAR_FIELD, parser->previous.lexeme);
+        if (!field || !parser_add_child(parser, projection, field,
+                                        "Sin memoria para campo proyectado")) {
+            if (!parser->has_error) parser_error(parser, "Sin memoria para campo proyectado");
+            break;
+        }
+        if (parser_match(parser, TOKEN_COMA)) parser_advance(parser);
+        else if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+        else if (!parser_match(parser, TOKEN_LLAVE_DER)) {
+            parser_error(parser, "Se esperaba ',' o ';' entre campos proyectados");
+            break;
+        }
+    }
+    if (!parser_expect(parser, TOKEN_LLAVE_DER,
+                       "Se esperaba '}' después de la proyección") ||
+        projection->child_count == 0) {
+        if (!parser->has_error) parser_error(parser, "La proyección Arrow no puede estar vacía");
+        ast_destroy(projection);
+        return NULL;
+    }
+    return projection;
+}
+
 static ASTNode *parse_human_stream_export(Parser *parser) {
     parser_advance(parser);
     if (!parser_expect_word(parser, "resultado", "Se esperaba 'resultado'")) return NULL;
@@ -910,6 +985,11 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             ASTNode *filter = parse_human_stream_filter(parser);
             if (filter && !parser_add_child(parser, node, filter,
                                              "Sin memoria para el filtro de flujo")) break;
+        } else if (parser_is_identifier(parser) &&
+                   strcmp(parser->current.lexeme, "proyectar") == 0) {
+            ASTNode *projection = parse_arrow_projection(parser);
+            if (projection && !parser_add_child(parser, node, projection,
+                                                 "Sin memoria para la proyección Arrow")) break;
         } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
             ASTNode *group = parse_stream_group(parser);
             if (group && !parser_add_child(parser, node, group,

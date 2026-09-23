@@ -66,4 +66,43 @@ MilenaStatus milena_stream_execution_plan_build(
 MilenaStatus milena_stream_execution_plan_validate(
     const MilenaStreamExecutionPlan *plan, MilenaError *error);
 
+/* Separate native columnar vertical: this type and planner do not alter the
+ * existing CSV plan, scanner, or physical operator chain. */
+typedef enum {
+    MILENA_ARROW_LOGICAL_SCAN_STREAM = 1,
+    MILENA_ARROW_LOGICAL_FILTER,
+    MILENA_ARROW_LOGICAL_PROJECT,
+    MILENA_ARROW_LOGICAL_STREAM_SINK
+} MilenaArrowLogicalOperator;
+
+typedef enum {
+    MILENA_ARROW_PHYSICAL_IPC_STREAM_SCAN = 1,
+    MILENA_ARROW_PHYSICAL_FILTER,
+    MILENA_ARROW_PHYSICAL_PROJECT,
+    MILENA_ARROW_PHYSICAL_IPC_STREAM_WRITE
+} MilenaArrowPhysicalOperator;
+
+#define MILENA_ARROW_PLAN_MAX_OPERATORS 4u
+#define MILENA_ARROW_PLAN_MAX_COLUMNS 128u
+
+typedef struct {
+    const ASTNode *source;
+    const ASTNode *projection;
+    const ASTNode *filter;
+    const ASTNode *sink;
+    const ASTNode *projection_declarations[MILENA_ARROW_PLAN_MAX_COLUMNS];
+    const ASTNode *filter_declaration;
+    MilenaArrowLogicalOperator logical_operators[MILENA_ARROW_PLAN_MAX_OPERATORS];
+    size_t logical_operator_count;
+    MilenaArrowPhysicalOperator physical_operators[MILENA_ARROW_PLAN_MAX_OPERATORS];
+    size_t physical_operator_count;
+    const char *physical_plan_reason;
+} MilenaArrowIpcExecutionPlan;
+
+MilenaStatus milena_arrow_ipc_execution_plan_build(
+    const ASTNode *analysis, MilenaArrowIpcExecutionPlan *plan,
+    MilenaError *error);
+MilenaStatus milena_arrow_ipc_execution_plan_validate(
+    const MilenaArrowIpcExecutionPlan *plan, MilenaError *error);
+
 #endif

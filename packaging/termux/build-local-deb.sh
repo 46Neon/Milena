@@ -44,6 +44,11 @@ mkdir -p "$STAGE/${PREFIX_DIR#/}/bin" "$STAGE/${PREFIX_DIR#/}/share/doc/milena" 
 trap 'rm -rf "$STAGE"' EXIT
 install -m 0755 milena "$STAGE/${PREFIX_DIR#/}/bin/milena"
 install -m 0644 README.md "$STAGE/${PREFIX_DIR#/}/share/doc/milena/README.md"
+mkdir -p "$STAGE/${PREFIX_DIR#/}/share/licenses/milena"
+install -m 0644 LICENSE "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/LICENSE"
+install -m 0644 third_party/nanoarrow/LICENSE.txt "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/nanoarrow-LICENSE.txt"
+install -m 0644 third_party/nanoarrow/NOTICE.txt "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/nanoarrow-NOTICE.txt"
+install -m 0644 third_party/nanoarrow/FLATCC-LICENSE.txt "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/flatcc-LICENSE.txt"
 # Deliberately ship no examples, tests, headers, source, objects or build logs.
 python3 "$ROOT_DIR/scripts/validate_termux_elf.py" milena
 cat > "$STAGE/DEBIAN/control" <<EOF_CONTROL

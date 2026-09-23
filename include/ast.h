@@ -50,6 +50,8 @@ typedef enum {
     AST_COMANDO_CLAVE,
     AST_COMANDO_SST,
     AST_STREAM_FILTER,
+    AST_COLUMNAR_PROJECT,
+    AST_COLUMNAR_FIELD,
     AST_NODE_TYPE_COUNT
 } ASTNodeType;
 
@@ -96,10 +98,13 @@ typedef struct ASTNode {
     ASTStreamOperation stream_operation;
     ASTStreamFilterKind stream_filter_kind;
     size_t stream_chunk_rows;
+    size_t stream_batch_limit_bytes;
     size_t stream_record_limit;
     size_t stream_column_limit;
     size_t stream_group_limit;
     size_t stream_row_limit;
+    size_t stream_input_limit_bytes;
+    size_t stream_output_limit_bytes;
     double stream_time_limit_ms;
     /* Explicit resource policy for canonical #agrupar spill-to-disk. */
     size_t group_memory_budget_bytes;

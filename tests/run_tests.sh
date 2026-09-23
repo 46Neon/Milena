@@ -280,4 +280,5 @@ test ! -e "$tmp_dir/grouped-group-limit.json"
 
 sh tests/test_grouped_spill_runtime.sh
 sh tests/test_grouped_stream_spill_runtime.sh
+sh tests/test_arrow_ipc_runtime.sh
 printf 'OK: pruebas con datos sintéticos temporales completadas\n'

@@ -36,6 +36,11 @@ cleanup() { rm -rf "$STAGE"; }
 trap cleanup EXIT
 install -m 0755 milena "$STAGE/usr/bin/milena"
 install -m 0644 README.md "$STAGE/usr/share/doc/milena/README.md"
+mkdir -p "$STAGE/usr/share/doc/milena/licenses"
+install -m 0644 LICENSE "$STAGE/usr/share/doc/milena/licenses/LICENSE"
+install -m 0644 third_party/nanoarrow/LICENSE.txt "$STAGE/usr/share/doc/milena/licenses/nanoarrow-LICENSE.txt"
+install -m 0644 third_party/nanoarrow/NOTICE.txt "$STAGE/usr/share/doc/milena/licenses/nanoarrow-NOTICE.txt"
+install -m 0644 third_party/nanoarrow/FLATCC-LICENSE.txt "$STAGE/usr/share/doc/milena/licenses/flatcc-LICENSE.txt"
 cp -R examples "$STAGE/usr/share/doc/milena/"
 
 mkdir -p "$STAGE/DEBIAN"

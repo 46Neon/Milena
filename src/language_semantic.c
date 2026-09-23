@@ -88,7 +88,8 @@ static const ASTNode *stream_find_load(const ASTNode *analysis) {
     for (size_t i = 0; i < analysis->child_count; ++i) {
         const ASTNode *child = analysis->children[i];
         if (child && child->type == AST_LLAMADA_CARGAR && child->type_name &&
-            strcmp(child->type_name, "flujo") == 0) return child;
+            (strcmp(child->type_name, "flujo") == 0 ||
+             strcmp(child->type_name, "arrow_ipc_stream") == 0)) return child;
     }
     return NULL;
 }
@@ -131,9 +132,92 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                   node->stream_time_limit_ms > 3600000.0)))
                 return semantic_error(node, error,
                     "Límite de columnas, grupos, filas o tiempo de flujo inválido");
+            if (node->type_name && strcmp(node->type_name, "arrow_ipc_stream") == 0 &&
+                (node->stream_chunk_rows == 0 || node->stream_chunk_rows > 65536u ||
+                 node->stream_group_limit != 0 || node->stream_record_limit != 0 ||
+                 node->stream_column_limit > 128u || node->stream_row_limit > 10000000u ||
+                 node->stream_batch_limit_bytes > 67108864u ||
+                 node->stream_input_limit_bytes > 67108864u ||
+                 node->stream_output_limit_bytes > 67108864u))
+                return semantic_error(node, error,
+                    "Los límites de Arrow IPC STREAM exceden el perfil local acotado");
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Carga de dataset sin archivo");
             break;
+        case AST_BLOQUE_ANALISIS: {
+            const ASTNode *arrow_load = NULL;
+            const ASTNode *projection = NULL;
+            const ASTNode *sink = NULL;
+            size_t filters = 0;
+            for (size_t i = 0; i < node->child_count; ++i) {
+                const ASTNode *child = node->children[i];
+                if (!child) return semantic_error(node, error,
+                    "El análisis Arrow contiene un nodo AST nulo");
+                if (child->type == AST_LLAMADA_CARGAR && child->type_name &&
+                    strcmp(child->type_name, "arrow_ipc_stream") == 0) {
+                    if (arrow_load) return semantic_error(child, error,
+                        "Arrow IPC STREAM admite una sola fuente local");
+                    arrow_load = child;
+                }
+            }
+            if (arrow_load) {
+                size_t loads = 0, sinks = 0;
+                for (size_t i = 0; i < node->child_count; ++i) {
+                    const ASTNode *child = node->children[i];
+                    if (child->type == AST_LLAMADA_CARGAR) loads++;
+                    else if (child->type == AST_COLUMNAR_PROJECT) {
+                        if (projection) return semantic_error(child, error,
+                            "Arrow admite una única proyección tipada");
+                        projection = child;
+                    } else if (child->type == AST_STREAM_FILTER) filters++;
+                    else if (child->type == AST_BLOQUE_EXPORTAR) {
+                        sinks++;
+                        sink = child;
+                    } else if (child->type != AST_DECLARACION_VARIABLE) {
+                        return semantic_error(child, error,
+                            "Arrow IPC STREAM solo admite declaración, filtrar, proyectar y guardar");
+                    }
+                }
+                if (loads != 1 || filters > 1 || sinks != 1 || !sink ||
+                    !projection || projection->child_count == 0 ||
+                    projection->child_count > 128u ||
+                    arrow_load->stream_row_limit == 0 ||
+                    arrow_load->stream_column_limit == 0 ||
+                    arrow_load->stream_time_limit_ms <= 0.0 ||
+                    arrow_load->stream_batch_limit_bytes == 0 ||
+                    arrow_load->stream_input_limit_bytes == 0 ||
+                    arrow_load->stream_output_limit_bytes == 0)
+                    return semantic_error(arrow_load, error,
+                        "Arrow exige proyección/salida y límites explícitos de filas, columnas, bytes y tiempo");
+                for (size_t i = 0; i < projection->child_count; ++i) {
+                    const ASTNode *field = projection->children[i];
+                    const ASTNode *declaration = field && field->value
+                        ? stream_find_column_declaration(node, field->value) : NULL;
+                    if (!field || field->type != AST_COLUMNAR_FIELD || !field->value ||
+                        !field->value[0] || !declaration || !declaration->type_name ||
+                        (strcmp(declaration->type_name, "numerica") != 0 &&
+                         strcmp(declaration->type_name, "texto") != 0))
+                        return semantic_error(field, error,
+                            "Cada campo Arrow proyectado requiere declaración numerica o texto compatible");
+                }
+                for (size_t i = 0; i < node->child_count; ++i) {
+                    const ASTNode *child = node->children[i];
+                    if (child && child->type == AST_STREAM_FILTER) {
+                        const ASTNode *declaration = child->value
+                            ? stream_find_column_declaration(node, child->value) : NULL;
+                        const char *expected = child->stream_filter_kind ==
+                            AST_STREAM_FILTER_TEXT_EQUAL ? "texto" :
+                            child->stream_filter_kind == AST_STREAM_FILTER_NUMERIC_GREATER
+                                ? "numerica" : NULL;
+                        if (!declaration || !declaration->type_name || !expected ||
+                            strcmp(declaration->type_name, expected) != 0)
+                            return semantic_error(child, error,
+                                "El tipo declarado del filtro Arrow no coincide con su operador");
+                    }
+                }
+            }
+            break;
+        }
         case AST_BLOQUE_UNIR: {
             size_t right_count = 0, key_count = 0;
             for (size_t i = 0; i < node->child_count; ++i) {
@@ -332,6 +416,25 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                     "Operación de flujo no registrada en el AST canónico");
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Operación AST sin argumento");
+            break;
+        case AST_COLUMNAR_PROJECT: {
+            const ASTNode *source = node->parent &&
+                node->parent->type == AST_BLOQUE_ANALISIS
+                ? stream_find_load(node->parent) : NULL;
+            if (!source || !source->type_name ||
+                strcmp(source->type_name, "arrow_ipc_stream") != 0)
+                return semantic_error(node, error,
+                    "proyectar solo se admite en una fuente local Arrow IPC STREAM");
+            if (node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "La proyección Arrow requiere de 1 a 128 campos");
+            break;
+        }
+        case AST_COLUMNAR_FIELD:
+            if (!node->parent || node->parent->type != AST_COLUMNAR_PROJECT ||
+                !node->value || !node->value[0])
+                return semantic_error(node, error,
+                    "El nombre de campo de la proyección Arrow está vacío o fuera de contexto");
             break;
         case AST_COMANDO_COLUMNAS:
         case AST_COMANDO_DERECHA:

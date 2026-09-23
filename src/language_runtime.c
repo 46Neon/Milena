@@ -1,4 +1,5 @@
 #include "language_runtime.h"
+#include "arrow_ipc.h"
 
 #include "array.h"
 #include "dataset.h"
@@ -1639,8 +1640,20 @@ MilenaStatus milena_run_dataset_program(const char *source,
     }
 
     MilenaStreamExecutionPlan stream_plan = {0};
+    MilenaArrowIpcExecutionPlan arrow_plan = {0};
+    bool arrow_stream = load->type_name &&
+        strcmp(load->type_name, "arrow_ipc_stream") == 0;
     bool streaming = load->type_name && strcmp(load->type_name, "flujo") == 0;
-    if (streaming) {
+    if (arrow_stream) {
+        MilenaStatus plan_status = milena_arrow_ipc_execution_plan_build(
+            analysis, &arrow_plan, error);
+        if (plan_status != MILENA_OK) {
+            ast_destroy(program);
+            parser_release(&parser);
+            return plan_status;
+        }
+        load = arrow_plan.source;
+    } else if (streaming) {
         MilenaStatus plan_status = milena_stream_execution_plan_build(
             analysis, &stream_plan, error);
         if (plan_status != MILENA_OK) {
@@ -1655,6 +1668,76 @@ MilenaStatus milena_run_dataset_program(const char *source,
     MilenaStatus status = dataset_runtime_path(load->value, script_filename, false,
                                                input, sizeof(input), error);
     if (status != MILENA_OK) {
+        ast_destroy(program);
+        parser_release(&parser);
+        return status;
+    }
+
+    if (arrow_stream) {
+        char output_path[2048];
+        const ASTNode *export_node = arrow_plan.sink;
+        status = dataset_runtime_path(export_node->value, script_filename, true,
+                                      output_path, sizeof(output_path), error);
+        if (status == MILENA_OK) {
+            const char *projection[MILENA_ARROW_PLAN_MAX_COLUMNS];
+            MilenaArrowValueType projection_types[MILENA_ARROW_PLAN_MAX_COLUMNS];
+            for (size_t i = 0; i < arrow_plan.projection->child_count; ++i) {
+                projection[i] = arrow_plan.projection->children[i]->value;
+                const ASTNode *declaration = arrow_plan.projection_declarations[i];
+                if (declaration && declaration->type_name &&
+                    strcmp(declaration->type_name, "numerica") == 0)
+                    projection_types[i] = MILENA_ARROW_VALUE_NUMERICA;
+                else if (declaration && declaration->type_name &&
+                         strcmp(declaration->type_name, "texto") == 0)
+                    projection_types[i] = MILENA_ARROW_VALUE_TEXTO;
+                else {
+                    runtime_error(error, MILENA_ERR_TYPE,
+                                  "Tipo de columna proyectada Arrow no admitido");
+                    status = MILENA_ERR_TYPE;
+                    break;
+                }
+            }
+            MilenaArrowIpcOptions options = {0};
+            options.input_path = input;
+            options.output_path = output_path;
+            options.projection = projection;
+            options.projection_types = projection_types;
+            options.projection_count = arrow_plan.projection->child_count;
+            options.max_batch_rows = load->stream_chunk_rows;
+            options.max_rows = load->stream_row_limit;
+            options.max_batch_bytes = load->stream_batch_limit_bytes;
+            options.max_columns = load->stream_column_limit;
+            options.max_input_bytes = load->stream_input_limit_bytes;
+            options.max_output_bytes = load->stream_output_limit_bytes;
+            options.max_elapsed_milliseconds = load->stream_time_limit_ms;
+            if (arrow_plan.filter) {
+                options.filter_column = arrow_plan.filter->value;
+                if (arrow_plan.filter->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+                    options.filter_kind = MILENA_ARROW_FILTER_TEXT_EQUAL;
+                    options.filter_column_type = MILENA_ARROW_VALUE_TEXTO;
+                    options.filter_text = arrow_plan.filter->type_name;
+                } else if (arrow_plan.filter->stream_filter_kind ==
+                           AST_STREAM_FILTER_NUMERIC_GREATER) {
+                    options.filter_kind = MILENA_ARROW_FILTER_NUMERIC_GREATER;
+                    options.filter_column_type = MILENA_ARROW_VALUE_NUMERICA;
+                    options.filter_number = arrow_plan.filter->number_value;
+                } else {
+                    runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                  "Predicado de Arrow IPC no registrado en el planner");
+                    status = MILENA_ERR_UNSUPPORTED;
+                }
+            }
+            MilenaArrowIpcReport report = {0};
+            if (status == MILENA_OK)
+                status = milena_arrow_ipc_stream_transform(&options, &report, error);
+            if (status == MILENA_OK && output) {
+                fprintf(output, "Arrow IPC STREAM ejecutado: %s\n", input);
+                fprintf(output, "Lotes: %zu | Filas leídas: %zu | Filas escritas: %zu\n",
+                        report.input_batches, report.input_rows, report.output_rows);
+                fprintf(output, "Bytes entrada: %zu | Bytes salida: %zu | Destino: %s\n",
+                        report.input_bytes, report.output_bytes, output_path);
+            }
+        }
         ast_destroy(program);
         parser_release(&parser);
         return status;

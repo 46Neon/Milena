@@ -272,3 +272,166 @@ MilenaStatus milena_stream_execution_plan_validate(
     if (error) milena_error_clear(error);
     return MILENA_OK;
 }
+
+static MilenaStatus arrow_plan_error(MilenaError *error, MilenaStatus code,
+                                     const char *message) {
+    milena_error_set(error, code, 0, 0, 0, message);
+    return code;
+}
+
+static const ASTNode *arrow_plan_find_declaration(const ASTNode *analysis,
+                                                   const char *name) {
+    if (!analysis || !name) return NULL;
+    for (size_t i = 0; i < analysis->child_count; ++i) {
+        const ASTNode *node = analysis->children[i];
+        if (node && node->type == AST_DECLARACION_VARIABLE && node->value &&
+            strcmp(node->value, name) == 0) return node;
+    }
+    return NULL;
+}
+
+static bool arrow_plan_declaration_is(const ASTNode *declaration,
+                                      const char *type_name) {
+    return declaration && declaration->type_name && type_name &&
+           strcmp(declaration->type_name, type_name) == 0;
+}
+
+MilenaStatus milena_arrow_ipc_execution_plan_build(
+    const ASTNode *analysis, MilenaArrowIpcExecutionPlan *plan,
+    MilenaError *error) {
+    if (!analysis || !plan || analysis->type != AST_BLOQUE_ANALISIS)
+        return arrow_plan_error(error, MILENA_ERR_ARGUMENT,
+                                "Arrow IPC plan requires a valid analysis block");
+    memset(plan, 0, sizeof(*plan));
+    for (size_t i = 0; i < analysis->child_count; ++i) {
+        const ASTNode *node = analysis->children[i];
+        if (!node) return arrow_plan_error(error, MILENA_ERR_PARSE,
+                                           "Arrow IPC plan contains a null AST node");
+        switch (node->type) {
+        case AST_LLAMADA_CARGAR:
+            if (plan->source || !node->type_name ||
+                strcmp(node->type_name, "arrow_ipc_stream") != 0 ||
+                !node->value || !node->value[0])
+                return arrow_plan_error(error, MILENA_ERR_PARSE,
+                    "Arrow IPC plan requires exactly one local IPC STREAM source");
+            plan->source = node;
+            break;
+        case AST_COLUMNAR_PROJECT:
+            if (plan->projection)
+                return arrow_plan_error(error, MILENA_ERR_PARSE,
+                                        "Arrow IPC plan allows one projection");
+            plan->projection = node;
+            break;
+        case AST_STREAM_FILTER:
+            if (plan->filter)
+                return arrow_plan_error(error, MILENA_ERR_PARSE,
+                                        "Arrow IPC plan allows one typed filter");
+            plan->filter = node;
+            break;
+        case AST_BLOQUE_EXPORTAR:
+            if (plan->sink || !node->value || !node->value[0])
+                return arrow_plan_error(error, MILENA_ERR_PARSE,
+                                        "Arrow IPC plan requires one stream output");
+            plan->sink = node;
+            break;
+        case AST_DECLARACION_VARIABLE:
+            /* Column declarations are resolved below and carried into the typed plan. */
+            break;
+        default:
+            return arrow_plan_error(error, MILENA_ERR_UNSUPPORTED,
+                "This Arrow IPC vertical only supports source/filter/project/stream sink");
+        }
+    }
+    if (!plan->source || !plan->projection || plan->projection->child_count == 0 ||
+        plan->projection->child_count > 128u || !plan->sink)
+        return arrow_plan_error(error, MILENA_ERR_PARSE,
+            "Arrow IPC vertical requires source, non-empty projection, and output");
+    for (size_t i = 0; i < plan->projection->child_count; ++i) {
+        const ASTNode *field = plan->projection->children[i];
+        if (!field || field->type != AST_COLUMNAR_FIELD || !field->value ||
+            !field->value[0])
+            return arrow_plan_error(error, MILENA_ERR_PARSE,
+                                    "Arrow projection contains an invalid field");
+        for (size_t j = 0; j < i; ++j) {
+            if (strcmp(plan->projection->children[j]->value, field->value) == 0)
+                return arrow_plan_error(error, MILENA_ERR_PARSE,
+                                        "Arrow projection fields must be unique");
+        }
+        const ASTNode *declaration = arrow_plan_find_declaration(analysis, field->value);
+        if (!arrow_plan_declaration_is(declaration, "numerica") &&
+            !arrow_plan_declaration_is(declaration, "texto"))
+            return arrow_plan_error(error, MILENA_ERR_TYPE,
+                "Arrow projected fields require a supported numerica or texto declaration");
+        plan->projection_declarations[i] = declaration;
+    }
+    if (plan->filter) {
+        plan->filter_declaration = arrow_plan_find_declaration(analysis,
+                                                                plan->filter->value);
+        if (plan->filter->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+            if (!arrow_plan_declaration_is(plan->filter_declaration, "texto"))
+                return arrow_plan_error(error, MILENA_ERR_TYPE,
+                    "Arrow text equality requires a texto declaration");
+        } else if (plan->filter->stream_filter_kind ==
+                   AST_STREAM_FILTER_NUMERIC_GREATER) {
+            if (!arrow_plan_declaration_is(plan->filter_declaration, "numerica"))
+                return arrow_plan_error(error, MILENA_ERR_TYPE,
+                    "Arrow numeric comparison requires a numerica declaration");
+        } else {
+            return arrow_plan_error(error, MILENA_ERR_UNSUPPORTED,
+                                     "Arrow filter kind is not supported");
+        }
+    }
+    plan->logical_operators[plan->logical_operator_count++] =
+        MILENA_ARROW_LOGICAL_SCAN_STREAM;
+    plan->physical_operators[plan->physical_operator_count++] =
+        MILENA_ARROW_PHYSICAL_IPC_STREAM_SCAN;
+    if (plan->filter) {
+        plan->logical_operators[plan->logical_operator_count++] =
+            MILENA_ARROW_LOGICAL_FILTER;
+        plan->physical_operators[plan->physical_operator_count++] =
+            MILENA_ARROW_PHYSICAL_FILTER;
+    }
+    plan->logical_operators[plan->logical_operator_count++] =
+        MILENA_ARROW_LOGICAL_PROJECT;
+    plan->physical_operators[plan->physical_operator_count++] =
+        MILENA_ARROW_PHYSICAL_PROJECT;
+    plan->logical_operators[plan->logical_operator_count++] =
+        MILENA_ARROW_LOGICAL_STREAM_SINK;
+    plan->physical_operators[plan->physical_operator_count++] =
+        MILENA_ARROW_PHYSICAL_IPC_STREAM_WRITE;
+    plan->physical_plan_reason =
+        "Local Arrow IPC STREAM batches are validated and transformed sequentially";
+    return milena_arrow_ipc_execution_plan_validate(plan, error);
+}
+
+MilenaStatus milena_arrow_ipc_execution_plan_validate(
+    const MilenaArrowIpcExecutionPlan *plan, MilenaError *error) {
+    if (!plan || !plan->source || !plan->projection || !plan->sink ||
+        plan->projection->child_count == 0 ||
+        plan->physical_operator_count != (plan->filter ? 4u : 3u) ||
+        plan->logical_operator_count != plan->physical_operator_count ||
+        !plan->physical_plan_reason ||
+        plan->physical_operators[0] != MILENA_ARROW_PHYSICAL_IPC_STREAM_SCAN ||
+        plan->physical_operators[plan->physical_operator_count - 2u] !=
+            MILENA_ARROW_PHYSICAL_PROJECT ||
+        plan->physical_operators[plan->physical_operator_count - 1u] !=
+            MILENA_ARROW_PHYSICAL_IPC_STREAM_WRITE ||
+        (plan->filter && plan->physical_operators[1] != MILENA_ARROW_PHYSICAL_FILTER))
+        return arrow_plan_error(error, MILENA_ERR_DATA,
+                                "Invalid typed Arrow IPC STREAM physical plan");
+    if (plan->projection->child_count > MILENA_ARROW_PLAN_MAX_COLUMNS)
+        return arrow_plan_error(error, MILENA_ERR_OVERFLOW,
+                                "Arrow projection exceeds the typed plan column limit");
+    for (size_t i = 0; i < plan->projection->child_count; ++i) {
+        const ASTNode *declaration = plan->projection_declarations[i];
+        if (!declaration ||
+            (!arrow_plan_declaration_is(declaration, "numerica") &&
+             !arrow_plan_declaration_is(declaration, "texto")))
+            return arrow_plan_error(error, MILENA_ERR_TYPE,
+                                    "Arrow projection plan has no supported typed declaration");
+    }
+    if (plan->filter && !plan->filter_declaration)
+        return arrow_plan_error(error, MILENA_ERR_TYPE,
+                                "Arrow filter plan has no typed declaration");
+    return MILENA_OK;
+}
