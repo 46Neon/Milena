@@ -262,6 +262,44 @@ MilenaStatus milena_grouped_aggregate_add(
     return MILENA_OK;
 }
 
+MilenaStatus milena_grouped_aggregate_add_null(
+    MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
+    MilenaError *error) {
+    if (!grouped || !grouped->groups || grouped->finalized ||
+        (!key && key_length != 0) || key_length > grouped->max_key_bytes) {
+        group_error(error, MILENA_ERR_ARGUMENT,
+                    "Clave inválida para fila agrupada sin valor");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (grouped->failed) {
+        group_error(error, grouped->failure_status,
+                    "Agregación agrupada fallida; no se permiten más operaciones");
+        return grouped->failure_status;
+    }
+    const unsigned char *bytes = key;
+    bool found = false;
+    size_t slot = find_group(grouped, bytes, key_length, &found);
+    if (found) { if (error) milena_error_clear(error); return MILENA_OK; }
+    if (grouped->group_count == grouped->group_capacity) {
+        MilenaStatus status = flush_groups(grouped, error);
+        if (status != MILENA_OK) return status;
+        slot = find_group(grouped, bytes, key_length, &found);
+        if (found) return MILENA_OK;
+    }
+    if (slot >= grouped->table_capacity) {
+        group_error(error, MILENA_ERR_INTERNAL, "Índice hash agrupado agotado");
+        return MILENA_ERR_INTERNAL;
+    }
+    size_t index = grouped->group_count;
+    milena_aggregate_state_init(&grouped->groups[index].aggregate);
+    grouped->groups[index].key_length = key_length;
+    if (key_length) memcpy(entry_key(grouped, index), bytes, key_length);
+    grouped->table[slot] = index + 1u;
+    grouped->group_count++;
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}
+
 static size_t record_length(const unsigned char *record) {
     return GROUP_RECORD_FIXED + (size_t)read_u32(record);
 }

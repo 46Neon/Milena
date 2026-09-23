@@ -68,19 +68,22 @@ int main(void) {
     CHECK_OK(milena_grouped_aggregate_add(&grouped, "a", 1, 3.0, &error));
     CHECK_OK(milena_grouped_aggregate_add(&grouped, "z", 1, 8.0, &error));
     CHECK_OK(milena_grouped_aggregate_add(&grouped, "", 0, 5.0, &error));
+    CHECK_OK(milena_grouped_aggregate_add_null(&grouped, "n", 1, &error));
     Capture capture = {0};
     size_t emitted = 0;
     CHECK_OK(milena_grouped_aggregate_finalize(&grouped, capture_result,
                                                 &capture, &emitted, &error));
-    assert(emitted == 4 && capture.count == 4);
+    assert(emitted == 5 && capture.count == 5);
     assert(strcmp(capture.keys[0], "") == 0);
     assert(strcmp(capture.keys[1], "a") == 0);
     assert(strcmp(capture.keys[2], "b") == 0);
-    assert(strcmp(capture.keys[3], "z") == 0);
+    assert(strcmp(capture.keys[3], "n") == 0);
+    assert(strcmp(capture.keys[4], "z") == 0);
     assert(capture.results[0].count == 1 && capture.results[0].sum == 5.0);
     assert(capture.results[1].count == 2 && capture.results[1].sum == 4.0);
     assert(capture.results[2].count == 2 && capture.results[2].sum == 8.0);
-    assert(capture.results[3].count == 2 && capture.results[3].sum == 12.0);
+    assert(capture.results[3].count == 0 && !capture.results[3].has_values);
+    assert(capture.results[4].count == 2 && capture.results[4].sum == 12.0);
     assert(milena_grouped_aggregate_add(&grouped, "x", 1, 1.0, &error) == MILENA_ERR_ARGUMENT);
     CHECK_OK(milena_grouped_aggregate_close(&grouped, &error));
     assert(remove(path) == 0);

@@ -1,10 +1,18 @@
 # Contrato para spill-to-disk de agrupaciones en flujo
 
-**Estado:** diseño acordado; no implementado. El backend actual `milena_stream_csv_grouped_with_options` guarda grupos en memoria y falla explícitamente al alcanzar `max_groups` o el presupuesto de estado. No existen `src/spill.c` ni `src/spill_store.c`. Este documento no anuncia capacidad disponible.
+**Estado:** contrato general vigente; hay una primera integración vertical parcial en el `.agrupar` tabular canónico, no en `milena_stream_csv_grouped_with_options`. El backend de flujo aún conserva sus grupos en memoria y falla explícitamente al alcanzar sus límites. El adaptador de tablas usa `grouped_aggregate.c`/`spill_store.c` existentes, pero todavía no satisface todos los requisitos de aislamiento seguro de temporales, multi-métrica, clave compuesta ni procesamiento de entrada CSV realmente streaming; no anunciar el spill como capacidad industrial general.
 
 ## Límite arquitectónico
 
 La única ruta de producto seguirá siendo `lexer → parser → AST tipado → semántica → runtime → stream.c`. La sintaxis humana expresará las políticas de spill en el AST; el runtime validará los límites antes de ejecutar y pasará opciones tipadas al backend. El spill no tendrá parser, CLI, runtime ni comando externo propios. El manifiesto de fuentes debe clasificar cada módulo nuevo como producto; `Makefile` debe incorporarlo a las fuentes oficiales. El verificador existente debe fallar ante fuentes C presentes pero no clasificadas: no se permite resolver diferencias excluyendo archivos o agregando módulos inexistentes.
+
+## Corte vertical implementado en #agrupar tabular
+
+La sintaxis canónica admite `#spill("ruta-nueva", memoria_bytes, cuota_spill_bytes, max_key_bytes, max_grupos)` dentro de `.agrupar dataset { ... }`. Los límites numéricos son enteros tipados en el AST y se validan antes de ejecutar: memoria 4 KiB–512 MiB, cuota 1 B–4 GiB, clave 2 B–1 MiB, grupos de salida 1–1,000,000; la ruta scratch queda limitada a 220 bytes. La política es opt-in; sin ella sigue el camino histórico de `milena_table_group_by`. Una solicitud explícita que no esté soportada falla y nunca vuelve silenciosamente al backend en memoria.
+
+El adaptador usa una clave STRING (una clave únicamente) y una métrica; `conteo` acepta cualquier columna y las otras cuatro métricas requieren FLOAT64. La clave nula no colisiona con texto vacío; la clave vacía observada sí es válida. Valores métricos nulos conservan grupos y producen null (o conteo cero); la entrada numérica que el cargador clasifica inválida sigue la semántica de null canónica. La salida es una `MilenaTable` materializada con tope de grupos y sale en orden lexicográfico binario; el backend histórico conserva orden de primera aparición. La suma/media con reducer mergeable puede diferir por redondeo del backend anterior; la equivalencia numérica se comprueba con tolerancia, no bit a bit.
+
+Límites aún abiertos frente a este contrato: el input `Dataset` y la tabla canónica previa ya residen en RAM, y la tabla resultado también se materializa; no es aún un adaptador de `stream.c`. La API recibe una ruta final proporcionada por el programa, comprueba que no exista y la elimina al cerrar, pero todavía no asigna nombres aleatorios exclusivos ni asegura permisos privados; escritores concurrentes sobre una ruta no están soportados. El fan-in actual de fusión es fijo de dos vías y no hay límite AST independiente para tiempo/filas/runs. Estos son pendientes explícitos, no afirmaciones de cumplimiento total.
 
 ## Semántica y determinismo
 

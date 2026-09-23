@@ -93,36 +93,6 @@ ensamblador, VM, GC, módulos alternativos ni bosque, y que las capas del
 producto no incluyan sus headers. Estos módulos pueden compilarse en pruebas
 específicas, pero no pueden convertirse accidentalmente en una ruta oficial.
 
-## Flujo numérico canónico
-
-El flujo de CSV es una capacidad del lenguaje, no una utilidad C independiente.
-La forma humana canónica es `datos desde "archivo.csv"`, opcionalmente seguida
-por `procesar por lotes de N filas`, un bloque `resumir` y `guardar resultado`.
-Cada operación (`suma`, `media`, `minimo`, `maximo`, `contar`, `varianza` y
-`desviacion_estandar`) se reconoce en el lexer, se tipa en el AST, se valida
-semánticamente y se traduce una sola vez al runtime común antes de llamar al
-backend acotado. La forma española es `contar`; el nombre de operación estable en el JSON es
-`conteo`. Cuenta valores numéricos válidos; las
-otras operaciones también ignoran valores inválidos por métrica y los reportan.
-
-PR25 implementa resúmenes numéricos globales y agrupaciones de una pasada. El
-resumen global usa acumuladores constantes por métrica; la ruta agrupada limita
-el número de claves, reserva como máximo 64 MiB de estado y ordena las claves
-de salida de forma determinista. Ninguna ruta materializa todas las filas ni
-promete latencia fija, escala industrial o ejecución distribuida. En agrupación,
-los valores numéricos inválidos se omiten solo para su métrica y se cuentan;
-`contar` cuenta campos no vacíos. La compilación nativa C17/Clang para Termux
-es un contrato de build, no acceso que evada el kernel. La API C puede imponer
-límites de filas/tiempo; la sintaxis española no configura por defecto un tope
-de CPU.
-
-La sintaxis legacy `operacion:columna` queda únicamente como compatibilidad y
-no es la superficie recomendada ni un segundo parser. El planificador local
-genérico de `main` opera con rangos de bytes que no conocen fronteras de
-registros CSV, por lo que todavía no ejecuta agrupaciones ni spill. Spill-to-disk,
-particionado CSV seguro, Arrow/Parquet, joins externos y distribución requieren
-contratos y pruebas explícitos antes de afirmarse como capacidades.
-
 ## Puerta de unificación
 
 Mientras la ruta canónica no tenga paridad con las capacidades que se desean

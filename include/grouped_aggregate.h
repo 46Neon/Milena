@@ -54,6 +54,9 @@ MilenaStatus milena_grouped_aggregate_open(
 MilenaStatus milena_grouped_aggregate_add(
     MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
     double value, MilenaError *error);
+MilenaStatus milena_grouped_aggregate_add_null(
+    MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
+    MilenaError *error);
 /* Finalization sorts bounded runs and pairwise-merges them externally; cost is
  * O(R log R), memory stays within the configured reducer budget, and callback
  * order is deterministic unsigned-byte lexicographic order. Temporary sort

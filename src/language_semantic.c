@@ -128,10 +128,42 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                         return semantic_error(metric, error,
                             "La métrica agrupada debe usar una operación de flujo tipada");
                 }
+            } else {
+                size_t policies = 0, summaries = 0, keys = 0;
+                for (size_t i = 0; i < node->child_count; i++) {
+                    const ASTNode *child = node->children[i];
+                    if (!child) return semantic_error(node, error,
+                        "Agrupación con nodo AST nulo");
+                    if (child->type == AST_AGRUPACION_SPILL) policies++;
+                    else if (child->type == AST_AGRUPACION_POR) keys++;
+                    else if (child->type == AST_RESUMEN_METRICA) summaries++;
+                }
+                if (keys != 1)
+                    return semantic_error(node, error,
+                        "#agrupar requiere exactamente una clave #por");
+                if (policies > 1)
+                    return semantic_error(node, error,
+                        "#agrupar admite como máximo una política #spill");
+                if (policies && summaries != 1)
+                    return semantic_error(node, error,
+                        "La política #spill de #agrupar requiere exactamente una métrica");
             }
             break;
         case AST_AGRUPACION_POR:
+        case AST_AGRUPACION_SPILL:
         case AST_RESUMEN_METRICA:
+            if (node->type == AST_AGRUPACION_SPILL &&
+                (!node->value || !node->value[0] || strlen(node->value) > 220u ||
+                 node->group_memory_budget_bytes < 4096u ||
+                 node->group_memory_budget_bytes > 536870912u ||
+                 node->group_spill_quota_bytes == 0 ||
+                 node->group_spill_quota_bytes > 4294967296u ||
+                 node->group_max_key_bytes < 2u ||
+                 node->group_max_key_bytes > 1048576u ||
+                 node->group_max_output_groups == 0 ||
+                 node->group_max_output_groups > 1000000u))
+                return semantic_error(node, error,
+                    "Política #spill fuera de sus límites duros de recursos");
             if (node->type == AST_RESUMEN_METRICA &&
                 node->stream_operation != AST_STREAM_OPERATION_NONE &&
                 !known_stream_operation(node->stream_operation))

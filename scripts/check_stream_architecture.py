@@ -39,10 +39,18 @@ if "AST_AGRUPACION_POR" not in stream_runtime or "group_key->value" not in strea
     raise SystemExit("grouping key bypasses typed AST execution")
 if "milena_stream_csv_grouped_with_options" not in stream_header:
     raise SystemExit("grouped streaming API is not declared in the canonical contract")
-# Do not let docs imply a spill implementation before a typed backend, source
-# manifest entry, runtime path, and end-to-end evidence actually exist.
-if "src/spill.c" in make or "src/spill_store.c" in make:
-    raise SystemExit("planned spill module must be implemented and integrated before entering SOURCES")
+# The bounded spill API is product code, but stream.c remains RAM-bounded and
+# does not route through the table adapter. Guard the separate canonical AST
+# integration so an API-only spill cannot be mistaken for a language feature.
+if "src/spill.c" in make:
+    raise SystemExit("unplanned legacy spill module entered product SOURCES")
+if "src/spill_store.c" in make and (
+    "src/language_grouped_spill.c" not in make or
+    '"language_grouped_spill.c"' not in manifest or
+    "AST_AGRUPACION_SPILL" not in ast + parser or
+    "milena_language_group_by_spill" not in runtime
+):
+    raise SystemExit("grouped spill API lacks its typed canonical #agrupar adapter")
 if "no hay spill-to-disk" not in streaming_docs.lower():
     raise SystemExit("streaming docs must state that grouped spill is not implemented")
 if "no implementa spill-to-disk" not in pr25_docs.lower():

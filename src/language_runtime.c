@@ -3,6 +3,7 @@
 #include "array.h"
 #include "dataset.h"
 #include "stream.h"
+#include "language_grouped_spill.h"
 #include "analysis.h"
 #include "schema.h"
 #include "table.h"
@@ -1818,11 +1819,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 }
             } else if (block->type == AST_BLOQUE_AGRUPAR) {
                 const ASTNode *group_key = NULL;
+                const ASTNode *spill_policy = NULL;
                 const ASTNode *summaries[16];
                 size_t summary_count = 0;
                 for (size_t j = 0; j < block->child_count; j++) {
                     if (block->children[j]->type == AST_AGRUPACION_POR) {
                         group_key = block->children[j];
+                    } else if (block->children[j]->type == AST_AGRUPACION_SPILL) {
+                        spill_policy = block->children[j];
                     } else if (block->children[j]->type == AST_RESUMEN_METRICA &&
                                summary_count < 16) {
                         summaries[summary_count++] = block->children[j];
@@ -1865,10 +1869,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     const char *key_names[1] = {group_key->value};
                     MilenaTable grouped = {0};
                     milena_table_init(&grouped);
-                    status = milena_table_group_by(&grouped, &canonical_table,
-                                                   key_names, 1,
-                                                   specifications, summary_count,
-                                                   error);
+                    if (spill_policy) {
+                        status = milena_language_group_by_spill(&grouped,
+                            &canonical_table, group_key->value,
+                            &specifications[0], spill_policy, error);
+                    } else {
+                        status = milena_table_group_by(&grouped, &canonical_table,
+                            key_names, 1, specifications, summary_count, error);
+                    }
                     if (status == MILENA_OK) {
                         milena_table_swap(&canonical_table, &grouped);
                         for (size_t j = 0; j < summary_count; j++) {
