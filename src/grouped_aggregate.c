@@ -80,6 +80,7 @@ static bool table_size_for_groups(size_t groups, size_t *table_size) {
 
 static MilenaStatus flush_groups(MilenaGroupedAggregate *grouped,
                                  MilenaError *error) {
+    if (grouped->failed) return grouped->failure_status;
     if (grouped->group_count == 0) return MILENA_OK;
     size_t max_record;
     if (!milena_size_add(GROUP_RECORD_FIXED, grouped->max_key_bytes, &max_record)) {
@@ -88,6 +89,8 @@ static MilenaStatus flush_groups(MilenaGroupedAggregate *grouped,
     }
     unsigned char *record = malloc(max_record);
     if (!record) {
+        grouped->failed = true;
+        grouped->failure_status = MILENA_ERR_MEMORY;
         group_error(error, MILENA_ERR_MEMORY, "Sin memoria para serializar grupos");
         return MILENA_ERR_MEMORY;
     }
@@ -108,6 +111,12 @@ static MilenaStatus flush_groups(MilenaGroupedAggregate *grouped,
     }
     free(record);
     if (status == MILENA_OK) clear_groups(grouped);
+    else {
+        /* A prefix may already have reached disk. The in-memory map still
+         * contains every group, so retrying would duplicate that prefix. */
+        grouped->failed = true;
+        grouped->failure_status = status;
+    }
     return status;
 }
 
@@ -216,6 +225,11 @@ MilenaStatus milena_grouped_aggregate_add(
         (!key && key_length != 0) || key_length > grouped->max_key_bytes) {
         group_error(error, MILENA_ERR_ARGUMENT, "Clave o estado inválido para agregar fila agrupada");
         return MILENA_ERR_ARGUMENT;
+    }
+    if (grouped->failed) {
+        group_error(error, grouped->failure_status,
+                    "Agregación agrupada fallida; no se permiten más operaciones");
+        return grouped->failure_status;
     }
     const unsigned char *bytes = key;
     bool found = false;
@@ -411,12 +425,21 @@ MilenaStatus milena_grouped_aggregate_finalize(
         group_error(error, MILENA_ERR_ARGUMENT, "Agregación agrupada no finalizable");
         return MILENA_ERR_ARGUMENT;
     }
+    if (grouped->failed) {
+        group_error(error, grouped->failure_status,
+                    "Agregación agrupada fallida; no se puede reintentar finalización");
+        return grouped->failure_status;
+    }
     if (groups_emitted) *groups_emitted = 0;
     MilenaStatus status = flush_groups(grouped, error);
     if (status != MILENA_OK) return status;
     status = milena_spill_store_close(&grouped->spill, error);
     grouped->spill_open = false;
-    if (status != MILENA_OK) return status;
+    if (status != MILENA_OK) {
+        grouped->failed = true;
+        grouped->failure_status = status;
+        return status;
+    }
     grouped->finalized = true;
 
     size_t max_record = GROUP_RECORD_FIXED + grouped->max_key_bytes;

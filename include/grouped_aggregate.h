@@ -35,6 +35,8 @@ typedef struct {
     MilenaSpillStore spill;
     bool spill_open;
     bool finalized;
+    bool failed;
+    MilenaStatus failure_status;
 } MilenaGroupedAggregate;
 
 /* memory_budget_bytes bounds the resident map and external-sort payload
@@ -42,7 +44,9 @@ typedef struct {
  * caller allocations and libc/stdio internals. spill_quota_bytes bounds the
  * append-only input spill; external-sort runs are independently capped at
  * 2x that quota in aggregate. max_key_bytes bounds every accepted key/record.
- * The scratch path must not already exist; concurrent writers are unsupported. */
+ * The scratch path must not already exist; concurrent writers are unsupported.
+ * Any flush failure makes the handle terminal: add/finalize reject retries to
+ * prevent replaying a partially persisted map and double-counting its prefix. */
 MilenaStatus milena_grouped_aggregate_open(
     const char *spill_path, size_t memory_budget_bytes, size_t max_key_bytes,
     size_t spill_quota_bytes, MilenaGroupedAggregate *grouped,

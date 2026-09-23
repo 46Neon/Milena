@@ -142,7 +142,11 @@ buffers de lectura/fusión queda acotada por el presupuesto del reducer.
 El spill de entrada mantiene su cuota configurada y los runs temporales se
 limitan en conjunto a dos veces esa cuota (además del spill de entrada); una
 falta de espacio o cuota falla explícitamente, y se eliminan los temporales
-creados por la operación fallida cuando es posible. El scratch debe ser nuevo,
+creados por la operación fallida cuando es posible. Si un flush del mapa se
+interrumpe después de persistir un prefijo, el handle queda en estado terminal
+y rechaza add/finalize posteriores, evitando reanexar ese prefijo y duplicar
+conteos; la prueba de cuota verifica que el número de registros persistidos no
+cambia tras los reintentos rechazados. El scratch debe ser nuevo,
 los escritores concurrentes sobre una misma ruta no están soportados, y esta
 fusión local no equivale a hash partitioning distribuido ni a una promesa de
 rendimiento industrial. Las pruebas cubren derrames, múltiples pasadas para

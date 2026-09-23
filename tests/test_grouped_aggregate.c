@@ -115,6 +115,14 @@ int main(void) {
         CHECK_OK(milena_grouped_aggregate_add(&grouped, &key, 1, (double)i, &error));
     }
     assert(milena_grouped_aggregate_add(&grouped, "z", 1, 9.0, &error) == MILENA_ERR_OVERFLOW);
+    assert(grouped.failed && grouped.failure_status == MILENA_ERR_OVERFLOW);
+    size_t persisted_prefix = grouped.spill.record_count;
+    assert(persisted_prefix == 1);
+    /* Retrying either operation must not append the unflushed map again. */
+    assert(milena_grouped_aggregate_add(&grouped, "z", 1, 9.0, &error) == MILENA_ERR_OVERFLOW);
+    assert(milena_grouped_aggregate_finalize(&grouped, check_order, NULL,
+                                               &emitted, &error) == MILENA_ERR_OVERFLOW);
+    assert(grouped.spill.record_count == persisted_prefix);
     (void)milena_grouped_aggregate_close(&grouped, NULL);
     (void)remove(path);
 
