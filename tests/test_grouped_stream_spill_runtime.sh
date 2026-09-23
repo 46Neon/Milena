@@ -86,7 +86,10 @@ printf 'old-report' > "$TMP_DIR/spill.json"
 (cd "$TMP_DIR" && "$MILENA_BIN" run spill.milena)
 python3 - "$TMP_DIR/spill.json" <<'PY'
 import json,sys
-assert json.load(open(sys.argv[1]))['modo']=='flujo_agrupado_spill'
+report=json.load(open(sys.argv[1]))
+assert report['modo']=='flujo_agrupado_spill'
+assert report['bytes_spill'] >= 0 and report['registros_spill'] >= 0
+assert report['runs_spill'] >= 0
 PY
 [ ! -e "$TMP_DIR/scratch.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'spill.json.part.*' | grep -q .

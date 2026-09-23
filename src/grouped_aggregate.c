@@ -588,6 +588,7 @@ MilenaStatus milena_grouped_aggregate_finalize(
                 break;
             }
             run_count++;
+            grouped->sorted_runs = run_count;
             batch.count = 0;
         }
         memcpy(batch.records + batch.count * batch.stride, source_record, length);
@@ -618,7 +619,10 @@ MilenaStatus milena_grouped_aggregate_finalize(
                 group_error(error, MILENA_ERR_OVERFLOW, "Cuota temporal de runs agrupados agotada");
                 status = MILENA_ERR_OVERFLOW;
             }
-            if (status == MILENA_OK) run_count++;
+            if (status == MILENA_OK) {
+                run_count++;
+                grouped->sorted_runs = run_count;
+            }
         }
     }
     free(batch_memory);

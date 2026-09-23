@@ -203,3 +203,8 @@ bytes, run-count, unsupported type and multi-metric failures without partial
 reports or stale files. These limits bound configured operator state/output,
 not process-wide RSS. Timings remain observations without portable thresholds;
 cloud/Arrow/Parquet/ETL general, distributed execution and ML remain future work.
+
+
+## Reducer spill telemetry
+
+The canonical grouped-spill JSON report now exposes `bytes_spill`, `registros_spill`, and `runs_spill`. The first two are actual append-store bytes (including framing) and records; the third is the initial sorted-run count written by the reducer, not a configured maximum or estimate. The values are snapshotted from reducer/store state before close and are only published with a fully successful staged report. The 1,000,000-row, 4 KiB-budget validation requires positive source-spill bytes and records (and an actual sort run), proving that this fixture exercised the reducer spill path. These counters and timing are workload observations, not performance thresholds or general scale guarantees. Arrow/Parquet, cloud, general ETL, network/distributed execution, and ML remain outside the implemented scope.

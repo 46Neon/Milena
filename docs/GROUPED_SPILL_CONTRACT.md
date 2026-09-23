@@ -52,7 +52,16 @@ con `MoveFileEx` en Windows, solo cuando lectura, límites, reducción, escritur
 y cierre finalizaron bien. En error se elimina staging, runs y scratch. La
 prueba E2E compara el valor del corte spill con el agrupamiento de referencia
 en memoria mediante tolerancia y compara los contadores de filas válidas,
-nulas e inválidas por grupo.
+nulas e inválidas por grupo. El reporte JSON incluye `bytes_spill`,
+`registros_spill` y `runs_spill`: bytes/records son las escrituras append-only
+contabilizadas por el `MilenaSpillStore` real (incluyen cabeceras/trailers del
+formato), y runs es el número de corridas iniciales efectivamente materializadas
+por el sorter del reducer. No se estiman ni extrapolan desde las opciones.
+El wrapper copia estos contadores del estado del reducer antes de cerrarlo,
+los publica solo tras completar el staging y dejan valor cero en el reporte API
+si la operación falla. La validación reproducible de un millón de filas con
+presupuesto de 4 KiB exige bytes y registros reales mayores que cero (y una
+corrida ordenada); estos valores son observaciones, sin umbral de rendimiento.
 
 El contrato de memoria distingue el búfer de registro CSV (capacidad limitada
 por `max_record_bytes`), la copia acotada de cabecera, `max_columns` punteros,

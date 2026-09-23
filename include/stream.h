@@ -66,6 +66,11 @@ typedef struct {
     size_t bytes_read;
     size_t groups;
     size_t max_groups;
+    /* Source grouped-reducer spill, excluding temporary external-sort runs. */
+    size_t spill_bytes;
+    size_t spill_records;
+    /* Initial sorted runs actually written by the reducer; 0 for no spill. */
+    size_t spill_runs;
 } MilenaStreamReport;
 
 /*

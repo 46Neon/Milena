@@ -111,6 +111,14 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
                     raise AssertionError(f"value mismatch for {key}: {expected} != {observed}")
             if scratch.exists():
                 raise AssertionError("spill scratch file remains after successful run")
+            spill_counters = {
+                "source_spill_bytes": spill_report.get("bytes_spill"),
+                "source_spill_records": spill_report.get("registros_spill"),
+                "initial_sorted_runs": spill_report.get("runs_spill"),
+            }
+            if any(not isinstance(value, int) or value < 0
+                   for value in spill_counters.values()):
+                raise AssertionError("spill report omitted reducer telemetry")
             measurements.append({
                 "repetition": repetition + 1,
                 "memory_elapsed_seconds": memory_seconds,
@@ -119,6 +127,7 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
                 "spill_backend_elapsed_ms": spill_report.get("tiempo_ms"),
                 "spill_report_bytes": spill_report.get("bytes_salida"),
                 "spill_limit_bytes": spill_report.get("limite_salida_bytes"),
+                **spill_counters,
             })
         return {"rows": rows, "groups": groups, "input_bytes": byte_count,
                 "spill_memory_budget_bytes": MEMORY_BUDGET_BYTES,
@@ -154,7 +163,8 @@ def main() -> int:
                         "commit": os.environ.get("GITHUB_SHA", "unknown")},
         "methodology": ("Deterministic generated CSV; canonical lexer-parser-AST-"
                         "semantic-runtime-stream backend; compare in-memory and "
-                        "spill output values and record wall-clock observations."),
+                        "spill output values, report actual reducer spill byte/record "
+                        "and initial-run counters, and record wall-clock observations."),
         "limitations": [
             "No RSS measurement or global memory guarantee; configured reducer memory is not total process RSS.",
             "No SLO or performance guarantee; results apply only to the recorded environment and workload.",

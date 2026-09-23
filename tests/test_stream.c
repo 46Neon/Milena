@@ -201,6 +201,53 @@ int main(void) {
     remove(group_input);
     remove(group_output);
 
+    /* Public report counters must come from the canonical reducer/store, and
+     * stay zero on a failed staged publication even after real spill occurred. */
+    const char *spill_input = "tests/.stream_group_spill_fixture.csv";
+    const char *spill_output = "tests/.stream_group_spill_report.json";
+    const char *spill_scratch = "tests/.stream_group_spill_scratch";
+    FILE *spill_fixture = fopen(spill_input, "wb");
+    assert(spill_fixture != NULL);
+    fputs("zona,importe\n", spill_fixture);
+    for (size_t i = 0; i < 200; ++i)
+        fprintf(spill_fixture, "g%03zu,1\n", i);
+    assert(fclose(spill_fixture) == 0);
+    MilenaStreamMetric spill_metric = {"importe", "importe_suma", MILENA_STREAM_SUM};
+    MilenaStreamOptions spill_options = milena_stream_options_default();
+    spill_options.max_groups = 256;
+    MilenaStreamSpillPolicy spill_policy = {spill_scratch, 4096, 1048576,
+        32, 256, 2097152, 4096};
+    MilenaStreamReport spill_report = {0};
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_spill_with_options(spill_input, spill_output,
+        "zona", &spill_metric, &spill_options, &spill_policy, &spill_report,
+        &grouped_error) == MILENA_OK);
+    assert(spill_report.groups == 200);
+    assert(spill_report.spill_bytes > 0);
+    assert(spill_report.spill_records > 0);
+    assert(spill_report.spill_runs > 0);
+    FILE *spill_report_file = fopen(spill_output, "rb");
+    assert(spill_report_file != NULL);
+    assert(fclose(spill_report_file) == 0);
+    spill_report_file = fopen(spill_scratch, "rb");
+    assert(spill_report_file == NULL);
+    remove(spill_output);
+
+    spill_options.max_groups = 1;
+    memset(&spill_report, 0xA5, sizeof(spill_report));
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_spill_with_options(spill_input, spill_output,
+        "zona", &spill_metric, &spill_options, &spill_policy, &spill_report,
+        &grouped_error) != MILENA_OK);
+    assert(spill_report.spill_bytes == 0);
+    assert(spill_report.spill_records == 0);
+    assert(spill_report.spill_runs == 0);
+    spill_report_file = fopen(spill_output, "rb");
+    assert(spill_report_file == NULL);
+    spill_report_file = fopen(spill_scratch, "rb");
+    assert(spill_report_file == NULL);
+    remove(spill_input);
+
     /* The no-spill stream accumulator uses compensated summation. Compare it
      * with the mergeable grouped-spill path when cancellation values are
      * deliberately split across many map flushes and external merge passes. */

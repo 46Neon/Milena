@@ -99,6 +99,15 @@ def validate_spill_report(report: dict[str, Any], malformed_expected: int,
                          "bytes_entrada": input_bytes}.items():
         if report.get(field) != value:
             raise AssertionError(f"spill {field}: expected {value!r}, got {report.get(field)!r}")
+    spill_bytes = report.get("bytes_spill")
+    spill_records = report.get("registros_spill")
+    spill_runs = report.get("runs_spill")
+    if not isinstance(spill_bytes, int) or spill_bytes <= 0:
+        raise AssertionError(f"1M workload did not report actual source spill bytes: {spill_bytes!r}")
+    if not isinstance(spill_records, int) or spill_records <= 0:
+        raise AssertionError(f"1M workload did not report actual source spill records: {spill_records!r}")
+    if not isinstance(spill_runs, int) or spill_runs <= 0:
+        raise AssertionError(f"1M workload did not report reducer-created sort runs: {spill_runs!r}")
     results = report.get("resultados")
     if not isinstance(results, list) or len(results) != 128:
         raise AssertionError("spill report did not materialize exactly the bounded 128 output groups")
@@ -123,6 +132,9 @@ def validate_spill_report(report: dict[str, Any], malformed_expected: int,
             "scratch_quota_bytes": 134217728,
             "output_byte_quota": 16777216,
             "max_initial_runs": 4096,
+            "observed_source_spill_bytes": spill_bytes,
+            "observed_source_spill_records": spill_records,
+            "observed_initial_sorted_runs": spill_runs,
             "backend_elapsed_milliseconds": report.get("tiempo_ms"),
             "backend_rows_per_second": report.get("filas_por_segundo")}
 

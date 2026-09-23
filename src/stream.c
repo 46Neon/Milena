@@ -287,6 +287,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
                                        const MilenaStreamOptions *requested,
                                        MilenaStreamReport *report,
                                        MilenaError *error) {
+    if (report) memset(report, 0, sizeof(*report));
     MilenaStreamOptions defaults = milena_stream_options_default();
     const MilenaStreamOptions *options = requested ? requested : &defaults;
     if (!input_path || !output_path || !metrics || metric_count == 0 ||
@@ -298,7 +299,6 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         !isfinite(options->max_elapsed_milliseconds) ||
         options->max_groups > STREAM_HARD_MAX_GROUPS)
         return MILENA_ERR_ARGUMENT;
-    if (report) memset(report, 0, sizeof(*report));
     if (error) milena_error_clear(error);
     double started = stream_now_ms();
     FILE *input = fopen(input_path, "rb");
@@ -1184,6 +1184,7 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     const MilenaStreamMetric *metric, const MilenaStreamOptions *requested,
     const MilenaStreamSpillPolicy *policy, MilenaStreamReport *report,
     MilenaError *error) {
+    if (report) memset(report, 0, sizeof(*report));
     MilenaStreamOptions defaults = milena_stream_options_default();
     const MilenaStreamOptions *options = requested ? requested : &defaults;
     if (!input_path || !output_path || !group_column || !group_column[0] ||
@@ -1214,7 +1215,6 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     }
     size_t output_byte_limit = policy->max_output_bytes ?
         policy->max_output_bytes : STREAM_DEFAULT_SPILL_OUTPUT_BYTES;
-    if (report) memset(report, 0, sizeof(*report));
     if (error) milena_error_clear(error);
     double started = stream_now_ms();
     FILE *input = NULL, *staged = NULL;
@@ -1226,6 +1226,7 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     int group_index = -1, metric_index = -1;
     bool reducer_open = false, scratch_owned = false, published = false;
     bool resource_limit_reached = false;
+    size_t spill_bytes = 0, spill_records = 0, spill_runs = 0;
     MilenaGroupedAggregate reducer = {0};
     MilenaStatus status = MILENA_OK;
 
@@ -1416,6 +1417,10 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     status = milena_grouped_aggregate_finalize(&reducer,
         stream_spill_emit_group, &emitter, &groups_emitted, error);
     if (status != MILENA_OK) goto spill_finish;
+    /* Snapshot counters from the real reducer before close releases its state. */
+    spill_bytes = reducer.spill.bytes_used;
+    spill_records = reducer.spill.record_count;
+    spill_runs = reducer.sorted_runs;
     if (options->max_elapsed_milliseconds > 0.0 &&
         stream_now_ms() - started >= options->max_elapsed_milliseconds) {
         milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
@@ -1431,9 +1436,19 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
                          "No se pudo completar el conteo de grupos del reporte");
         status = MILENA_ERR_IO; goto spill_finish;
     }
+    char telemetry_suffix[192];
+    int telemetry_length = snprintf(telemetry_suffix, sizeof(telemetry_suffix),
+        "],\"bytes_spill\":%zu,\"registros_spill\":%zu,\"runs_spill\":%zu}\n",
+        spill_bytes, spill_records, spill_runs);
     if (report_end < 0 || (size_t)report_end > output_byte_limit ||
-        output_byte_limit - (size_t)report_end < 3u ||
-        fputs("]}\n", staged) == EOF || fflush(staged) != 0) {
+        telemetry_length < 0 || (size_t)telemetry_length >= sizeof(telemetry_suffix) ||
+        (size_t)telemetry_length > output_byte_limit - (size_t)report_end) {
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "El reporte spill superaría el límite de bytes de salida");
+        status = MILENA_ERR_OVERFLOW; goto spill_finish;
+    }
+    if (fwrite(telemetry_suffix, 1, (size_t)telemetry_length, staged) !=
+            (size_t)telemetry_length || fflush(staged) != 0) {
         milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
                          "No se pudo completar el reporte spill agrupado");
         status = MILENA_ERR_IO; goto spill_finish;
@@ -1478,6 +1493,9 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         report->resource_limit_reached = resource_limit_reached;
         report->groups = groups_emitted;
         report->max_groups = output_group_limit;
+        report->spill_bytes = spill_bytes;
+        report->spill_records = spill_records;
+        report->spill_runs = spill_runs;
     }
 spill_finish:
     if (input) {
