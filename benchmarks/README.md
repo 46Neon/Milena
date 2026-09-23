@@ -51,7 +51,9 @@ Termux.
 `make scale-million-row` genera un CSV determinista de exactamente 1.000.000
 filas y ejecuta un resumen global mediante `milena run` y la sintaxis española
 canónica. Valida filas leídas/válidas/malformadas, suma/media/conteo, bytes de
-entrada y límites de registro/búfer; informa throughput, tiempo, capacidad y
+entrada y límites de registro/búfer; comprueba además que un límite de filas
+infractor falla sin producir un reporte parcial de éxito. Informa throughput,
+tiempo, capacidad y
 pico del búfer y RSS pico portable cuando Python/el sistema lo soportan. Los
 conteos son exactos; los agregados de punto flotante se comparan con tolerancia
 numérica estrecha. El resultado es una observación de ese workload/build/hardware,

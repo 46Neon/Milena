@@ -66,7 +66,7 @@ def peak_child_rss_bytes() -> int | None:
     else:
         normalized = value * 1024
     # ru_maxrss is a high-water mark across children; this script launches only
-    # the one Milena process whose execution is being measured.
+    # the Milena success and row-budget validation processes being measured.
     return normalized
 
 
@@ -176,6 +176,23 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
             raise AssertionError("milena run succeeded without writing its report")
         report = json.loads(report_path.read_text(encoding="utf-8"))
         validated = validate_report(report, malformed, input_bytes)
+
+        # Exercise the AST-carried row budget too: a run capped one row below
+        # the fixture must fail and must not publish a successful partial report.
+        limited_report = work / "reporte_limite.json"
+        limited_script = work / "limite.milena"
+        limited_script.write_text(
+            f'''.analisis validacion_limite_filas {{\n    datos desde {csv_literal}\n        procesar por lotes de {CHUNK_ROWS} filas\n        con registros de hasta 1 MiB\n        con columnas de 16\n        con filas hasta {ROWS - 1}\n    resumir {{ suma de "importe"; }}\n    guardar resultado en {json.dumps(str(limited_report), ensure_ascii=False)}\n}}\n''',
+            encoding="utf-8")
+        limit_started = time.perf_counter()
+        limited = subprocess.run(
+            [str(BINARY), "run", str(limited_script)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        limit_seconds = time.perf_counter() - limit_started
+        if limited.returncode == 0 or limited_report.exists():
+            raise AssertionError("row-limit overflow must fail without a partial success report")
+
         rss_bytes = peak_child_rss_bytes()
         result: dict[str, Any] = {
             "schema": "milena-million-row-validation-v1",
@@ -187,6 +204,9 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
                         "malformed_expected": malformed,
                         "valid_expected": ROWS - malformed,
                         "generation_seconds": generation_seconds},
+            "resource_limit_check": {"row_limit": ROWS - 1,
+                                     "rejected_without_partial_report": True,
+                                     "process_elapsed_seconds": limit_seconds},
             "measurements": {**validated,
                              "process_elapsed_seconds": process_seconds,
                              "process_rows_per_second": ROWS / process_seconds if process_seconds else None,

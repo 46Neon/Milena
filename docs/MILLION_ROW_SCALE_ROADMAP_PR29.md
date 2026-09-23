@@ -56,7 +56,9 @@ fase no se considera terminada por compilar solamente.
 - Añadir un target reproducible de Makefile y un workflow de escala separado,
   manual y programado, fuera de la CI ordinaria.
 - Esta fase prueba una operación de agregación global, no una arquitectura
-  general de un millón de filas.
+  general de un millón de filas. También ejecuta el mismo programa con el límite
+  de filas un registro por debajo del fixture y exige un error sin reporte
+  parcial de éxito.
 
 ### Fase 1 — Plan lógico y físico unificado
 

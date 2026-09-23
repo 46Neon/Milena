@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ast = (ROOT / "include/ast.h").read_text()
 parser = (ROOT / "src/parser.c").read_text()
 runtime = (ROOT / "src/language_runtime.c").read_text()
+planner = (ROOT / "src/query_plan.c").read_text()
 make = (ROOT / "Makefile").read_text()
 manifest = (ROOT / "scripts/check_source_manifest.py").read_text()
 stream = (ROOT / "src/stream.c").read_text()
@@ -35,8 +36,12 @@ if "summary->stream_operation" not in stream_runtime:
     raise SystemExit("natural stream metrics do not use typed AST operations")
 if "milena_stream_csv_grouped_with_options" not in stream_runtime:
     raise SystemExit("grouped streaming is not invoked by the canonical runtime")
-if "AST_AGRUPACION_POR" not in stream_runtime or "group_key->value" not in stream_runtime:
-    raise SystemExit("grouping key bypasses typed AST execution")
+if ("AST_AGRUPACION_POR" not in planner or "plan->group_key" not in stream_runtime or
+        "group_key->value" not in stream_runtime or
+        "MILENA_PHYSICAL_CSV_STREAM_GROUPED" not in stream_runtime):
+    raise SystemExit("grouping key bypasses the typed logical/physical plan")
+if "milena_stream_execution_plan_build" not in runtime:
+    raise SystemExit("canonical runtime bypasses the typed streaming plan")
 if "milena_stream_csv_grouped_with_options" not in stream_header:
     raise SystemExit("grouped streaming API is not declared in the canonical contract")
 # Do not let docs imply a spill implementation before a typed backend, source
