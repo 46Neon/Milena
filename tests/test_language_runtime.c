@@ -285,7 +285,7 @@ static int run_human_stream_pipeline(void) {
     const char *source =
         ".analisis ventas_grandes {\n"
         "  datos desde \"test-language-runtime-human-stream.csv\" procesar por lotes de 2 filas con registros de hasta 1 MiB con columnas de 8\n"
-        "  resumir { suma de \"importe\"; media de \"importe\"; contar de \"importe\"; }\n"
+        "  resumir { suma de \"importe\"; media de \"importe\"; minimo de \"importe\"; maximo de \"importe\"; contar de \"importe\"; varianza de \"importe\"; desviacion_estandar de \"importe\"; }\n"
         "  guardar resultado en \"test-language-runtime-human-stream.json\"\n"
         "}\n";
     MilenaError error;
