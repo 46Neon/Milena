@@ -37,11 +37,13 @@ if "summary->stream_operation" not in stream_runtime:
     raise SystemExit("natural stream metrics do not use typed AST operations")
 if "milena_stream_csv_grouped_with_options" not in stream_runtime:
     raise SystemExit("grouped streaming is not invoked by the canonical runtime")
-if "milena_stream_csv_grouped_spill_with_options" not in stream_runtime:
+if "milena_stream_csv_grouped_spill_with_keys_and_options" not in stream_runtime:
     raise SystemExit("streaming spill is not invoked by the canonical runtime")
-if "milena_stream_csv_grouped_spill_with_options" not in stream_header or \
+if "milena_stream_csv_grouped_spill_with_keys_and_options" not in stream_header or \
    "milena_grouped_aggregate_finalize" not in stream:
     raise SystemExit("streaming spill does not use the canonical reducer callback")
+if "group_key_count" not in stream_runtime or "group_keys[2]" not in (ROOT / "include/query_plan.h").read_text():
+    raise SystemExit("composite group keys bypass the typed plan")
 if ("AST_AGRUPACION_POR" not in planner or "plan->group_key" not in stream_runtime or
         "group_key->value" not in stream_runtime or
         "MILENA_PHYSICAL_CSV_STREAM_GROUPED" not in stream_runtime):
@@ -90,8 +92,9 @@ if ("src/group_key_codec.c" not in make or '"group_key_codec.c"' not in manifest
         "group_key_codec.c" not in windows_build or "group_key_codec.h" not in stream or
         (ROOT / "tests/support/group_key_codec.c").exists()):
     raise SystemExit("group key codec must be a single linked product source")
-if "milena_stream_csv_grouped_spill_with_options" not in stream_runtime:
-    raise SystemExit("canonical caller must remain on the single-key compatibility adapter")
+if "milena_stream_csv_grouped_spill_with_options" not in stream_header or \
+   "milena_stream_csv_grouped_spill_with_keys_and_options" not in stream_header:
+    raise SystemExit("single-key compatibility API and composite-key spill API must both remain available")
 # Related analysis, SST, and finance remain language-runtime capabilities.
 for marker in ("AST_COMANDO_SST", "runtime_write_sst", "milena_simple_interest", "src/finance.c"):
     if marker not in runtime + make:

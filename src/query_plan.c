@@ -122,10 +122,11 @@ MilenaStatus milena_stream_execution_plan_build(
                 return plan_error(error, MILENA_ERR_PARSE,
                                   "La agrupación del plan contiene un nodo nulo");
             if (child->type == AST_AGRUPACION_POR) {
-                if (plan->group_key || !child->value || !child->value[0])
+                if (plan->group_key_count >= 2 || !child->value || !child->value[0])
                     return plan_error(error, MILENA_ERR_PARSE,
-                                      "El plan agrupado requiere una única clave válida");
-                plan->group_key = child;
+                                      "El plan agrupado admite como máximo dos claves válidas");
+                plan->group_keys[plan->group_key_count++] = child;
+                if (!plan->group_key) plan->group_key = child;
             } else if (child->type == AST_BLOQUE_RESUMIR) {
                 if (plan->group_summary)
                     return plan_error(error, MILENA_ERR_PARSE,
@@ -148,9 +149,13 @@ MilenaStatus milena_stream_execution_plan_build(
                                   "El plan agrupado contiene un operador no soportado");
             }
         }
-        if (!plan->group_key || !valid_summary(plan->group_summary, false))
+        if (plan->group_key_count == 0 || !plan->group_key ||
+            !valid_summary(plan->group_summary, false))
             return plan_error(error, MILENA_ERR_PARSE,
                               "El plan agrupado requiere clave y métricas tipadas");
+        if (plan->group_key_count > 1 && !plan->spill_policy)
+            return plan_error(error, MILENA_ERR_UNSUPPORTED,
+                              "La agrupación de varias claves solo está soportada con #spill");
         if (plan->spill_policy) {
             if (plan->group_summary->child_count > MILENA_STREAM_MAX_METRICS)
                 return plan_error(error, MILENA_ERR_UNSUPPORTED,

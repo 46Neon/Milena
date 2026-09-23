@@ -28,19 +28,21 @@ En `.analisis` con una fuente `datos desde` en modo streaming se permite un solo
 
 ### Agrupación streaming con spill y métricas múltiples
 
-En `.analisis` con CSV streaming, `agrupar por "grupo" #spill(...) resumir { ... }` admite exactamente una clave de grupo declarada `texto` y entre 1 y 64 métricas tipadas, en el orden del bloque. La sintaxis de una segunda clave (por ejemplo, `agrupar por "grupo", "periodo"`) se rechaza en parsing antes de abrir el CSV; las claves compuestas texto+número no están implementadas ni cubiertas por la validación de un millón de filas. No confundir la identidad interna compuesta (grupo, métrica) del reducer con una clave de grupo compuesta. Las métricas admitidas son: `suma`, `media`, `minimo`, `maximo` sobre columnas `numerica`, y `contar` sobre una columna declarada. Ejemplo:
+En `.analisis` con CSV streaming, la agrupación conserva la forma histórica de una sola clave (`agrupar por "grupo"`) y admite hasta 64 métricas tipadas. El spill permite además una o dos claves de grupo declaradas `texto`; una clave compuesta solo se admite con `#spill`, y ambas columnas deben estar declaradas, ser distintas y existir en la cabecera CSV. Una solicitud de varias claves sin spill, una tercera clave, columnas desconocidas o claves de otro tipo se rechaza antes de ejecutar/abrir los datos. El adaptador tabular `.agrupar dataset` conserva su alcance separado.
 
 ```milena
-.analisis resumen {
-  variable grupo texto
+.analisis resumen_compuesto {
+  variable region texto
+  variable segmento texto
   variable importe numerica
   datos desde "entrada.csv" con filas hasta 1000000 con tiempo hasta 300000 ms
-  agrupar por "grupo" #spill("scratch.bin", 4096, 134217728, 4096, 100000, 16777216, 4096)
-    resumir { suma de "importe"; media de "importe"; contar de "importe"; }
+  agrupar por "region", "segmento" #spill("scratch.bin", 4096, 134217728, 4096, 100000, 16777216, 4096)
+    resumir { suma de "importe"; contar de "importe"; }
   guardar resultado en "reporte.json"
 }
 ```
 
-Todas las métricas reutilizan el mismo reducer tipado con identidad de métrica codificada junto a la clave del grupo; se permite que operaciones distintas, por ejemplo `suma`, `media` y `contar`, usen la misma columna numérica. No se crea un reducer independiente ni se materializan las filas. Después de ordenar cada run, los estados parciales repetidos de cada clave compuesta (grupo, métrica) se combinan antes de la fusión externa por pares; por ello cada grupo aparece una sola vez, en orden de bytes, y sus métricas aparecen en el orden declarado, incluso si la agregación residente vació varias veces claves repetidas. La combinación preserva estados tipados y conteos exactos. Cada métrica conserva su propio conteo de válidos, nulos e inválidos. `contar` cuenta celdas no vacías, incluidas cadenas no numéricas; para métricas numéricas, vacío es nulo y texto numérico malformado es inválido. En el resumen de cabecera, `filas_validas` cuenta filas con al menos una métrica válida y `filas_malformadas` filas con al menos una métrica nula o inválida; los dos conteos pueden solaparse. El límite de grupos cuenta claves distintas, no entradas internas grupo-métrica; presupuesto de memoria, cuota scratch, max_key_bytes codificada, grupos, bytes de reporte y runs permanecen explícitos y acotados. La semántica y el planner rechazan antes de ejecutar operaciones/tipos no admitidos. La forma tabular `.agrupar dataset` mantiene su alcance propio y no hereda esta extensión.
+El spill de una o dos claves texto reutiliza el mismo reducer tipado, identidad de métrica, ordenamiento externo y publicación atómica. Para una clave el esquema JSON existente (`clave`) no cambia; con dos claves el encabezado incluye `columnas_grupo` y cada resultado lleva `claves`, una lista de componentes `{nombre,tipo,valor,valido}` en el orden declarado. Las longitudes/type tags versionados mantienen distintos los límites entre componentes, incluso con comas, comillas o separadores en el texto; el texto vacío válido es distinto de un valor inválido/nulo. Los resultados compuestos son deterministas y se ordenan por la codificación completa de la clave. Las métricas aparecen en orden declarado: `suma`, `media`, `minimo`, `maximo` requieren columnas `numerica`; `contar` admite una columna declarada y cuenta celdas no vacías. Se permiten distintas operaciones sobre una misma columna.
 
-> **Composite grouping status:** the language currently accepts one text grouping key only. The binary pair-key codec is a tested internal groundwork item in the PR29 roadmap, not a user-visible feature; `.analisis` continues to reject a second key until canonical AST/planner/runtime/spill integration and end-to-end tests are complete. Numeric composite keys are also pending.
+Cada métrica conserva conteos tipados de válidos, nulos e inválidos. Para métricas numéricas, vacío es nulo y texto malformado es inválido; `contar` cuenta campos no vacíos, incluso no numéricos. El límite de grupos cuenta pares de valores distintos, no entradas internas grupo-métrica. Presupuestos de memoria, cuota scratch, bytes máximos de clave codificada, grupos, bytes de reporte y runs siguen explícitos y acotados; en error se eliminan temporales y no se publica un reporte parcial. Esta extensión solo cubre dos claves TEXT en el backend CSV de spill; claves compuestas numéricas, agrupación compuesta sin spill y extensión tabular permanecen fuera de alcance. La validación de un millón de filas sigue siendo la existente para workload de una clave y no se extrapola a claves compuestas ni a escalas arbitrarias.
+

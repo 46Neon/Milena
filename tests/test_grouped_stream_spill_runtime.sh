@@ -182,29 +182,119 @@ EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run time-limit.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/time-limit.json" ] && [ ! -e "$TMP_DIR/time-limit.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'time-limit.json.part.*' | grep -q .
-# Composite keys remain an explicit pre-execution limitation until their
-# typed encoding, reducer ordering, and JSON schema land as one vertical slice.
-# A second key is rejected by the parser even when the input file does not
-# exist; it must not reach data I/O or publish a partial report.
-cat > "$TMP_DIR/composite-key-pending.milena" <<EOF_M
-.analisis clave_compuesta_pendiente {
-  variable grupo texto
-  variable indice_num numerica
+# Canonical `.analisis` composite TEXT keys route through the same streaming
+# spill backend, including quoting, empty values, metrics, ordering and cleanup.
+python3 - "$TMP_DIR" <<'PYCOMP'
+import csv, pathlib, sys
+p=pathlib.Path(sys.argv[1])
+with (p/'composite.csv').open('w', newline='') as f:
+    w=csv.writer(f)
+    w.writerow(['region','segmento','valor'])
+    w.writerows([
+        ['north','alpha','1'], ['north','alpha','2'], ['north','alpha','6'],
+        ['north','comma,colon:pipe|','3'], ['north','quote"segment','4'],
+        ['north','','5'],
+    ])
+    for i in range(600):
+        w.writerow(['shared', f'key-{i:04d}', str(i + 1)])
+PYCOMP
+cat > "$TMP_DIR/composite.milena" <<EOF_M
+.analisis claves_compuestas {
+  variable region texto
+  variable segmento texto
   variable valor numerica
-  datos desde "missing-composite-input.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo", "indice_num" #spill("$TMP_DIR/composite-key.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
-  guardar resultado en "composite-key.json"
+  datos desde "composite.csv" con grupos de 100 con filas hasta 2000 con tiempo hasta 30000 ms
+  agrupar por "region", "segmento" #spill("$TMP_DIR/composite-scratch.bin", 4096, 1048576, 128, 1000, 1048576, 4096) resumir { suma de "valor"; contar de "valor"; }
+  guardar resultado en "composite.json"
 }
 EOF_M
-if composite_error=$(cd "$TMP_DIR" && "$MILENA_BIN" run composite-key-pending.milena 2>&1); then
-  echo "A composite spill key unexpectedly passed preflight" >&2
-  exit 1
-fi
-if ! printf '%s\n' "$composite_error" | grep -qi 'compuest'; then
-  printf '%s\n' "$composite_error" >&2
-  exit 1
-fi
-[ ! -e "$TMP_DIR/composite-key.json" ] && [ ! -e "$TMP_DIR/composite-key.bin" ]
+(cd "$TMP_DIR" && "$MILENA_BIN" run composite.milena)
+cp "$TMP_DIR/composite.milena" "$TMP_DIR/composite-repeat.milena"
+sed -i 's/composite-scratch.bin/composite-repeat-scratch.bin/; s/composite.json/composite-repeat.json/' "$TMP_DIR/composite-repeat.milena"
+(cd "$TMP_DIR" && "$MILENA_BIN" run composite-repeat.milena)
+cmp "$TMP_DIR/composite.json" "$TMP_DIR/composite-repeat.json"
+python3 - "$TMP_DIR/composite.json" <<'PYCOMP'
+import json,sys
+report=json.load(open(sys.argv[1]))
+assert report['modo']=='flujo_agrupado_spill'
+assert report['columnas_grupo']==[
+    {'nombre':'region','tipo':'texto'}, {'nombre':'segmento','tipo':'texto'}]
+rows=report['resultados']
+assert len(rows)==604, len(rows)
+def identity(row):
+    keys=row['claves']
+    assert len(keys)==2
+    assert all(k['tipo']=='texto' and k['valido'] is True for k in keys)
+    return tuple(k['valor'] for k in keys)
+values={identity(r):r for r in rows}
+assert len(values)==len(rows)
+assert values[('north','alpha')]['metricas'][0]['valor']==9
+assert values[('north','alpha')]['metricas'][1]['valor']==3
+assert values[('north','comma,colon:pipe|')]['metricas'][0]['valor']==3
+assert values[('north','quote"segment')]['metricas'][0]['valor']==4
+assert values[('north','')]['metricas'][0]['valor']==5
+assert values[('shared','key-0000')]['metricas'][0]['valor']==1
+assert values[('shared','key-0599')]['metricas'][0]['valor']==600
+assert all([m['operacion'] for m in r['metricas']]==['suma','conteo'] for r in rows)
+assert report['grupos']==604
+assert report['bytes_spill']>0 and report['registros_spill']>0 and report['runs_spill']>0, report
+PYCOMP
+[ ! -e "$TMP_DIR/composite-scratch.bin" ] && [ ! -e "$TMP_DIR/composite-repeat-scratch.bin" ]
+! find "$TMP_DIR" -maxdepth 1 -name 'composite*.json.part.*' | grep -q .
+
+# Negative composite requests fail in parse/semantics before input or scratch I/O.
+for case in third nonspill wrongtype unknown duplicate; do
+  case "$case" in
+    third) keys='"region", "segmento", "otra"'; decls='variable region texto
+  variable segmento texto
+  variable otra texto
+  variable valor numerica'; spill='#spill("'$TMP_DIR'/third.bin", 4096, 1048576, 128, 10)';;
+    nonspill) keys='"region", "segmento"'; decls='variable region texto
+  variable segmento texto
+  variable valor numerica'; spill='';;
+    wrongtype) keys='"region", "segmento"'; decls='variable region texto
+  variable segmento numerica
+  variable valor numerica'; spill='#spill("'$TMP_DIR'/wrongtype.bin", 4096, 1048576, 128, 10)';;
+    unknown) keys='"region", "missing"'; decls='variable region texto
+  variable valor numerica'; spill='#spill("'$TMP_DIR'/unknown.bin", 4096, 1048576, 128, 10)';;
+    duplicate) keys='"region", "region"'; decls='variable region texto
+  variable valor numerica'; spill='#spill("'$TMP_DIR'/duplicate.bin", 4096, 1048576, 128, 10)';;
+  esac
+  output="$case.json"
+  scratch="$TMP_DIR/$case.bin"
+  printf '.analisis invalido {
+  %b
+  datos desde "missing-composite-input.csv" con filas hasta 10 con tiempo hasta 1000 ms
+  agrupar por %s %s resumir { suma de "valor"; }
+  guardar resultado en "%s"
+}
+' "$decls" "$keys" "$spill" "$output" > "$TMP_DIR/$case.milena"
+  if (cd "$TMP_DIR" && "$MILENA_BIN" run "$case.milena"); then
+    echo "Invalid composite-key case unexpectedly passed: $case" >&2
+    exit 1
+  fi
+  [ ! -e "$TMP_DIR/$output" ] && [ ! -e "$scratch" ]
+  ! find "$TMP_DIR" -maxdepth 1 -name "$output.part.*" | grep -q .
+done
+
+# A declared pair whose second column is absent from the CSV fails during the
+# shared reader and removes its exclusive scratch/staging without publishing.
+printf 'region,valor
+north,1
+' > "$TMP_DIR/composite-missing-column.csv"
+cat > "$TMP_DIR/composite-missing-column.milena" <<EOF_M
+.analisis clave_compuesta_sin_columna {
+  variable region texto
+  variable segmento texto
+  variable valor numerica
+  datos desde "composite-missing-column.csv" con filas hasta 10 con tiempo hasta 1000 ms
+  agrupar por "region", "segmento" #spill("$TMP_DIR/composite-missing-column.bin", 4096, 1048576, 128, 10) resumir { suma de "valor"; }
+  guardar resultado en "composite-missing-column.json"
+}
+EOF_M
+if (cd "$TMP_DIR" && "$MILENA_BIN" run composite-missing-column.milena); then exit 1; fi
+[ ! -e "$TMP_DIR/composite-missing-column.json" ] && [ ! -e "$TMP_DIR/composite-missing-column.bin" ]
+! find "$TMP_DIR" -maxdepth 1 -name 'composite-missing-column.json.part.*' | grep -q .
 
 # Explicit typed rejection for unsupported key/metric types.
 cat > "$TMP_DIR/invalid-type.milena" <<EOF_M

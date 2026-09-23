@@ -25,7 +25,7 @@ universal ni una cota de RSS total.
 PR #29 está basado en el snapshot fijado `pr29-base/pr28-46b2366`
 (commit `46b2366a09208bc1b2bf8f5f8426b4bfbeef1f32`), no en una punta móvil
 ni en cambios nuevos de PR #28. El planner tipado de PR #29 reconoce la configuración AST de spill y el runtime
-canónico delega a `milena_stream_csv_grouped_spill_with_options` del backend
+canónico delega a `milena_stream_csv_grouped_spill_with_keys_and_options` del backend
 existente, reutilizando su lector CSV, reducer versionado, ordenamiento/fusión externos,
 cuotas y publicación transaccional; no hay copia paralela de almacenamiento o
 reducer. La identidad de métrica se añade a la clave opaca del reducer único.
@@ -96,8 +96,8 @@ un planner general de operadores, esquema, costos, filtros o formatos.
   registros multilínea; llevar presupuestos de filas, tiempo, columnas,
   registro, memoria y scratch desde sintaxis/AST hasta el backend.
 - Implementado en esta actualización: el plan físico canónico de `.analisis`
-  conecta la agrupación CSV con el API de spill existente; usa una clave texto y
-  hasta 64 métricas suma/media/mínimo/máximo/contar declaradas y tipadas, con
+  conecta la agrupación CSV con el API de spill existente; usa una o dos claves
+  TEXT y hasta 64 métricas suma/media/mínimo/máximo/contar declaradas y tipadas, con
   identidad de métrica incluida en la clave opaca del mismo reductor. Tras cada
   ordenamiento de run, los estados parciales repetidos de claves compuestas se
   combinan antes de la fusión externa acotada; la salida mantiene un único
@@ -109,15 +109,17 @@ un planner general de operadores, esquema, costos, filtros o formatos.
   codificada, cardinalidad de grupos de salida, bytes del reporte y máximo de
   runs; no crea un reductor por métrica ni materializa filas de entrada. No
   duplica almacén, serialización, estados mergeables, sort ni reducer.
-- Sigue pendiente ampliar fuentes/operadores y los contratos de key/métricas.
-  En particular, el spill actual acepta exactamente una clave de grupo de tipo
-  texto; una segunda clave, incluso declarada `numerica`, se rechaza durante
-  parsing antes de abrir la fuente. Las claves compuestas texto+número no se
-  implementan ni se incluyen en la validación de un millón de filas. La futura
-  extensión debe introducir un esquema JSON de componentes tipados y validez
-  explícita, codificación delimitada/versionada y orden determinista en el mismo
-  reducer antes de habilitar la sintaxis. Mantener límites de lectura y fallos
-  explícitos en cada backend.
+- Integración canónica de dos claves TEXT completada en esta actualización,
+  condicionada a que la suite y CI final pasen: lexer/parser/AST crea hasta dos
+  claves; semántica exige dos declaraciones TEXT distintas y rechaza múltiples
+  claves sin spill; planner y runtime las llevan al API existente
+  `milena_stream_csv_grouped_spill_with_keys_and_options`. Se comparte el único
+  codec/reducer, filtrado, métricas, budgets, telemetría, ordenamiento externo,
+  JSON y publicación/cleanup atómicos. Una tercera clave falla en parsing; claves
+  desconocidas, duplicadas o no TEXT fallan antes de abrir la fuente. Claves
+  compuestas numéricas y `.agrupar dataset` compuesto siguen pendientes. La
+  validación de un millón de filas permanece en sus workloads de una clave y no
+  cubre composite keys.
 - Aceptación continua: agregación global/agrupada y ejecución por lotes con
   resultados
   deterministas, cleanup transaccional y fallos por cuota explícitos. No
@@ -186,8 +188,10 @@ un planner general de operadores, esquema, costos, filtros o formatos.
 ## Estado de implementación de PR #29
 
 - Implementados: planner lógico/físico tipado para resumen global, agrupación
-  regular y agrupación con spill; validación end-to-end de un millón de filas
-  para cada uno de esos tres workloads, con resultados por grupo y rechazo de
+  regular y agrupación con spill; integración end-to-end de spill para una o dos
+  claves TEXT (sujeta a CI final), con validación de escape/empty text, métricas,
+  orden/repetición, límites y cleanup. El hito de un millón de filas permanece
+  limitado a los workloads previamente medidos de una clave, con rechazo de
   límites de filas/grupos sin publicar reportes parciales.
 - El caso A/B conserva la semántica de `contar` sobre celdas no vacías aunque
   otra métrica numérica las rechace; el caso spill verifica suma, media y contar,
@@ -239,8 +243,8 @@ El flujo canónico de `milena run` admite una sola condición tipada en `.analis
 
 Esta capacidad no implica ETL general, filtros de expresión arbitraria, Arrow/Parquet, cloud, ejecución distribuida ni ML; son fases futuras de la hoja de ruta.
 
-## Two-text-key spill preparation (partial; not product support)
+## Spill compuesto de dos claves TEXT (alcance acotado)
 
-This change adds and unit-tests a version-1 bounded binary codec for a pair of text components: fixed magic/version/arity, explicit component type and validity byte, big-endian 32-bit length prefixes, and raw UTF-8 bytes. Thus separators and quotes cannot alias component boundaries; an empty valid text value is distinct from an invalid/null component. The decoder rejects unsupported versions/types, malformed lengths, truncation and trailing bytes, and the codec enforces its own 4 KiB cap.
+La ruta canónica `.analisis` admite una o dos claves de agrupación TEXT con `#spill`; la forma de una clave y su JSON anterior se conservan. Para dos claves, lexer/parser/AST, semántica, planner y runtime llevan los dos nombres tipados al único backend `milena_stream_csv_grouped_spill_with_keys_and_options`. No se replica codec, reducer, parser ni runtime. Semántica rechaza columnas ausentes/no declaradas, tipos no TEXT, duplicados y dos claves sin spill; parser rechaza una tercera clave antes de abrir la fuente. El backend comparte filtros, métricas múltiples, presupuestos, telemetría, codec v1 con longitudes/tipo/validez, ordenamiento externo, JSON y publicación atómica.
 
-This is only a tested foundation, **not end-to-end composite grouping support**: `.analisis` still intentionally rejects a second group key; AST, semantic validation, query plan, stream CSV reader, spill reducer/store, external sort and JSON publication remain single-key. The existing single-text-key syntax and output are unchanged. Two-text-key spill is not advertised as supported until that complete canonical path and end-to-end spill/limit/failure tests land. Numeric composite keys remain pending as a later phase.
+La suite E2E cubre primer componente repetido con segundos distintos, comas/comillas/separadores, texto vacío válido, orden y repetición deterministas, métricas múltiples, spill forzado, columna ausente en el CSV y errores sin reportes/temporales. La validación de un millón de filas sigue siendo para las consultas de una clave ya medidas. Claves compuestas numéricas, agrupación compuesta sin spill y adaptación tabular siguen pendientes; no se infiere escala adicional ni rendimiento industrial.

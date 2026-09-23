@@ -1,6 +1,6 @@
 # Contrato para spill-to-disk de agrupaciones en flujo
 
-**Estado:** hay dos cortes locales distintos. El `.agrupar` tabular canónico conserva su adaptador de tabla existente y sigue materializando la entrada/salida en RAM. La agrupación de CSV en el runtime streaming tiene un corte de spill directo `stream.c → grouped_aggregate.c`: no crea `Dataset`/`MilenaTable`, reutiliza el lector CSV existente y emite el JSON desde un callback ordenado a un staging file antes de publicarlo. El adaptador tabular conserva una clave y una métrica. El backend CSV ahora ofrece una API directa para una o dos claves tipadas TEXT y hasta 64 métricas; la ruta canónica `.analisis` aún llama al adaptador de una clave y su parser rechaza una segunda clave. Esta fase de backend no habilita sintaxis ni comportamiento de usuario para claves compuestas, y no es una capacidad industrial general ni una ruta distribuida.
+**Estado:** hay dos cortes distintos. El `.agrupar` tabular canónico conserva su adaptador de tabla existente y sigue materializando la entrada/salida en RAM. La agrupación de CSV en el runtime streaming tiene un corte de spill directo `stream.c → grouped_aggregate.c`: no crea `Dataset`/`MilenaTable`, reutiliza el lector CSV existente y emite el JSON desde un callback ordenado a un staging file antes de publicarlo. El adaptador tabular conserva una clave y una métrica. La ruta canónica `.analisis` acepta ahora una o dos claves TEXT, esta última solo con `#spill`, y pasa ambas mediante `milena_stream_csv_grouped_spill_with_keys_and_options`; reutiliza el codec/reducer existentes. Las claves compuestas numéricas, el spill tabular compuesto, datos distribuidos y garantías industriales permanecen fuera del alcance.
 
 ## Límite arquitectónico
 
@@ -82,7 +82,7 @@ pueden consumir hasta dos cuotas adicionales (hasta 3× la cuota en total),
 aparte del reporte staging. El reporte cuenta con una cuota independiente de
 bytes configurada en AST; no se mezcla con la cuota de scratch.
 
-No se agregan varias claves al lenguaje/caller canónico, claves numéricas compuestas, unión, ordenamiento de filas, Parquet/Arrow ni workers/red. El backend directo únicamente agrega la variante de dos claves TEXT descrita arriba. Operaciones `Dataset` y `MilenaTable` siguen en memoria. La ruta scratch la proporciona el programa y se crea en modo exclusivo; si ya existe,
+La ruta `.analisis` integra una o dos claves TEXT en spill; quedan fuera las claves numéricas compuestas, el `.agrupar dataset` compuesto, unión, ordenamiento de filas, Parquet/Arrow y workers/red. Operaciones `Dataset` y `MilenaTable` siguen en memoria. La ruta scratch la proporciona el programa y se crea en modo exclusivo; si ya existe,
 se rechaza sin sobrescribirla. No se prometen nombres aleatorios privados ni
 concurrencia de writers sobre la misma ruta. No se ha medido RSS global ni se promete latencia.
 
@@ -94,7 +94,7 @@ Las claves de dos partes usan el codec de producto `group_key_codec.c`: wire ver
 
 El JSON mantiene el esquema previo para una sola clave (`clave`). Para dos claves, la cabecera informa `columnas_grupo:[{"nombre":"...","tipo":"texto"}, ...]` y cada fila de `resultados` usa `claves:[{"nombre":"...","tipo":"texto","valor":"...","valido":true}, ...]` seguida por el mismo array `metricas`; el componente inválido conserva su nombre/tipo con `valor:null,"valido":false`. Los contadores de grupos, orden determinista por bytes del wire, métricas múltiples y atomicidad de publicación no cambian. La prueba backend directa cubre comas/comillas CSV, componente vacío e inválido, mismo primer componente/diferente segundo, dos métricas y fallo del límite de grupos sin salida parcial.
 
-**Límite de integración:** el parser y el caller canónico `.analisis` continúan admitiendo una sola clave, y la guarda de parsing mantiene el rechazo de una segunda componente antes de abrir fuente/scratch. Esta subfase no se anuncia como capacidad de lenguaje; el benchmark de un millón de filas tampoco valida aún agrupación compuesta. La integración AST/semántica/planner/runtime se deja para la fase siguiente.
+**Integración canónica:** el parser admite hasta dos nodos de clave; semántica exige que las dos columnas estén declaradas como `texto`, no sean iguales y que haya `#spill`; el planner lleva ambos nodos al runtime y el runtime invoca esta API, sin copiar codec/reducer. Una tercera clave se rechaza al parsear, y dos claves sin spill se rechazan antes de abrir fuente/scratch. La suite E2E valida composite spill y fallos/cleanup; el hito de un millón de filas sigue cubriendo únicamente las consultas de una clave previamente descritas, no valida cardinalidad compuesta arbitraria.
 
 ## Semántica y determinismo
 
@@ -121,4 +121,4 @@ Crear temporales exclusivos con nombres impredecibles y permisos privados en un 
 4. Guardas de arquitectura, manifiesto y Makefile; sanitizers; suite completa y CI del head final. Documentar limits/defaults reales y benchmark reproducible con medición de pico RAM/bytes temporales.
 5. Mantener explícito que este contrato es local: no introduce red, clúster, cloud, Spark, Flink, Arrow ni Parquet.
 
-Hasta superar toda esta puerta, la afirmación correcta es específica: «un corte opt-in de una clave y hasta 64 métricas ya transmite el CSV streaming al reducer spillable y publica la salida ordenada sin materializar grupos; el agrupador de Dataset/Table sigue en memoria y no hay soporte industrial/distribuido».
+La afirmación correcta, una vez que la suite E2E y la CI del head pasan, es específica: «el corte opt-in de CSV streaming admite una o dos claves TEXT con #spill y hasta 64 métricas, transmite el CSV al reducer spillable y publica resultados ordenados sin materializar grupos; el agrupador de Dataset/Table sigue en memoria, las claves compuestas numéricas están pendientes y no hay soporte industrial/distribuido».

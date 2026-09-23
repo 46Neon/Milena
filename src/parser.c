@@ -667,14 +667,8 @@ static ASTNode *parse_stream_group(Parser *parser) {
     if (!parser_expect(parser, TOKEN_CADENA,
                        "Se esperaba el nombre de la columna de agrupación entre comillas"))
         return NULL;
-    /* Composite key syntax is deliberately rejected in the parser until the
-     * typed spill encoding and JSON schema are available end-to-end. Do not
-     * silently treat a second component as a summary or defer this to I/O. */
-    if (parser_match(parser, TOKEN_COMA)) {
-        parser_error(parser,
-            "Las claves compuestas de #agrupar por aún no están soportadas; se admite una clave texto");
-        return NULL;
-    }
+    /* Copy each lexeme into the AST before advancing: lexer token storage is
+     * transient and a comma/next key may overwrite the previous token text. */
     ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
     if (!group) {
         parser_error(parser, "Sin memoria para crear la agrupación de flujo");
@@ -692,6 +686,31 @@ static ASTNode *parse_stream_group(Parser *parser) {
                           "Sin memoria para la clave de agrupación")) {
         ast_destroy(group);
         return NULL;
+    }
+    if (parser_match(parser, TOKEN_COMA)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "Se esperaba la segunda columna de agrupación entre comillas")) {
+            ast_destroy(group);
+            return NULL;
+        }
+        key = ast_create_leaf(AST_AGRUPACION_POR, parser->previous.lexeme);
+        if (!key) {
+            ast_destroy(group);
+            parser_error(parser, "Sin memoria para la segunda clave de agrupación");
+            return NULL;
+        }
+        if (!parser_add_child(parser, group, key,
+                              "Sin memoria para la segunda clave de agrupación")) {
+            ast_destroy(group);
+            return NULL;
+        }
+        if (parser_match(parser, TOKEN_COMA)) {
+            ast_destroy(group);
+            parser_error(parser,
+                "#agrupar admite como máximo dos claves de texto con #spill");
+            return NULL;
+        }
     }
     if (parser_match(parser, TOKEN_NUMERAL)) {
         ASTNode *policy = parse_spill_policy_node(parser);

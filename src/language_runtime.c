@@ -1440,6 +1440,8 @@ static MilenaStatus run_stream_dataset_with_options(
           plan->logical_operators[2] == MILENA_LOGICAL_JSON_REPORT;
     if ((!grouped && plan->physical_operator != MILENA_PHYSICAL_CSV_STREAM_SUMMARY) ||
         grouped != (group_block != NULL) || (grouped && !group_key) ||
+        (grouped && (plan->group_key_count == 0 || plan->group_key_count > 2)) ||
+        (grouped && plan->group_key_count > 1 && !spill_grouped) ||
         spill_grouped != (plan->spill_policy != NULL) ||
         plan->logical_operators[0] != MILENA_LOGICAL_CSV_SCAN ||
         !valid_logical_shape) {
@@ -1556,9 +1558,20 @@ static MilenaStatus run_stream_dataset_with_options(
             ast_policy->group_max_output_bytes,
             ast_policy->group_max_runs
         };
-        status = milena_stream_csv_grouped_spill_with_options(
-            input_path, output_path, group_key->value, metrics, metric_count,
-            options, &policy, &report, error);
+        MilenaStreamGroupKeyDescriptor group_keys[2];
+        for (size_t key_index = 0; key_index < plan->group_key_count; ++key_index) {
+            const ASTNode *key_node = plan->group_keys[key_index];
+            if (!key_node || !key_node->value || !key_node->value[0]) {
+                runtime_error(error, MILENA_ERR_PARSE,
+                              "El plan spill contiene una clave inválida");
+                return MILENA_ERR_PARSE;
+            }
+            group_keys[key_index].name = key_node->value;
+            group_keys[key_index].type = MILENA_STREAM_GROUP_KEY_TEXT;
+        }
+        status = milena_stream_csv_grouped_spill_with_keys_and_options(
+            input_path, output_path, group_keys, plan->group_key_count,
+            metrics, metric_count, options, &policy, &report, error);
     } else if (grouped) {
         status = milena_stream_csv_grouped_with_options(input_path, output_path,
             group_key->value, metrics, metric_count, options, &report, error);

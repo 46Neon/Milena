@@ -26,7 +26,9 @@ typedef struct {
     const ASTNode *sink;
     const ASTNode *summary;
     const ASTNode *group;
-    const ASTNode *group_key;
+    const ASTNode *group_key; /* compatibility alias for group_keys[0] */
+    const ASTNode *group_keys[2];
+    size_t group_key_count;
     const ASTNode *group_summary;
     const ASTNode *spill_policy;
     MilenaLogicalOperator logical_operators[4];
