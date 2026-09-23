@@ -10,8 +10,8 @@ internas seleccionadas por el AST/plan tipado; no pueden introducir otro
 lenguaje de scripts, parser, CLI de datos ni runtime paralelo.
 
 PR #29 valida tres ejecuciones del lenguaje sobre un CSV determinista de
-exactamente 1.000.000 de filas: resumen global, agrupación streaming de dos
-claves y agrupación streaming con spill de 128 claves y tres métricas (suma,
+exactamente 1.000.000 de filas: resumen global, agrupación streaming con dos
+grupos y agrupación streaming con spill de 128 grupos y tres métricas (suma,
 media y contar sobre la misma columna numérica), todas por `milena run` y `.analisis`. Se comprueban resultados exactos, errores de datos, conteos,
 límites declarados y limpieza; la corrida spill se repite para verificar
 salida semántica determinista. Se observa tiempo, bytes, buffers y RSS pico
@@ -109,8 +109,15 @@ un planner general de operadores, esquema, costos, filtros o formatos.
   codificada, cardinalidad de grupos de salida, bytes del reporte y máximo de
   runs; no crea un reductor por métrica ni materializa filas de entrada. No
   duplica almacén, serialización, estados mergeables, sort ni reducer.
-- Sigue pendiente ampliar fuentes/operadores y los contratos de key/métricas;
-  mantener límites de lectura y fallos explícitos en cada backend.
+- Sigue pendiente ampliar fuentes/operadores y los contratos de key/métricas.
+  En particular, el spill actual acepta exactamente una clave de grupo de tipo
+  texto; una segunda clave, incluso declarada `numerica`, se rechaza durante
+  parsing antes de abrir la fuente. Las claves compuestas texto+número no se
+  implementan ni se incluyen en la validación de un millón de filas. La futura
+  extensión debe introducir un esquema JSON de componentes tipados y validez
+  explícita, codificación delimitada/versionada y orden determinista en el mismo
+  reducer antes de habilitar la sintaxis. Mantener límites de lectura y fallos
+  explícitos en cada backend.
 - Aceptación continua: agregación global/agrupada y ejecución por lotes con
   resultados
   deterministas, cleanup transaccional y fallos por cuota explícitos. No

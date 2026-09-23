@@ -182,6 +182,27 @@ EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run time-limit.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/time-limit.json" ] && [ ! -e "$TMP_DIR/time-limit.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'time-limit.json.part.*' | grep -q .
+# Composite keys remain an explicit pre-execution limitation until their
+# typed encoding, reducer ordering, and JSON schema land as one vertical slice.
+# A second key is rejected by the parser even when the input file does not
+# exist; it must not reach data I/O or publish a partial report.
+cat > "$TMP_DIR/composite-key-pending.milena" <<EOF_M
+.analisis clave_compuesta_pendiente {
+  variable grupo texto
+  variable periodo numerica
+  variable valor numerica
+  datos desde "missing-composite-input.csv" con filas hasta 1000 con tiempo hasta 30000 ms
+  agrupar por "grupo", "periodo" #spill("$TMP_DIR/composite-key.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
+  guardar resultado en "composite-key.json"
+}
+EOF_M
+if composite_error=$(cd "$TMP_DIR" && "$MILENA_BIN" run composite-key-pending.milena 2>&1); then
+  echo "A composite spill key unexpectedly passed preflight" >&2
+  exit 1
+fi
+printf '%s\n' "$composite_error" | grep -q 'claves compuestas'
+[ ! -e "$TMP_DIR/composite-key.json" ] && [ ! -e "$TMP_DIR/composite-key.bin" ]
+
 # Explicit typed rejection for unsupported key/metric types.
 cat > "$TMP_DIR/invalid-type.milena" <<EOF_M
 .analisis clave_invalida {

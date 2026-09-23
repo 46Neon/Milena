@@ -667,6 +667,14 @@ static ASTNode *parse_stream_group(Parser *parser) {
     if (!parser_expect(parser, TOKEN_CADENA,
                        "Se esperaba el nombre de la columna de agrupación entre comillas"))
         return NULL;
+    /* Composite key syntax is deliberately rejected in the parser until the
+     * typed spill encoding and JSON schema are available end-to-end. Do not
+     * silently treat a second component as a summary or defer this to I/O. */
+    if (parser_match(parser, TOKEN_COMA)) {
+        parser_error(parser,
+            "Las claves compuestas de #agrupar por aún no están soportadas; se admite una clave texto");
+        return NULL;
+    }
     ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
     if (!group) {
         parser_error(parser, "Sin memoria para crear la agrupación de flujo");

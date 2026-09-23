@@ -28,7 +28,7 @@ En `.analisis` con una fuente `datos desde` en modo streaming se permite un solo
 
 ### Agrupación streaming con spill y métricas múltiples
 
-En `.analisis` con CSV streaming, `agrupar por "grupo" #spill(...) resumir { ... }` admite una sola clave declarada `texto` y entre 1 y 64 métricas tipadas, en el orden del bloque: `suma`, `media`, `minimo`, `maximo` sobre columnas `numerica`, y `contar` sobre una columna declarada. Ejemplo:
+En `.analisis` con CSV streaming, `agrupar por "grupo" #spill(...) resumir { ... }` admite exactamente una clave de grupo declarada `texto` y entre 1 y 64 métricas tipadas, en el orden del bloque. La sintaxis de una segunda clave (por ejemplo, `agrupar por "grupo", "periodo"`) se rechaza en parsing antes de abrir el CSV; las claves compuestas texto+número no están implementadas ni cubiertas por la validación de un millón de filas. No confundir la identidad interna compuesta (grupo, métrica) del reducer con una clave de grupo compuesta. Las métricas admitidas son: `suma`, `media`, `minimo`, `maximo` sobre columnas `numerica`, y `contar` sobre una columna declarada. Ejemplo:
 
 ```milena
 .analisis resumen {
