@@ -40,8 +40,11 @@ workflow = (ROOT / '.github/workflows/publish-apt.yml').read_text(encoding='utf-
 if '\n  push:' in workflow:
     errors.append('APT publication must be manual; tag pushes are not an approval')
 contract = (ROOT / '.github/workflows/termux-aarch64-contract.yml').read_text(encoding='utf-8')
-if 'ubuntu-latest' in contract or 'windows-latest' in contract:
-    errors.append('Termux contract may not use a hosted runner')
+# A separately named host-side contract is useful, but the Android validation
+# job itself must be bound to the registered, real Termux/aarch64 runner.
+device_job = contract.partition('  termux-aarch64-contract:')[2]
+if not device_job or 'runs-on: [self-hosted, termux, aarch64, milena]' not in device_job:
+    errors.append('Android contract must use the registered self-hosted Termux/aarch64 runner')
 if errors:
     print('\n'.join('ERROR: ' + e for e in errors), file=sys.stderr)
     raise SystemExit(1)
