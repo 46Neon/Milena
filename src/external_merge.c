@@ -103,7 +103,7 @@ MilenaStatus milena_external_merge_double_runs(
 
     MilenaSpillStore output = {0};
     status = milena_spill_store_open(temp_path, per_file_quota_bytes, sizeof(double), &output, error);
-    if (status != MILENA_OK) { free(temp_path); goto cleanup; }
+    if (status != MILENA_OK) { (void)remove(temp_path); free(temp_path); goto cleanup; }
     while (heap_size > 0) {
         HeapNode node = heap_pop(heap, &heap_size);
         if (have_previous[node.run] && node.value < previous[node.run]) {

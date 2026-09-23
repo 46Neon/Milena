@@ -100,8 +100,11 @@ fusiona runs ya ordenados de valores binary64 usando un heap de una cabeza por
 run, preserva el orden por run para empates y rechaza runs mal ordenados,
 valores no finitos, fan-in inválido, cuotas excedidas y salidas existentes.
 La salida se construye en un temporal y solo se activa al completar la fusión;
-la RAM queda acotada por el fan-in. Esta es una etapa de fusión de runs, no aún
-un planner automático multi-pasada ni sort de tablas/grupos arbitrarios.
+la RAM queda acotada por el fan-in. La etapa de ordenamiento crea runs desde un callback de fuente con buffer
+limitado por `run_capacity` y planifica pasadas hasta el fan-in final. Aplica
+cuotas por archivo y una cuota agregada de scratch durante la creación, las
+pasadas y la salida final. Aún no es un sort de tablas con claves o estabilidad
+configurable ni incluye `GROUP BY` spillable.
 
 ## Estados de agregación mergeables
 
