@@ -11,7 +11,8 @@ Estos benchmarks miden, sin prometer un umbral, dos operaciones observables:
 La fixture de arrays es deliberadamente pequeña. Para flujo CSV, PR25 añade
 `stream_benchmark.py`, que genera de forma determinista cargas `small` (100
 filas), `medium` (10.000) y una carga `large` configurable solo con
-`--large-rows N`. Cada ejecución pasa por `milena run` y por la sintaxis
+`--large-rows N` (hasta 1.000.000 filas; la ejecución tiene timeout de 180 s).
+Cada ejecución pasa por `milena run` y por la sintaxis
 española del AST; no existe un ejecutable de datos paralelo. Se reportan filas,
 filas válidas/malformadas, bytes, tiempo de pared, filas/s, MB/s, lote, búfer
 observado, plataforma y commit. No hay umbrales ni tiempos fijos: los

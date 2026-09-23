@@ -7,15 +7,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 CATEGORIES = {
     "producto": {
-        "analysis.c", "array.c", "common.c", "dataset.c", "entrypoints.c", "finance.c",
+        "analysis.c", "array.c", "canonical_compiler.c", "common.c", "dataset.c", "entrypoints.c", "finance.c",
         "language_runtime.c", "logger.c", "main.c", "metrics.c", "schema.c",
-        "script.c", "interpreter.c", "sst_advanced.c", "sst_contingency.c", "sst_correlation.c",
+        "script.c", "interpreter.c", "partition_executor.c", "partition_plan.c", "partition_reduce.c", "process_executor.c", "sst_advanced.c", "sst_contingency.c", "sst_correlation.c",
         "sst_dates.c", "sst_histogram.c", "sst_inference.c", "sst_model.c",
         "sst_normality.c", "sst_rates.c", "sst_report.c",
-        "sst_report_advanced.c", "sst_stats.c", "spill.c", "stream.c", "execution_contract.c", "data_source.c", "table.c",
+        "sst_report_advanced.c", "sst_stats.c", "stream.c", "table.c",
     },
     "lenguaje": {
-        "ast.c", "canonical_compiler.c", "language_semantic.c", "lexer.c", "parser.c", "symbol_table.c",
+        "ast.c", "language_semantic.c", "lexer.c", "parser.c", "symbol_table.c",
     },
     "funciones": {
         "function_parser.c", "user_functions.c", "symbol.c",
@@ -59,4 +59,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

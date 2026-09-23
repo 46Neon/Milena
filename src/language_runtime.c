@@ -1408,25 +1408,6 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
     char metric_names[64][160];
     size_t metric_count = 0;
     bool has_summary = false;
-    const ASTNode *group_block = NULL;
-    for (size_t i = 0; i < analysis->child_count; i++)
-        if (analysis->children[i] && analysis->children[i]->type == AST_BLOQUE_AGRUPAR) group_block = analysis->children[i];
-    if (group_block) {
-        const ASTNode *key = NULL; size_t n = 0; MilenaStreamMetric grouped_metrics[64];
-        char cols[64][128], names[64][160]; MilenaStreamOperation ops[64];
-        for (size_t j=0;j<group_block->child_count;j++) {
-            const ASTNode *c=group_block->children[j];
-            if(c->type==AST_AGRUPACION_POR) key=c;
-            else if(c->type==AST_RESUMEN_METRICA && n<64) {
-                char op[32], col[128]; if(!c->value || sscanf(c->value,"%31[^:]:%127s",op,col)!=2){runtime_error(error,MILENA_ERR_PARSE,"Métrica agrupada inválida");return MILENA_ERR_PARSE;}
-                if(strcmp(op,"suma")==0)ops[n]=MILENA_STREAM_SUM; else if(strcmp(op,"media")==0)ops[n]=MILENA_STREAM_MEAN; else if(strcmp(op,"minimo")==0)ops[n]=MILENA_STREAM_MIN; else if(strcmp(op,"maximo")==0)ops[n]=MILENA_STREAM_MAX; else if(strcmp(op,"conteo")==0)ops[n]=MILENA_STREAM_COUNT; else if(strcmp(op,"varianza")==0)ops[n]=MILENA_STREAM_VARIANCE; else if(strcmp(op,"desviacion_estandar")==0)ops[n]=MILENA_STREAM_STDDEV; else {runtime_error(error,MILENA_ERR_UNSUPPORTED,"Métrica de agrupación no soportada");return MILENA_ERR_UNSUPPORTED;}
-                strncpy(cols[n],col,sizeof(cols[n])-1); cols[n][sizeof(cols[n])-1]='\0'; snprintf(names[n],sizeof(names[n]),"%s_%s",cols[n],op); grouped_metrics[n]=(MilenaStreamMetric){cols[n],names[n],ops[n]}; n++;
-            }
-        }
-        if(!key||!key->value||!n){runtime_error(error,MILENA_ERR_PARSE,"La agrupación de flujo requiere #por y una métrica");return MILENA_ERR_PARSE;}
-        MilenaStreamOptions grouped_options=*options; if(!grouped_options.max_groups) grouped_options.max_groups=1000;
-        return milena_stream_csv_grouped_with_options(input_path,output_path,key->value,grouped_metrics,n,&grouped_options,NULL,error);
-    }
     for (size_t i = 0; i < analysis->child_count; i++) {
         const ASTNode *node = analysis->children[i];
         if (!node) continue;
@@ -1603,8 +1584,6 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 options.max_record_bytes = load->stream_record_limit;
             if (load->stream_column_limit > 0)
                 options.max_columns = load->stream_column_limit;
-            if (load->stream_group_limit > 0)
-                options.max_groups = load->stream_group_limit;
             status = run_stream_dataset_with_options(analysis, input, output_path,
                                                      &options, output, error);
         }

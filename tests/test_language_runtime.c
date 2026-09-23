@@ -285,7 +285,7 @@ static int run_human_stream_pipeline(void) {
     const char *source =
         ".analisis ventas_grandes {\n"
         "  datos desde \"test-language-runtime-human-stream.csv\" procesar por lotes de 2 filas con registros de hasta 1 MiB con columnas de 8\n"
-        "  resumir { suma de \"importe\"; media de \"importe\"; minimo de \"importe\"; maximo de \"importe\"; contar de \"importe\"; varianza de \"importe\"; desviacion_estandar de \"importe\"; }\n"
+        "  resumir { suma de \"importe\"; media de \"importe\"; contar de \"importe\"; }\n"
         "  guardar resultado en \"test-language-runtime-human-stream.json\"\n"
         "}\n";
     MilenaError error;
@@ -304,6 +304,16 @@ static int run_human_stream_pipeline(void) {
           strstr(text, "importe_conteo") != NULL &&
           strstr(text, "importe_varianza") != NULL &&
           strstr(text, "importe_desviacion_estandar") != NULL &&
+          strstr(text, "\"nombre\":\"importe_suma\",\"valores_validos\":3,\"valores_invalidos\":0,\"valor\":60") != NULL &&
+          strstr(text, "\"nombre\":\"importe_media\",\"valores_validos\":3,\"valores_invalidos\":0,\"valor\":20") != NULL &&
+          strstr(text, "\"nombre\":\"importe_minimo\",\"valores_validos\":3,\"valores_invalidos\":0,\"valor\":10") != NULL &&
+          strstr(text, "\"nombre\":\"importe_maximo\",\"valores_validos\":3,\"valores_invalidos\":0,\"valor\":30") != NULL &&
+          strstr(text, "\"nombre\":\"importe_conteo\",\"valores_validos\":3,\"valores_invalidos\":0,\"valor\":3") != NULL &&
+          strstr(text, "\"nombre\":\"importe_varianza\",\"valores_validos\":3,\"valores_invalidos\":0,\"valor\":100") != NULL &&
+          strstr(text, "\"nombre\":\"importe_desviacion_estandar\",\"valores_validos\":3,\"valores_invalidos\":0,\"valor\":10") != NULL &&
+          strstr(text, "\"filas_por_segundo\":") != NULL &&
+          strstr(text, "\"megabytes_por_segundo\":") != NULL &&
+          strstr(text, "\"bytes_entrada\":") != NULL &&
           strstr(text, "\"tamano_lote\":2") != NULL &&
           strstr(text, "\"limite_registro_bytes\":1048576") != NULL &&
           strstr(text, "\"limite_columnas\":8") != NULL,
@@ -322,4 +332,3 @@ int main(void) {
     puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo OK");
     return 0;
 }
-

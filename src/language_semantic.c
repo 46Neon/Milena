@@ -88,7 +88,7 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                 (node->stream_record_limit != 0 &&
                  node->stream_record_limit < 4096u))
                 return semantic_error(node, error, "Límite de registro de flujo inválido");
-            if (node->stream_column_limit > 4096u || node->stream_group_limit > 100000u)
+            if (node->stream_column_limit > 4096u)
                 return semantic_error(node, error, "Límite de columnas de flujo inválido");
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Carga de dataset sin archivo");
@@ -98,7 +98,8 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
             if (node->type == AST_RESUMEN_METRICA &&
                 node->stream_operation != AST_STREAM_OPERATION_NONE &&
                 !known_stream_operation(node->stream_operation))
-                return semantic_error(node, error, "Operación de flujo no registrada en el AST canónico");
+                return semantic_error(node, error,
+                    "Operación de flujo no registrada en el AST canónico");
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Operación AST sin argumento");
             break;
@@ -201,4 +202,3 @@ MilenaStatus milena_validate_ast(const ASTNode *program, MilenaError *error) {
         return semantic_error(program, error, "El programa no tiene una raíz AST válida");
     return validate_node(program, error);
 }
-

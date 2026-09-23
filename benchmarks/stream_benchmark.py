@@ -10,6 +10,8 @@ import argparse, csv, json, os, platform, subprocess, tempfile, time
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "milena"
+MAX_LARGE_ROWS = 1_000_000
+RUN_TIMEOUT_SECONDS = 180
 
 def make_csv(path: Path, rows: int, malformed_every: int) -> int:
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -30,7 +32,8 @@ def one(label: str, rows: int, malformed_every: int, large: bool) -> dict:
         script.write_text(f'''.analisis benchmark {{\n    datos desde "{csv_path}"\n        procesar por lotes de 4096 filas\n        con registros de hasta 1 MiB\n        con columnas de 16\n    resumir {{ suma de "importe"; media de "importe"; contar de "importe"; }}\n    guardar resultado en "reporte.json"\n}}\n''', encoding="utf-8")
         started = time.perf_counter()
         result = subprocess.run([str(BINARY), "run", str(script)], cwd=ROOT, text=True,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=RUN_TIMEOUT_SECONDS)
         elapsed = time.perf_counter() - started
         if result.returncode:
             raise SystemExit(result.stderr or result.stdout)
@@ -53,6 +56,8 @@ def main() -> int:
     cases = [("small", 100, 17), ("medium", 10000, 997)]
     if args.large_rows < 0:
         raise SystemExit("--large-rows must be non-negative")
+    if args.large_rows > MAX_LARGE_ROWS:
+        raise SystemExit(f"--large-rows must not exceed {MAX_LARGE_ROWS}")
     if args.large_rows > 0:
         cases.append(("large-opt-in", args.large_rows, 100003))
     result = {"schema": "milena-stream-benchmark-v1", "workloads": [one(n, r, m, n.startswith("large")) for n, r, m in cases],
