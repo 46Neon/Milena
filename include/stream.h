@@ -45,6 +45,7 @@ typedef struct {
     size_t max_rows;
     double max_elapsed_milliseconds;
     bool resource_limit_reached;
+    size_t bytes_read;
 } MilenaStreamReport;
 
 /*
