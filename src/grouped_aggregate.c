@@ -729,7 +729,12 @@ MilenaStatus milena_grouped_aggregate_finalize(
         if (emitted == SIZE_MAX) { group_error(error, MILENA_ERR_OVERFLOW, "Cantidad de grupos emitidos desbordada"); status = MILENA_ERR_OVERFLOW; break; }
         emitted++;
     }
-    if (final_reader.file) { MilenaStatus close_status = milena_spill_reader_close(&final_reader, error); if (status == MILENA_OK) status = close_status; }
+    if (final_reader.file) {
+        /* Cleanup must not erase a read/decode/visitor diagnostic. */
+        MilenaStatus close_status = milena_spill_reader_close(&final_reader,
+            status == MILENA_OK ? error : NULL);
+        if (status == MILENA_OK) status = close_status;
+    }
     free(record);
     free(final_path);
     remove_run_set(grouped->spill_path, pass, 1u);
