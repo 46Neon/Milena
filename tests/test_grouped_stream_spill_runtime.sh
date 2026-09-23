@@ -189,10 +189,10 @@ if (cd "$TMP_DIR" && "$MILENA_BIN" run time-limit.milena); then exit 1; fi
 cat > "$TMP_DIR/composite-key-pending.milena" <<EOF_M
 .analisis clave_compuesta_pendiente {
   variable grupo texto
-  variable periodo numerica
+  variable indice_num numerica
   variable valor numerica
   datos desde "missing-composite-input.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo", "periodo" #spill("$TMP_DIR/composite-key.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
+  agrupar por "grupo", "indice_num" #spill("$TMP_DIR/composite-key.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
   guardar resultado en "composite-key.json"
 }
 EOF_M
