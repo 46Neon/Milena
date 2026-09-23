@@ -393,6 +393,13 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         input_bytes = (size_t)measured_bytes;
         bytes_read = (size_t)measured_bytes;
     }
+    if (status == MILENA_OK && options->max_elapsed_milliseconds > 0.0 &&
+        stream_now_ms() - started >= options->max_elapsed_milliseconds) {
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "El flujo superó el presupuesto de tiempo configurado");
+        resource_limit_reached = true;
+        status = MILENA_ERR_OVERFLOW;
+    }
     if (status != MILENA_OK) goto finish;
 
     {
@@ -833,6 +840,13 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     {
         long position = ftell(input);
         if (position >= 0) input_bytes = bytes_read = (size_t)position;
+    }
+    if (status == MILENA_OK && options->max_elapsed_milliseconds > 0.0 &&
+        stream_now_ms() - started >= options->max_elapsed_milliseconds) {
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "La agrupación superó el presupuesto de tiempo configurado");
+        resource_limit_reached = true;
+        status = MILENA_ERR_OVERFLOW;
     }
     if (status != MILENA_OK) goto grouped_finish;
 

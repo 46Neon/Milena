@@ -96,6 +96,21 @@ int main(void) {
     remove(budget_input);
     remove(budget_output);
 
+    const char *empty_input = "tests/.stream_empty.csv";
+    FILE *empty_file = fopen(empty_input, "wb");
+    assert(empty_file != NULL);
+    assert(fputs("importe\n", empty_file) >= 0);
+    assert(fclose(empty_file) == 0);
+    budget.max_elapsed_milliseconds = 1e-9;
+    milena_error_clear(&budget_error);
+    assert(milena_stream_csv_summary_with_options(
+        empty_input, budget_output, metrics, 1, &budget, &budget_report,
+        &budget_error) == MILENA_ERR_OVERFLOW);
+    assert(budget_report.resource_limit_reached);
+    assert(fopen(budget_output, "rb") == NULL);
+    remove(empty_input);
+    remove(budget_output);
+
     budget.max_elapsed_milliseconds = NAN;
     milena_error_clear(&budget_error);
     assert(milena_stream_csv_summary_with_options(
@@ -155,6 +170,22 @@ int main(void) {
     assert(strstr(grouped_error.message, "límite") != NULL);
     assert(fopen(group_output, "rb") == NULL);
     remove(group_input);
+    remove(group_output);
+
+    const char *empty_group_input = "tests/.stream_empty_group.csv";
+    FILE *empty_group_file = fopen(empty_group_input, "wb");
+    assert(empty_group_file != NULL);
+    assert(fputs("zona,importe\n", empty_group_file) >= 0);
+    assert(fclose(empty_group_file) == 0);
+    grouped_options = milena_stream_options_default();
+    grouped_options.max_elapsed_milliseconds = 1e-9;
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_with_options(empty_group_input,
+        group_output, "zona", grouped_metrics, 2, &grouped_options,
+        &grouped_report, &grouped_error) == MILENA_ERR_OVERFLOW);
+    assert(grouped_report.resource_limit_reached);
+    assert(fopen(group_output, "rb") == NULL);
+    remove(empty_group_input);
     remove(group_output);
 
     puts("stream tests passed");
