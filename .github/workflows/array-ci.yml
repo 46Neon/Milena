@@ -26,8 +26,8 @@ jobs:
       - name: Build and run the complete inherited, Worker 2 and Worker 3 suite
         run: |
           set -euxo pipefail
-          timeout --signal=TERM --kill-after=30s 15m make clean
-          timeout --signal=TERM --kill-after=30s 15m make CC=${{ matrix.compiler }} test
+          make clean
+          timeout 900 make CC=${{ matrix.compiler }} test
 
   sanitizers:
     name: Linux ASan + UBSan
@@ -41,8 +41,8 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
           set -euxo pipefail
-          timeout --signal=TERM --kill-after=30s 15m make clean
-          timeout --signal=TERM --kill-after=30s 15m make CC=clang \
+          make clean
+          timeout 900 make CC=clang \
             CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
             LDFLAGS='-fsanitize=address,undefined -lm -pthread' test
 
