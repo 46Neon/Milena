@@ -73,7 +73,10 @@ def validate_grouped_report(report: dict[str, Any], malformed_expected: int,
     exact_fields = {
         "modo": "flujo_agrupado",
         "filas": ROWS,
-        "filas_validas": ROWS - malformed_expected,
+        # Row-level "valid" means at least one selected metric can consume
+        # the row; count accepts non-empty text even if sum rejects it. These
+        # counters may overlap by contract.
+        "filas_validas": ROWS,
         "filas_malformadas": malformed_expected,
         "grupos": 2,
         "limite_grupos": 2,
@@ -108,9 +111,11 @@ def validate_grouped_report(report: dict[str, Any], malformed_expected: int,
             values = expected[key]
             if metric.get("columna") != "importe":
                 raise AssertionError(f"group {key} {operation} used the wrong column")
-            if metric.get("valores_validos") != values["valid"] or metric.get("valores_invalidos") != values["invalid"]:
+            metric_valid = values["valid"] if operation == "suma" else values["rows"]
+            metric_invalid = values["invalid"] if operation == "suma" else 0
+            if metric.get("valores_validos") != metric_valid or metric.get("valores_invalidos") != metric_invalid:
                 raise AssertionError(f"group {key} {operation} has incorrect valid/invalid counts")
-            target = values["ticks"] / 10.0 if operation == "suma" else float(values["valid"])
+            target = values["ticks"] / 10.0 if operation == "suma" else float(values["rows"])
             actual = metric.get("valor")
             if not isinstance(actual, (int, float)) or not math.isclose(float(actual), target, rel_tol=1e-12, abs_tol=1e-9):
                 raise AssertionError(f"group {key} {operation}: expected {target}, got {actual!r}")
@@ -274,8 +279,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
         # canonical Spanish AST/runtime path, separately from global aggregation.
         grouped_report_path = work / "reporte_agrupado.json"
         grouped_script_path = work / "agrupado_millon.milena"
-        grouped_script_path.write_text(
-            f'''.analisis validacion_agrupada_millon_filas {{
+        grouped_source = f'''.analisis validacion_agrupada_millon_filas {{
     datos desde {csv_literal}
         procesar por lotes de {CHUNK_ROWS} filas
         con registros de hasta 1 MiB
@@ -285,7 +289,8 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
     agrupar por "grupo" resumir {{ suma de "importe"; contar de "importe"; }}
     guardar resultado en {json.dumps(str(grouped_report_path), ensure_ascii=False)}
 }}
-''', encoding="utf-8")
+'''
+        grouped_script_path.write_text(grouped_source, encoding="utf-8")
         grouped_started = time.perf_counter()
         grouped_process = subprocess.run(
             [str(BINARY), "run", str(grouped_script_path)], cwd=ROOT,
@@ -300,6 +305,25 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
             raise AssertionError("grouped milena run succeeded without writing its report")
         grouped_report = json.loads(grouped_report_path.read_text(encoding="utf-8"))
         grouped_validated = validate_grouped_report(grouped_report, malformed, input_bytes)
+
+        # A resource contract below observed cardinality must reject through
+        # the language/runtime path and never publish a partial report.
+        limited_group_report = work / "reporte_grupos_limitados.json"
+        limited_group_script = work / "agrupado_limite_insuficiente.milena"
+        limited_group_script.write_text(
+            grouped_source.replace("con grupos de 2", "con grupos de 1")
+                .replace(str(grouped_report_path), str(limited_group_report)),
+            encoding="utf-8")
+        limited_group_process = subprocess.run(
+            [str(BINARY), "run", str(limited_group_script)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        if limited_group_process.returncode == 0 or limited_group_report.exists():
+            raise AssertionError(
+                "group limit below fixture cardinality must fail without a partial report")
+        grouped_validated["group_limit_check"] = {
+            "configured_groups": 1, "required_groups": 2,
+            "rejected_without_partial_report": True}
 
         rss_bytes = peak_child_rss_bytes()
         result: dict[str, Any] = {
@@ -329,7 +353,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
                             "compiler": os.environ.get("CC", "make default CC"),
                             "commit": os.environ.get("GITHUB_SHA", "unknown")},
             "limitations": [
-                "This pass proves only global aggregation and a two-key bounded-cardinality CSV group operation, this input, build and hardware.",
+                "This pass proves only global aggregation and a two-key bounded-cardinality CSV group operation with an end-to-end group-limit rejection, this input, build and hardware.",
                 "It does not prove grouped spill, high-cardinality grouping, joins, general ETL, distributed/cloud execution, Arrow/Parquet or ML.",
                 "Throughput and peak RSS are observations; no universal latency or RSS threshold is asserted.",
             ],

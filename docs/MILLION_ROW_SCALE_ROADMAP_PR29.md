@@ -9,11 +9,13 @@ semántica/recursos → runtime → backend**. Los backends son implementaciones
 internas seleccionadas por el AST/plan tipado; no pueden introducir otro
 lenguaje de scripts, parser, CLI de datos ni runtime paralelo.
 
-PR #29 inicia el primer hito ejecutable en `main`: un resumen global de un CSV
-determinista de exactamente 1.000.000 de filas por `milena run`, con sintaxis
-`.analisis`, búfer de registro acotado y comprobaciones exactas de conteos y
-agregados. El reporte observa tiempo, bytes, búfer y RSS pico cuando el sistema
-lo permite. La pasada exitosa prueba únicamente esa operación, entrada, build y
+PR #29 valida dos ejecuciones del lenguaje sobre un CSV determinista de
+exactamente 1.000.000 de filas: resumen global y agrupación streaming de
+cardinalidad dos por `milena run` con sintaxis `.analisis`. Ambas comprueban
+resultados, conteos y el límite del búfer; también se prueba rechazo sin reporte
+parcial al exceder el límite de filas y al declarar menos grupos que los que
+requiere la entrada. El reporte observa tiempo, bytes, búfer y RSS pico cuando
+el sistema lo permite. La pasada exitosa prueba únicamente esa operación, entrada, build y
 hardware; no prueba Big Data arbitrario, agrupación con spill, joins, ETL,
 Arrow/Parquet, nube, ejecución distribuida ni ML, y no establece una latencia
 universal.
@@ -159,11 +161,17 @@ un planner general de operadores, esquema, costos, filtros o formatos.
 ## Estado de implementación de PR #29
 
 - Implementado en este PR: planner tipado inicial para el corte CSV streaming
-  actual y validación end-to-end de un millón de filas para resumen global.
-- Siguiente ampliación ejecutable en curso: repetir esa escala por el backend de
-  agrupación streaming con solo dos claves, comprobando resultados por grupo,
-  contadores de filas inválidas y límite de estado. Esto demuestra una forma
-  acotada de agregación, no spill ni cardinalidad arbitraria.
+  actual y validación end-to-end de un millón de filas para resumen global y
+  agrupado con presupuesto explícito de grupos y prueba de rechazo por cuota.
+- Implementado en esta actualización: repetir la escala por el backend de
+  agrupación streaming con dos claves, validar por grupo los valores y conteos
+  (incluida la semántica de `contar` sobre celdas no vacías), y comprobar desde
+  `.analisis` que un límite de un grupo rechaza la segunda clave sin publicar
+  un reporte parcial. Los contadores de fila pueden solaparse cuando una métrica
+  (`contar`) acepta una celda no vacía y otra (`suma`) la rechaza como no
+  numérica; la validación verifica por separado el conteo y los errores por
+  métrica. Esto demuestra solo agregación de cardinalidad acotada, no spill ni
+  cardinalidad arbitraria.
 - Las fases 2–6 siguen siendo trabajo futuro: no se marcan como completas solo
   porque estén descritas aquí. Los contratos de spill del PR #28 son externos a
   este PR mientras no estén fusionados en `main`; deben revalidarse antes de
