@@ -1,1 +1,223 @@
-IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwoiIiJWYWxpZGF0ZSBvbmUgbWlsbGlvbiByb3dzIHRocm91Z2ggTWlsZW5hJ3MgY2Fub25pY2FsIGxhbmd1YWdlL3J1bnRpbWUgcGF0aC4KCk9ubHkgZml4dHVyZSBnZW5lcmF0aW9uIGFuZCByZXN1bHQgY2hlY2tpbmcgaGFwcGVuIGluIFB5dGhvbi4gVGhlIENTViBzY2FuIGFuZAphZ2dyZWdhdGlvbiBhcmUgZXhlY3V0ZWQgYnkgYGBtaWxlbmEgcnVuYGAgdXNpbmcgdGhlIGh1bWFuIC5hbmFsaXNpcyBzeW50YXguClRpbWluZ3MgYW5kIFJTUyBhcmUgb2JzZXJ2YXRpb25zLCBub3QgcG9ydGFibGUgcGVyZm9ybWFuY2UgcHJvbWlzZXMuCiIiIgpmcm9tIF9fZnV0dXJlX18gaW1wb3J0IGFubm90YXRpb25zCgppbXBvcnQgYXJncGFyc2UKaW1wb3J0IGNzdgppbXBvcnQganNvbgppbXBvcnQgbWF0aAppbXBvcnQgb3MKaW1wb3J0IHBsYXRmb3JtCmltcG9ydCBzdWJwcm9jZXNzCmltcG9ydCBzeXMKaW1wb3J0IHRlbXBmaWxlCmltcG9ydCB0aW1lCmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aApmcm9tIHR5cGluZyBpbXBvcnQgQW55CgpST09UID0gUGF0aChfX2ZpbGVfXykucmVzb2x2ZSgpLnBhcmVudHNbMV0KQklOQVJZID0gUk9PVCAvICJtaWxlbmEiClJPV1MgPSAxXzAwMF8wMDAKTUFMRk9STUVEX0VWRVJZID0gMTAwXzAwMwpDSFVOS19ST1dTID0gNF8wOTYKTUFYX1JFQ09SRF9CWVRFUyA9IDEgKiAxMDI0ICogMTAyNApSVU5fVElNRU9VVF9TRUNPTkRTID0gNjAwCgoKZGVmIGdlbmVyYXRlX2NzdihwYXRoOiBQYXRoKSAtPiB0dXBsZVtpbnQsIGludF06CiAgICAiIiJXcml0ZSBhIHN0YWJsZSB0aHJlZS1jb2x1bW4gZml4dHVyZTsgcmV0dXJuIG1hbGZvcm1lZCByb3dzIGFuZCBieXRlcy4iIiIKICAgIG1hbGZvcm1lZCA9IDAKICAgIHdpdGggcGF0aC5vcGVuKCJ3IiwgbmV3bGluZT0iIiwgZW5jb2Rpbmc9InV0Zi04IikgYXMgc3RyZWFtOgogICAgICAgIHdyaXRlciA9IGNzdi53cml0ZXIoc3RyZWFtLCBsaW5ldGVybWluYXRvcj0iXG4iKQogICAgICAgIHdyaXRlci53cml0ZXJvdyhbImlkIiwgImltcG9ydGUiLCAiZ3J1cG8iXSkKICAgICAgICBmb3Igcm93IGluIHJhbmdlKFJPV1MpOgogICAgICAgICAgICBpZiAocm93ICsgMSkgJSBNQUxGT1JNRURfRVZFUlkgPT0gMDoKICAgICAgICAgICAgICAgIHdyaXRlci53cml0ZXJvdyhbcm93LCAibm8tbnVtIiwgImludmFsaWRhIl0pCiAgICAgICAgICAgICAgICBtYWxmb3JtZWQgKz0gMQogICAgICAgICAgICBlbHNlOgogICAgICAgICAgICAgICAgd3JpdGVyLndyaXRlcm93KFtyb3csIGYieyhyb3cgJSAxMDAwKSAvIDEwOi4xZn0iLCAiQSIgaWYgcm93ICUgMiBlbHNlICJCIl0pCiAgICByZXR1cm4gbWFsZm9ybWVkLCBwYXRoLnN0YXQoKS5zdF9zaXplCgoKZGVmIGV4cGVjdGVkX3RpY2tzKCkgLT4gaW50OgogICAgIiIiRXhhY3QgaW50ZWdlci10ZW50aHMgc3VtLCBpbmRlcGVuZGVudCBvZiBmbG9hdGluZy1wb2ludCBhY2N1bXVsYXRpb24uIiIiCiAgICByZXR1cm4gc3VtKHJvdyAlIDEwMDAgZm9yIHJvdyBpbiByYW5nZShST1dTKQogICAgICAgICAgICAgICBpZiAocm93ICsgMSkgJSBNQUxGT1JNRURfRVZFUlkgIT0gMCkKCgpkZWYgcGVha19jaGlsZF9yc3NfYnl0ZXMoKSAtPiBpbnQgfCBOb25lOgogICAgIiIiUmVhZCB0aGUgY2hpbGQtcHJvY2VzcyBwZWFrIFJTUyB3aGVuIFB5dGhvbidzIHJlc291cmNlIEFQSSBzdXBwb3J0cyBpdC4iIiIKICAgIHRyeToKICAgICAgICBpbXBvcnQgcmVzb3VyY2UKICAgICAgICB2YWx1ZSA9IGludChyZXNvdXJjZS5nZXRydXNhZ2UocmVzb3VyY2UuUlVTQUdFX0NISUxEUkVOKS5ydV9tYXhyc3MpCiAgICBleGNlcHQgKEltcG9ydEVycm9yLCBBdHRyaWJ1dGVFcnJvciwgT1NFcnJvciwgVmFsdWVFcnJvcik6CiAgICAgICAgcmV0dXJuIE5vbmUKICAgIGlmIHZhbHVlIDw9IDA6CiAgICAgICAgcmV0dXJuIE5vbmUKICAgICMgUE9TSVggbGVhdmVzIHVuaXRzIHBsYXRmb3JtLXNwZWNpZmljOiBEYXJ3aW4gcmVwb3J0cyBieXRlcywgTGludXgvQlNECiAgICAjIGNvbW1vbmx5IHJlcG9ydCBLaUIuIFRoaXMgd29ya2Zsb3cgcnVucyBvbiBVYnVudHU7IHJldGFpbiBhIHBvcnRhYmxlIGxhYmVsLgogICAgaWYgc3lzLnBsYXRmb3JtID09ICJkYXJ3aW4iOgogICAgICAgIG5vcm1hbGl6ZWQgPSB2YWx1ZQogICAgZWxzZToKICAgICAgICBub3JtYWxpemVkID0gdmFsdWUgKiAxMDI0CiAgICAjIHJ1X21heHJzcyBpcyBhIGhpZ2gtd2F0ZXIgbWFyayBhY3Jvc3MgY2hpbGRyZW47IHRoaXMgc2NyaXB0IGxhdW5jaGVzIG9ubHkKICAgICMgdGhlIG9uZSBNaWxlbmEgcHJvY2VzcyB3aG9zZSBleGVjdXRpb24gaXMgYmVpbmcgbWVhc3VyZWQuCiAgICByZXR1cm4gbm9ybWFsaXplZAoKCmRlZiB2YWxpZGF0ZV9yZXBvcnQocmVwb3J0OiBkaWN0W3N0ciwgQW55XSwgbWFsZm9ybWVkX2V4cGVjdGVkOiBpbnQsCiAgICAgICAgICAgICAgICAgICAgaW5wdXRfYnl0ZXM6IGludCkgLT4gZGljdFtzdHIsIEFueV06CiAgICBleHBlY3RlZF92YWxpZCA9IFJPV1MgLSBtYWxmb3JtZWRfZXhwZWN0ZWQKICAgIGlmIHJlcG9ydC5nZXQoIm1vZG8iKSAhPSAiZmx1am8iOgogICAgICAgIHJhaXNlIEFzc2VydGlvbkVycm9yKGYiZXhwZWN0ZWQgZ2xvYmFsIHN0cmVhbSBtb2RlLCBnb3Qge3JlcG9ydC5nZXQoJ21vZG8nKSFyfSIpCiAgICBleGFjdF9maWVsZHMgPSB7CiAgICAgICAgImZpbGFzIjogUk9XUywKICAgICAgICAiZmlsYXNfdmFsaWRhcyI6IGV4cGVjdGVkX3ZhbGlkLAogICAgICAgICJmaWxhc19tYWxmb3JtYWRhcyI6IG1hbGZvcm1lZF9leHBlY3RlZCwKICAgICAgICAiYnl0ZXNfZW50cmFkYSI6IGlucHV0X2J5dGVzLAogICAgICAgICJieXRlc19sZWlkb3MiOiBpbnB1dF9ieXRlcywKICAgICAgICAidGFtYW5vX2xvdGUiOiBDSFVOS19ST1dTLAogICAgICAgICJsaW1pdGVfcmVnaXN0cm9fYnl0ZXMiOiBNQVhfUkVDT1JEX0JZVEVTLAogICAgfQogICAgZm9yIGZpZWxkLCBleHBlY3RlZCBpbiBleGFjdF9maWVsZHMuaXRlbXMoKToKICAgICAgICBhY3R1YWwgPSByZXBvcnQuZ2V0KGZpZWxkKQogICAgICAgIGlmIGFjdHVhbCAhPSBleHBlY3RlZDoKICAgICAgICAgICAgcmFpc2UgQXNzZXJ0aW9uRXJyb3IoZiJ7ZmllbGR9OiBleHBlY3RlZCB7ZXhwZWN0ZWR9LCBnb3Qge2FjdHVhbCFyfSIpCgogICAgcmVjb3JkX3BlYWsgPSByZXBvcnQuZ2V0KCJwaWNvX3JlZ2lzdHJvX2J5dGVzIikKICAgIGJ1ZmZlcl9jYXBhY2l0eSA9IHJlcG9ydC5nZXQoImNhcGFjaWRhZF9idWZmZXJfcmVnaXN0cm9fYnl0ZXMiKQogICAgaWYgbm90IGlzaW5zdGFuY2UocmVjb3JkX3BlYWssIGludCkgb3Igbm90IGlzaW5zdGFuY2UoYnVmZmVyX2NhcGFjaXR5LCBpbnQpOgogICAgICAgIHJhaXNlIEFzc2VydGlvbkVycm9yKCJzdHJlYW0gcmVwb3J0IG9taXR0ZWQgcmVjb3JkL2J1ZmZlciBvYnNlcnZhdGlvbnMiKQogICAgaWYgbm90ICgwIDwgcmVjb3JkX3BlYWsgPD0gYnVmZmVyX2NhcGFjaXR5IDw9IE1BWF9SRUNPUkRfQllURVMpOgogICAgICAgIHJhaXNlIEFzc2VydGlvbkVycm9yKCJvYnNlcnZlZCBDU1YgcmVjb3JkIGJ1ZmZlciB2aW9sYXRlcyBjb25maWd1cmVkIGJvdW5kIikKICAgIGlmIGJ1ZmZlcl9jYXBhY2l0eSA+PSBpbnB1dF9ieXRlczoKICAgICAgICByYWlzZSBBc3NlcnRpb25FcnJvcigicmVjb3JkIGJ1ZmZlciBpcyBub3Qgc21hbGxlciB0aGFuIHRoZSBjb21wbGV0ZSBDU1YgaW5wdXQiKQoKICAgIHJlc3VsdHMgPSByZXBvcnQuZ2V0KCJyZXN1bHRhZG9zIikKICAgIGlmIG5vdCBpc2luc3RhbmNlKHJlc3VsdHMsIGxpc3QpOgogICAgICAgIHJhaXNlIEFzc2VydGlvbkVycm9yKCJzdHJlYW0gcmVwb3J0IG9taXR0ZWQgYWdncmVnYXRlIHJlc3VsdHMiKQogICAgYnlfb3BlcmF0aW9uID0ge2l0ZW0uZ2V0KCJvcGVyYWNpb24iKTogaXRlbSBmb3IgaXRlbSBpbiByZXN1bHRzCiAgICAgICAgICAgICAgICAgICAgaWYgaXNpbnN0YW5jZShpdGVtLCBkaWN0KX0KICAgIGV4cGVjdGVkX29wZXJhdGlvbnMgPSB7InN1bWEiLCAibWVkaWEiLCAiY29udGVvIn0KICAgIGlmIHNldChieV9vcGVyYXRpb24pICE9IGV4cGVjdGVkX29wZXJhdGlvbnM6CiAgICAgICAgcmFpc2UgQXNzZXJ0aW9uRXJyb3IoZiJ1bmV4cGVjdGVkIGFnZ3JlZ2F0ZSBvcGVyYXRpb25zOiB7c29ydGVkKGJ5X29wZXJhdGlvbil9IikKCiAgICB2YWxpZF9jb3VudCA9IGV4cGVjdGVkX3ZhbGlkCiAgICBzdW1fdmFsdWUgPSBleHBlY3RlZF90aWNrcygpIC8gMTAuMAogICAgbWVhbl92YWx1ZSA9IHN1bV92YWx1ZSAvIHZhbGlkX2NvdW50CiAgICBleHBlY3RlZF92YWx1ZXMgPSB7InN1bWEiOiBzdW1fdmFsdWUsICJtZWRpYSI6IG1lYW5fdmFsdWUsCiAgICAgICAgICAgICAgICAgICAgICAgImNvbnRlbyI6IGZsb2F0KHZhbGlkX2NvdW50KX0KICAgIGZvciBvcGVyYXRpb24sIGV4cGVjdGVkIGluIGV4cGVjdGVkX3ZhbHVlcy5pdGVtcygpOgogICAgICAgIG1ldHJpYyA9IGJ5X29wZXJhdGlvbltvcGVyYXRpb25dCiAgICAgICAgaWYgbWV0cmljLmdldCgiY29sdW1uYSIpICE9ICJpbXBvcnRlIjoKICAgICAgICAgICAgcmFpc2UgQXNzZXJ0aW9uRXJyb3IoZiJ7b3BlcmF0aW9ufSB1c2VkIGFuIHVuZXhwZWN0ZWQgaW5wdXQgY29sdW1uIikKICAgICAgICBpZiBtZXRyaWMuZ2V0KCJ2YWxvcmVzX3ZhbGlkb3MiKSAhPSB2YWxpZF9jb3VudDoKICAgICAgICAgICAgcmFpc2UgQXNzZXJ0aW9uRXJyb3IoZiJ7b3BlcmF0aW9ufSB2YWxpZCBjb3VudCBpcyBpbmNvcnJlY3QiKQogICAgICAgIGlmIG1ldHJpYy5nZXQoInZhbG9yZXNfaW52YWxpZG9zIikgIT0gbWFsZm9ybWVkX2V4cGVjdGVkOgogICAgICAgICAgICByYWlzZSBBc3NlcnRpb25FcnJvcihmIntvcGVyYXRpb259IG1hbGZvcm1lZC12YWx1ZSBjb3VudCBpcyBpbmNvcnJlY3QiKQogICAgICAgIGFjdHVhbCA9IG1ldHJpYy5nZXQoInZhbG9yIikKICAgICAgICBpZiBub3QgaXNpbnN0YW5jZShhY3R1YWwsIChpbnQsIGZsb2F0KSkgb3Igbm90IG1hdGguaXNmaW5pdGUoYWN0dWFsKToKICAgICAgICAgICAgcmFpc2UgQXNzZXJ0aW9uRXJyb3IoZiJ7b3BlcmF0aW9ufSByZXR1cm5lZCBhIG5vbi1maW5pdGUgcmVzdWx0IikKICAgICAgICAjIFRoZSBpbnB1dCBkZWNpbWFscyBhcmUgYmluYXJ5NjQ7IGFzc2VydCB0aGUgZXhhY3QgbWF0aGVtYXRpY2FsIHJlc3VsdAogICAgICAgICMgd2l0aGluIGEgdGlnaHQgcmVwcmVzZW50YXRpb24gdG9sZXJhbmNlLCB3aGlsZSByb3cvZXJyb3IgY291bnRzIGFyZSBleGFjdC4KICAgICAgICBpZiBub3QgbWF0aC5pc2Nsb3NlKGZsb2F0KGFjdHVhbCksIGV4cGVjdGVkLCByZWxfdG9sPTFlLTEyLCBhYnNfdG9sPTFlLTkpOgogICAgICAgICAgICByYWlzZSBBc3NlcnRpb25FcnJvcihmIntvcGVyYXRpb259OiBleHBlY3RlZCB7ZXhwZWN0ZWQ6LjE3Z30sIGdvdCB7YWN0dWFsIXJ9IikKCiAgICByZXR1cm4gewogICAgICAgICJyb3dzIjogUk9XUywKICAgICAgICAidmFsaWRfcm93cyI6IGV4cGVjdGVkX3ZhbGlkLAogICAgICAgICJtYWxmb3JtZWRfcm93cyI6IG1hbGZvcm1lZF9leHBlY3RlZCwKICAgICAgICAiYnl0ZXMiOiBpbnB1dF9ieXRlcywKICAgICAgICAiYWdncmVnYXRlcyI6IHtuYW1lOiBieV9vcGVyYXRpb25bbmFtZV1bInZhbG9yIl0KICAgICAgICAgICAgICAgICAgICAgICBmb3IgbmFtZSBpbiBzb3J0ZWQoZXhwZWN0ZWRfb3BlcmF0aW9ucyl9LAogICAgICAgICJvYnNlcnZlZF9yZWNvcmRfYnl0ZXMiOiByZWNvcmRfcGVhaywKICAgICAgICAicmVjb3JkX2J1ZmZlcl9jYXBhY2l0eV9ieXRlcyI6IGJ1ZmZlcl9jYXBhY2l0eSwKICAgICAgICAiY29uZmlndXJlZF9yZWNvcmRfbGltaXRfYnl0ZXMiOiBNQVhfUkVDT1JEX0JZVEVTLAogICAgICAgICJjaHVua19yb3dzIjogQ0hVTktfUk9XUywKICAgICAgICAiYmFja2VuZF9lbGFwc2VkX21pbGxpc2Vjb25kcyI6IHJlcG9ydC5nZXQoInRpZW1wb19tcyIpLAogICAgICAgICJiYWNrZW5kX3Jvd3NfcGVyX3NlY29uZCI6IHJlcG9ydC5nZXQoImZpbGFzX3Bvcl9zZWd1bmRvIiksCiAgICAgICAgImJhY2tlbmRfbWVnYWJ5dGVzX3Blcl9zZWNvbmQiOiByZXBvcnQuZ2V0KCJtZWdhYnl0ZXNfcG9yX3NlZ3VuZG8iKSwKICAgIH0KCgpkZWYgcnVuX3ZhbGlkYXRpb24ob3V0cHV0X3BhdGg6IFBhdGggfCBOb25lKSAtPiBkaWN0W3N0ciwgQW55XToKICAgIGlmIG5vdCBCSU5BUlkuaXNfZmlsZSgpOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoImJ1aWxkIHRoZSBjYW5vbmljYWwgcHJvZHVjdCBmaXJzdCAobWFrZSBhbGwpIikKICAgIHdpdGggdGVtcGZpbGUuVGVtcG9yYXJ5RGlyZWN0b3J5KHByZWZpeD0ibWlsZW5hLW1pbGxpb24tcm93LSIpIGFzIHRtcDoKICAgICAgICB3b3JrID0gUGF0aCh0bXApCiAgICAgICAgY3N2X3BhdGggPSB3b3JrIC8gImRhdG9zX21pbGxvbi5jc3YiCiAgICAgICAgc2NyaXB0X3BhdGggPSB3b3JrIC8gInJlc3VtZW5fbWlsbG9uLm1pbGVuYSIKICAgICAgICByZXBvcnRfcGF0aCA9IHdvcmsgLyAicmVwb3J0ZS5qc29uIgogICAgICAgIGdlbmVyYXRpb25fc3RhcnRlZCA9IHRpbWUucGVyZl9jb3VudGVyKCkKICAgICAgICBtYWxmb3JtZWQsIGlucHV0X2J5dGVzID0gZ2VuZXJhdGVfY3N2KGNzdl9wYXRoKQogICAgICAgIGdlbmVyYXRpb25fc2Vjb25kcyA9IHRpbWUucGVyZl9jb3VudGVyKCkgLSBnZW5lcmF0aW9uX3N0YXJ0ZWQKICAgICAgICBjc3ZfbGl0ZXJhbCA9IGpzb24uZHVtcHMoc3RyKGNzdl9wYXRoKSwgZW5zdXJlX2FzY2lpPUZhbHNlKQogICAgICAgIHJlcG9ydF9saXRlcmFsID0ganNvbi5kdW1wcyhzdHIocmVwb3J0X3BhdGgpLCBlbnN1cmVfYXNjaWk9RmFsc2UpCiAgICAgICAgc2NyaXB0X3BhdGgud3JpdGVfdGV4dCgKICAgICAgICAgICAgZicnJy5hbmFsaXNpcyB2YWxpZGFjaW9uX21pbGxvbl9maWxhcyB7e1xuICAgIGRhdG9zIGRlc2RlIHtjc3ZfbGl0ZXJhbH1cbiAgICAgICAgcHJvY2VzYXIgcG9yIGxvdGVzIGRlIHtDSFVOS19ST1dTfSBmaWxhc1xuICAgICAgICBjb24gcmVnaXN0cm9zIGRlIGhhc3RhIDEgTWlCXG4gICAgICAgIGNvbiBjb2x1bW5hcyBkZSAxNlxuICAgICAgICBjb24gZmlsYXMgaGFzdGEge1JPV1N9XG4gICAgcmVzdW1pciB7e1xuICAgICAgICBzdW1hIGRlICJpbXBvcnRlIjtcbiAgICAgICAgbWVkaWEgZGUgImltcG9ydGUiO1xuICAgICAgICBjb250YXIgZGUgImltcG9ydGUiO1xuICAgIH19XG4gICAgZ3VhcmRhciByZXN1bHRhZG8gZW4ge3JlcG9ydF9saXRlcmFsfVxufX1cbicnJywKICAgICAgICAgICAgZW5jb2Rpbmc9InV0Zi04IikKCiAgICAgICAgc3RhcnRlZCA9IHRpbWUucGVyZl9jb3VudGVyKCkKICAgICAgICBjb21wbGV0ZWQgPSBzdWJwcm9jZXNzLnJ1bigKICAgICAgICAgICAgW3N0cihCSU5BUlkpLCAicnVuIiwgc3RyKHNjcmlwdF9wYXRoKV0sIGN3ZD1ST09ULAogICAgICAgICAgICBzdGRvdXQ9c3VicHJvY2Vzcy5QSVBFLCBzdGRlcnI9c3VicHJvY2Vzcy5QSVBFLCB0ZXh0PVRydWUsCiAgICAgICAgICAgIHRpbWVvdXQ9UlVOX1RJTUVPVVRfU0VDT05EUywgY2hlY2s9RmFsc2UpCiAgICAgICAgcHJvY2Vzc19zZWNvbmRzID0gdGltZS5wZXJmX2NvdW50ZXIoKSAtIHN0YXJ0ZWQKICAgICAgICBpZiBjb21wbGV0ZWQucmV0dXJuY29kZSAhPSAwOgogICAgICAgICAgICByYWlzZSBSdW50aW1lRXJyb3IoCiAgICAgICAgICAgICAgICBmIm1pbGVuYSBydW4gZmFpbGVkIHdpdGggZXhpdCB7Y29tcGxldGVkLnJldHVybmNvZGV9OlxuIgogICAgICAgICAgICAgICAgZiJ7Y29tcGxldGVkLnN0ZGVycn1cbntjb21wbGV0ZWQuc3Rkb3V0fSIpCiAgICAgICAgaWYgbm90IHJlcG9ydF9wYXRoLmlzX2ZpbGUoKToKICAgICAgICAgICAgcmFpc2UgQXNzZXJ0aW9uRXJyb3IoIm1pbGVuYSBydW4gc3VjY2VlZGVkIHdpdGhvdXQgd3JpdGluZyBpdHMgcmVwb3J0IikKICAgICAgICByZXBvcnQgPSBqc29uLmxvYWRzKHJlcG9ydF9wYXRoLnJlYWRfdGV4dChlbmNvZGluZz0idXRmLTgiKSkKICAgICAgICB2YWxpZGF0ZWQgPSB2YWxpZGF0ZV9yZXBvcnQocmVwb3J0LCBtYWxmb3JtZWQsIGlucHV0X2J5dGVzKQogICAgICAgIHJzc19ieXRlcyA9IHBlYWtfY2hpbGRfcnNzX2J5dGVzKCkKICAgICAgICByZXN1bHQ6IGRpY3Rbc3RyLCBBbnldID0gewogICAgICAgICAgICAic2NoZW1hIjogIm1pbGVuYS1taWxsaW9uLXJvdy12YWxpZGF0aW9uLXYxIiwKICAgICAgICAgICAgInN0YXR1cyI6ICJwYXNzZWQiLAogICAgICAgICAgICAiZXhlY3V0aW9uIjogIm1pbGVuYSBydW4gd2l0aCAuYW5hbGlzaXMgLyBkYXRvcyBkZXNkZSAvIHJlc3VtaXIgLyBndWFyZGFyIHJlc3VsdGFkbyIsCiAgICAgICAgICAgICJjYW5vbmljYWxfcGF0aCI6ICJsZXhlciAtPiBwYXJzZXIgLT4gQVNUIC0+IHNlbWFudGljL3Jlc291cmNlcyAtPiBydW50aW1lIC0+IHN0cmVhbSBiYWNrZW5kIiwKICAgICAgICAgICAgImZpeHR1cmUiOiB7InJvd3NfcmVxdWVzdGVkIjogUk9XUywKICAgICAgICAgICAgICAgICAgICAgICAgIm1hbGZvcm1lZF9ldmVyeSI6IE1BTEZPUk1FRF9FVkVSWSwKICAgICAgICAgICAgICAgICAgICAgICAgIm1hbGZvcm1lZF9leHBlY3RlZCI6IG1hbGZvcm1lZCwKICAgICAgICAgICAgICAgICAgICAgICAgInZhbGlkX2V4cGVjdGVkIjogUk9XUyAtIG1hbGZvcm1lZCwKICAgICAgICAgICAgICAgICAgICAgICAgImdlbmVyYXRpb25fc2Vjb25kcyI6IGdlbmVyYXRpb25fc2Vjb25kc30sCiAgICAgICAgICAgICJtZWFzdXJlbWVudHMiOiB7Kip2YWxpZGF0ZWQsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgInByb2Nlc3NfZWxhcHNlZF9zZWNvbmRzIjogcHJvY2Vzc19zZWNvbmRzLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICJwcm9jZXNzX3Jvd3NfcGVyX3NlY29uZCI6IFJPV1MgLyBwcm9jZXNzX3NlY29uZHMgaWYgcHJvY2Vzc19zZWNvbmRzIGVsc2UgTm9uZSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICAicGVha19yc3NfYnl0ZXMiOiByc3NfYnl0ZXMsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgInBlYWtfcnNzX3N1cHBvcnRlZCI6IHJzc19ieXRlcyBpcyBub3QgTm9uZX0sCiAgICAgICAgICAgICJlbnZpcm9ubWVudCI6IHsicGxhdGZvcm0iOiBwbGF0Zm9ybS5wbGF0Zm9ybSgpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgIm1hY2hpbmUiOiBwbGF0Zm9ybS5tYWNoaW5lKCksCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAicHl0aG9uIjogcGxhdGZvcm0ucHl0aG9uX3ZlcnNpb24oKSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICJjb21waWxlciI6IG9zLmVudmlyb24uZ2V0KCJDQyIsICJtYWtlIGRlZmF1bHQgQ0MiKSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgICJjb21taXQiOiBvcy5lbnZpcm9uLmdldCgiR0lUSFVCX1NIQSIsICJ1bmtub3duIil9LAogICAgICAgICAgICAibGltaXRhdGlvbnMiOiBbCiAgICAgICAgICAgICAgICAiVGhpcyBwYXNzIHByb3ZlcyBvbmx5IHRoaXMgZ2xvYmFsIENTViBhZ2dyZWdhdGlvbiwgaW5wdXQsIGJ1aWxkIGFuZCBoYXJkd2FyZS4iLAogICAgICAgICAgICAgICAgIkl0IGRvZXMgbm90IHByb3ZlIGFyYml0cmFyeSBCaWcgRGF0YSB3b3JrbG9hZHMsIGdyb3VwZWQgc3BpbGwsIGpvaW5zLCBFVEwsIGRpc3RyaWJ1dGVkL2Nsb3VkIGV4ZWN1dGlvbiwgQXJyb3cvUGFycXVldCBvciBNTC4iLAogICAgICAgICAgICAgICAgIlRocm91Z2hwdXQgYW5kIHBlYWsgUlNTIGFyZSBvYnNlcnZhdGlvbnM7IG5vIHVuaXZlcnNhbCBsYXRlbmN5IG9yIFJTUyB0aHJlc2hvbGQgaXMgYXNzZXJ0ZWQuIiwKICAgICAgICAgICAgXSwKICAgICAgICB9CiAgICAgICAgcmVuZGVyZWQgPSBqc29uLmR1bXBzKHJlc3VsdCwgZW5zdXJlX2FzY2lpPUZhbHNlLCBpbmRlbnQ9MikgKyAiXG4iCiAgICAgICAgaWYgb3V0cHV0X3BhdGg6CiAgICAgICAgICAgIG91dHB1dF9wYXRoLndyaXRlX3RleHQocmVuZGVyZWQsIGVuY29kaW5nPSJ1dGYtOCIpCiAgICAgICAgcHJpbnQocmVuZGVyZWQsIGVuZD0iIikKICAgICAgICByZXR1cm4gcmVzdWx0CgoKZGVmIG1haW4oKSAtPiBpbnQ6CiAgICBwYXJzZXIgPSBhcmdwYXJzZS5Bcmd1bWVudFBhcnNlcihkZXNjcmlwdGlvbj1fX2RvY19fKQogICAgcGFyc2VyLmFkZF9hcmd1bWVudCgiLS1vdXRwdXQiLCB0eXBlPVBhdGgsCiAgICAgICAgICAgICAgICAgICAgICAgIGhlbHA9ImFsc28gc2F2ZSB0aGUgSlNPTiBvYnNlcnZhdGlvbiB0byB0aGlzIHBhdGgiKQogICAgYXJncyA9IHBhcnNlci5wYXJzZV9hcmdzKCkKICAgIHJ1bl92YWxpZGF0aW9uKGFyZ3Mub3V0cHV0KQogICAgcmV0dXJuIDAKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgcmFpc2UgU3lzdGVtRXhpdChtYWluKCkpCg==
+#!/usr/bin/env python3
+"""Validate one million rows through Milena's canonical language/runtime path.
+
+Only fixture generation and result checking happen in Python. The CSV scan and
+aggregation are executed by ``milena run`` using the human .analisis syntax.
+Timings and RSS are observations, not portable performance promises.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import os
+import platform
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+BINARY = ROOT / "milena"
+ROWS = 1_000_000
+MALFORMED_EVERY = 100_003
+CHUNK_ROWS = 4_096
+MAX_RECORD_BYTES = 1 * 1024 * 1024
+RUN_TIMEOUT_SECONDS = 600
+
+
+def generate_csv(path: Path) -> tuple[int, int]:
+    """Write a stable three-column fixture; return malformed rows and bytes."""
+    malformed = 0
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(["id", "importe", "grupo"])
+        for row in range(ROWS):
+            if (row + 1) % MALFORMED_EVERY == 0:
+                writer.writerow([row, "no-num", "invalida"])
+                malformed += 1
+            else:
+                writer.writerow([row, f"{(row % 1000) / 10:.1f}", "A" if row % 2 else "B"])
+    return malformed, path.stat().st_size
+
+
+def expected_ticks() -> int:
+    """Exact integer-tenths sum, independent of floating-point accumulation."""
+    return sum(row % 1000 for row in range(ROWS)
+               if (row + 1) % MALFORMED_EVERY != 0)
+
+
+def peak_child_rss_bytes() -> int | None:
+    """Read the child-process peak RSS when Python's resource API supports it."""
+    try:
+        import resource
+        value = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+    except (ImportError, AttributeError, OSError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    # POSIX leaves units platform-specific: Darwin reports bytes, Linux/BSD
+    # commonly report KiB. This workflow runs on Ubuntu; retain a portable label.
+    if sys.platform == "darwin":
+        normalized = value
+    else:
+        normalized = value * 1024
+    # ru_maxrss is a high-water mark across children; this script launches only
+    # the one Milena process whose execution is being measured.
+    return normalized
+
+
+def validate_report(report: dict[str, Any], malformed_expected: int,
+                    input_bytes: int) -> dict[str, Any]:
+    expected_valid = ROWS - malformed_expected
+    if report.get("modo") != "flujo":
+        raise AssertionError(f"expected global stream mode, got {report.get('modo')!r}")
+    exact_fields = {
+        "filas": ROWS,
+        "filas_validas": expected_valid,
+        "filas_malformadas": malformed_expected,
+        "bytes_entrada": input_bytes,
+        "bytes_leidos": input_bytes,
+        "tamano_lote": CHUNK_ROWS,
+        "limite_registro_bytes": MAX_RECORD_BYTES,
+    }
+    for field, expected in exact_fields.items():
+        actual = report.get(field)
+        if actual != expected:
+            raise AssertionError(f"{field}: expected {expected}, got {actual!r}")
+
+    record_peak = report.get("pico_registro_bytes")
+    buffer_capacity = report.get("capacidad_buffer_registro_bytes")
+    if not isinstance(record_peak, int) or not isinstance(buffer_capacity, int):
+        raise AssertionError("stream report omitted record/buffer observations")
+    if not (0 < record_peak <= buffer_capacity <= MAX_RECORD_BYTES):
+        raise AssertionError("observed CSV record buffer violates configured bound")
+    if buffer_capacity >= input_bytes:
+        raise AssertionError("record buffer is not smaller than the complete CSV input")
+
+    results = report.get("resultados")
+    if not isinstance(results, list):
+        raise AssertionError("stream report omitted aggregate results")
+    by_operation = {item.get("operacion"): item for item in results
+                    if isinstance(item, dict)}
+    expected_operations = {"suma", "media", "conteo"}
+    if set(by_operation) != expected_operations:
+        raise AssertionError(f"unexpected aggregate operations: {sorted(by_operation)}")
+
+    valid_count = expected_valid
+    sum_value = expected_ticks() / 10.0
+    mean_value = sum_value / valid_count
+    expected_values = {"suma": sum_value, "media": mean_value,
+                       "conteo": float(valid_count)}
+    for operation, expected in expected_values.items():
+        metric = by_operation[operation]
+        if metric.get("columna") != "importe":
+            raise AssertionError(f"{operation} used an unexpected input column")
+        if metric.get("valores_validos") != valid_count:
+            raise AssertionError(f"{operation} valid count is incorrect")
+        if metric.get("valores_invalidos") != malformed_expected:
+            raise AssertionError(f"{operation} malformed-value count is incorrect")
+        actual = metric.get("valor")
+        if not isinstance(actual, (int, float)) or not math.isfinite(actual):
+            raise AssertionError(f"{operation} returned a non-finite result")
+        # The input decimals are binary64; assert the exact mathematical result
+        # within a tight representation tolerance, while row/error counts are exact.
+        if not math.isclose(float(actual), expected, rel_tol=1e-12, abs_tol=1e-9):
+            raise AssertionError(f"{operation}: expected {expected:.17g}, got {actual!r}")
+
+    return {
+        "rows": ROWS,
+        "valid_rows": expected_valid,
+        "malformed_rows": malformed_expected,
+        "bytes": input_bytes,
+        "aggregates": {name: by_operation[name]["valor"]
+                       for name in sorted(expected_operations)},
+        "observed_record_bytes": record_peak,
+        "record_buffer_capacity_bytes": buffer_capacity,
+        "configured_record_limit_bytes": MAX_RECORD_BYTES,
+        "chunk_rows": CHUNK_ROWS,
+        "backend_elapsed_milliseconds": report.get("tiempo_ms"),
+        "backend_rows_per_second": report.get("filas_por_segundo"),
+        "backend_megabytes_per_second": report.get("megabytes_por_segundo"),
+    }
+
+
+def run_validation(output_path: Path | None) -> dict[str, Any]:
+    if not BINARY.is_file():
+        raise SystemExit("build the canonical product first (make all)")
+    with tempfile.TemporaryDirectory(prefix="milena-million-row-") as tmp:
+        work = Path(tmp)
+        csv_path = work / "datos_millon.csv"
+        script_path = work / "resumen_millon.milena"
+        report_path = work / "reporte.json"
+        generation_started = time.perf_counter()
+        malformed, input_bytes = generate_csv(csv_path)
+        generation_seconds = time.perf_counter() - generation_started
+        csv_literal = json.dumps(str(csv_path), ensure_ascii=False)
+        report_literal = json.dumps(str(report_path), ensure_ascii=False)
+        script_path.write_text(
+            f'''.analisis validacion_millon_filas {{\n    datos desde {csv_literal}\n        procesar por lotes de {CHUNK_ROWS} filas\n        con registros de hasta 1 MiB\n        con columnas de 16\n        con filas hasta {ROWS}\n    resumir {{\n        suma de "importe";\n        media de "importe";\n        contar de "importe";\n    }}\n    guardar resultado en {report_literal}\n}}\n''',
+            encoding="utf-8")
+
+        started = time.perf_counter()
+        completed = subprocess.run(
+            [str(BINARY), "run", str(script_path)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        process_seconds = time.perf_counter() - started
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"milena run failed with exit {completed.returncode}:\n"
+                f"{completed.stderr}\n{completed.stdout}")
+        if not report_path.is_file():
+            raise AssertionError("milena run succeeded without writing its report")
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        validated = validate_report(report, malformed, input_bytes)
+        rss_bytes = peak_child_rss_bytes()
+        result: dict[str, Any] = {
+            "schema": "milena-million-row-validation-v1",
+            "status": "passed",
+            "execution": "milena run with .analisis / datos desde / resumir / guardar resultado",
+            "canonical_path": "lexer -> parser -> AST -> semantic/resources -> runtime -> stream backend",
+            "fixture": {"rows_requested": ROWS,
+                        "malformed_every": MALFORMED_EVERY,
+                        "malformed_expected": malformed,
+                        "valid_expected": ROWS - malformed,
+                        "generation_seconds": generation_seconds},
+            "measurements": {**validated,
+                             "process_elapsed_seconds": process_seconds,
+                             "process_rows_per_second": ROWS / process_seconds if process_seconds else None,
+                             "peak_rss_bytes": rss_bytes,
+                             "peak_rss_supported": rss_bytes is not None},
+            "environment": {"platform": platform.platform(),
+                            "machine": platform.machine(),
+                            "python": platform.python_version(),
+                            "compiler": os.environ.get("CC", "make default CC"),
+                            "commit": os.environ.get("GITHUB_SHA", "unknown")},
+            "limitations": [
+                "This pass proves only this global CSV aggregation, input, build and hardware.",
+                "It does not prove arbitrary Big Data workloads, grouped spill, joins, ETL, distributed/cloud execution, Arrow/Parquet or ML.",
+                "Throughput and peak RSS are observations; no universal latency or RSS threshold is asserted.",
+            ],
+        }
+        rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+        if output_path:
+            output_path.write_text(rendered, encoding="utf-8")
+        print(rendered, end="")
+        return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path,
+                        help="also save the JSON observation to this path")
+    args = parser.parse_args()
+    run_validation(args.output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

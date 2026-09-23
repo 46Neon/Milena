@@ -1,1 +1,41 @@
-bmFtZTogTWlsbGlvbi1yb3cgc2NhbGUgdmFsaWRhdGlvbgoKb246CiAgd29ya2Zsb3dfZGlzcGF0Y2g6CiAgcHVsbF9yZXF1ZXN0OgogICAgcGF0aHM6CiAgICAgIC0gJy5naXRodWIvd29ya2Zsb3dzL21pbGxpb24tcm93LXNjYWxlLnltbCcKICAgICAgLSAnYmVuY2htYXJrcy9taWxsaW9uX3Jvd192YWxpZGF0aW9uLnB5JwogICAgICAtICdkb2NzL01JTExJT05fUk9XX1NDQUxFX1JPQURNQVBfUFIyOS5tZCcKICAgICAgLSAnTWFrZWZpbGUnCiAgc2NoZWR1bGU6CiAgICAtIGNyb246ICcyMyA0ICogKiAxJwoKcGVybWlzc2lvbnM6CiAgY29udGVudHM6IHJlYWQKCmpvYnM6CiAgbWlsbGlvbi1yb3ctY2Fub25pY2FsLWxhbmd1YWdlOgogICAgbmFtZTogQ2Fub25pY2FsIC5taWxlbmEgQ1NWIGFnZ3JlZ2F0aW9uICgxLDAwMCwwMDAgcm93cykKICAgIHJ1bnMtb246IHVidW50dS1sYXRlc3QKICAgIHRpbWVvdXQtbWludXRlczogMzAKICAgIHN0ZXBzOgogICAgICAtIHVzZXM6IGFjdGlvbnMvY2hlY2tvdXRAdjQKICAgICAgLSBuYW1lOiBCdWlsZCBjYW5vbmljYWwgTWlsZW5hIHByb2R1Y3QKICAgICAgICBydW46IHwKICAgICAgICAgIHNldCAtZXV4byBwaXBlZmFpbAogICAgICAgICAgbWFrZSBjbGVhbgogICAgICAgICAgbWFrZSBDQz1nY2MgYWxsCiAgICAgIC0gbmFtZTogR2VuZXJhdGUsIHJ1biBhbmQgdmVyaWZ5IG9uZS1taWxsaW9uLXJvdyBDU1Ygd29ya2xvYWQKICAgICAgICBlbnY6CiAgICAgICAgICBDQzogZ2NjCiAgICAgICAgICBHSVRIVUJfU0hBOiAke3sgZ2l0aHViLnNoYSB9fQogICAgICAgIHJ1bjogbWFrZSBDQz1nY2Mgc2NhbGUtbWlsbGlvbi1yb3cgU0NBTEVfUkVTVUxUPW1pbGxpb24tcm93LXJlc3VsdHMuanNvbgogICAgICAtIG5hbWU6IFVwbG9hZCBzY2FsZSBvYnNlcnZhdGlvbgogICAgICAgIGlmOiBhbHdheXMoKQogICAgICAgIHVzZXM6IGFjdGlvbnMvdXBsb2FkLWFydGlmYWN0QHY0CiAgICAgICAgd2l0aDoKICAgICAgICAgIG5hbWU6IG1pbGxpb24tcm93LXNjYWxlLSR7eyBnaXRodWIucnVuX2lkIH19CiAgICAgICAgICBwYXRoOiBtaWxsaW9uLXJvdy1yZXN1bHRzLmpzb24KICAgICAgICAgIGlmLW5vLWZpbGVzLWZvdW5kOiBpZ25vcmUKICAgICAgICAgIHJldGVudGlvbi1kYXlzOiAzMAo=
+name: Million-row scale validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/million-row-scale.yml'
+      - 'benchmarks/million_row_validation.py'
+      - 'docs/MILLION_ROW_SCALE_ROADMAP_PR29.md'
+      - 'Makefile'
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  million-row-canonical-language:
+    name: Canonical .milena CSV aggregation (1,000,000 rows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build canonical Milena product
+        run: |
+          set -euxo pipefail
+          make clean
+          make CC=gcc all
+      - name: Generate, run and verify one-million-row CSV workload
+        env:
+          CC: gcc
+          GITHUB_SHA: ${{ github.sha }}
+        run: make CC=gcc scale-million-row SCALE_RESULT=million-row-results.json
+      - name: Upload scale observation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: million-row-scale-${{ github.run_id }}
+          path: million-row-results.json
+          if-no-files-found: ignore
+          retention-days: 30
