@@ -2,7 +2,17 @@
 
 #include <stdint.h>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 static const unsigned char SPILL_MAGIC[4] = {'M', 'L', 'S', '1'};
+static unsigned long spill_temp_counter = 0;
 
 static void spill_error(MilenaError *error, MilenaStatus status,
                         const char *message) {
@@ -42,16 +52,17 @@ static bool read_exact(FILE *file, void *data, size_t length) {
     return length == 0 || fread(data, 1, length, file) == length;
 }
 
+/* Scan and validate a complete prefix. A valid file larger than the caller's
+ * quota is rejected, never mistaken for a corrupt tail and truncated. */
 static MilenaStatus scan_store(FILE *file, size_t quota, size_t max_record,
-                               size_t *valid_bytes, size_t *records,
-                               bool *bad_tail, MilenaError *error) {
+                              size_t *valid_bytes, size_t *records,
+                              bool *bad_tail, MilenaError *error) {
     unsigned char header[MILENA_SPILL_HEADER_SIZE];
     size_t offset = 0;
     *valid_bytes = 0;
     *records = 0;
     *bad_tail = false;
     for (;;) {
-        size_t header_start = offset;
         size_t header_bytes = fread(header, 1, sizeof(header), file);
         if (header_bytes == 0) {
             if (ferror(file)) {
@@ -71,43 +82,69 @@ static MilenaStatus scan_store(FILE *file, size_t quota, size_t max_record,
         }
         uint64_t raw_length = get_u64(header + 8);
         if (raw_length > SIZE_MAX || (size_t)raw_length > max_record) {
-            *bad_tail = true;
-            break;
+            spill_error(error, MILENA_ERR_OVERFLOW,
+                        "Un registro spill válido puede exceder el límite configurado");
+            return MILENA_ERR_OVERFLOW;
         }
         size_t length = (size_t)raw_length;
-        size_t record_bytes = 0;
+        size_t record_bytes = 0, end_offset = 0;
         if (!milena_size_add(MILENA_SPILL_HEADER_SIZE, length, &record_bytes) ||
             !milena_size_add(record_bytes, MILENA_SPILL_TRAILER_SIZE, &record_bytes) ||
-            !milena_size_add(offset, record_bytes, &offset) || offset > quota) {
-            *bad_tail = true;
-            break;
+            !milena_size_add(offset, record_bytes, &end_offset)) {
+            spill_error(error, MILENA_ERR_OVERFLOW,
+                        "El tamaño declarado del spill no es representable");
+            return MILENA_ERR_OVERFLOW;
         }
-        unsigned char *payload = NULL;
-        if (length > 0) {
-            payload = (unsigned char *)malloc(length);
-            if (!payload) {
-                spill_error(error, MILENA_ERR_MEMORY, "Memoria insuficiente al recuperar spill");
-                return MILENA_ERR_MEMORY;
-            }
+        unsigned char *payload = length ? (unsigned char *)malloc(length) : NULL;
+        if (length && !payload) {
+            spill_error(error, MILENA_ERR_MEMORY, "Memoria insuficiente al recuperar spill");
+            return MILENA_ERR_MEMORY;
         }
         unsigned char trailer[MILENA_SPILL_TRAILER_SIZE];
         bool complete = read_exact(file, payload, length) &&
                         read_exact(file, trailer, sizeof(trailer));
-        if (!complete || spill_checksum(payload, length) != get_u32(trailer)) {
-            free(payload);
+        bool checksum_ok = complete &&
+            spill_checksum(payload, length) == get_u32(trailer);
+        free(payload);
+        if (!checksum_ok) {
+            if (ferror(file)) {
+                spill_error(error, MILENA_ERR_IO, "No se pudo leer el spill");
+                return MILENA_ERR_IO;
+            }
             *bad_tail = true;
             break;
         }
-        free(payload);
+        if (end_offset > quota) {
+            spill_error(error, MILENA_ERR_OVERFLOW,
+                        "El spill válido supera la cuota configurada");
+            return MILENA_ERR_OVERFLOW;
+        }
+        offset = end_offset;
         *valid_bytes = offset;
+        if (*records == SIZE_MAX) {
+            spill_error(error, MILENA_ERR_OVERFLOW, "Demasiados registros spill");
+            return MILENA_ERR_OVERFLOW;
+        }
         (*records)++;
-        (void)header_start;
-    }
-    if (*valid_bytes > quota) {
-        spill_error(error, MILENA_ERR_OVERFLOW, "El spill supera la cuota configurada");
-        return MILENA_ERR_OVERFLOW;
     }
     return MILENA_OK;
+}
+
+static bool activate_recovered_file(const char *tmp_path, const char *path) {
+#ifdef _WIN32
+    return MoveFileExA(tmp_path, path,
+                       MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    return rename(tmp_path, path) == 0;
+#endif
+}
+
+static unsigned long current_process_id(void) {
+#ifdef _WIN32
+    return (unsigned long)GetCurrentProcessId();
+#else
+    return (unsigned long)getpid();
+#endif
 }
 
 MilenaStatus milena_spill_store_recover(const char *path, size_t quota_bytes,
@@ -122,37 +159,97 @@ MilenaStatus milena_spill_store_recover(const char *path, size_t quota_bytes,
     memset(recovery, 0, sizeof(*recovery));
     FILE *input = fopen(path, "rb");
     if (!input) {
-        if (errno == ENOENT) { if (error) milena_error_clear(error); return MILENA_OK; }
+        if (errno == ENOENT) {
+            if (error) milena_error_clear(error);
+            return MILENA_OK;
+        }
         spill_error(error, MILENA_ERR_IO, "No se pudo abrir el spill para recuperar");
         return MILENA_ERR_IO;
     }
-    if (fseek(input, 0, SEEK_END) != 0) { fclose(input); spill_error(error, MILENA_ERR_IO, "No se pudo medir el spill"); return MILENA_ERR_IO; }
+    if (fseek(input, 0, SEEK_END) != 0) {
+        fclose(input);
+        spill_error(error, MILENA_ERR_IO, "No se pudo medir el spill");
+        return MILENA_ERR_IO;
+    }
     long end = ftell(input);
-    if (end < 0) { fclose(input); spill_error(error, MILENA_ERR_IO, "No se pudo medir el spill"); return MILENA_ERR_IO; }
+    if (end < 0 || (uintmax_t)end > (uintmax_t)SIZE_MAX) {
+        fclose(input);
+        spill_error(error, MILENA_ERR_OVERFLOW, "El archivo spill es demasiado grande");
+        return MILENA_ERR_OVERFLOW;
+    }
     size_t total = (size_t)end;
     rewind(input);
     size_t valid = 0, records = 0;
     bool bad_tail = false;
     MilenaStatus status = scan_store(input, quota_bytes, max_record_bytes,
                                      &valid, &records, &bad_tail, error);
-    fclose(input);
+    if (fclose(input) != 0 && status == MILENA_OK) {
+        spill_error(error, MILENA_ERR_IO, "No se pudo cerrar el spill");
+        status = MILENA_ERR_IO;
+    }
     if (status != MILENA_OK) return status;
+
     recovery->records_recovered = records;
     recovery->bytes_recovered = valid;
     recovery->bytes_discarded = total >= valid ? total - valid : 0;
     recovery->truncated_tail = bad_tail && recovery->bytes_discarded > 0;
     if (recovery->truncated_tail) {
-        char *tmp_path = (char *)malloc(strlen(path) + 10);
-        if (!tmp_path) { spill_error(error, MILENA_ERR_MEMORY, "Memoria insuficiente al truncar spill"); return MILENA_ERR_MEMORY; }
-        (void)snprintf(tmp_path, strlen(path) + 10, "%s.recover", path);
+        size_t path_len = strlen(path);
+        if (path_len > SIZE_MAX - 80) {
+            spill_error(error, MILENA_ERR_OVERFLOW, "La ruta spill es demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        size_t temp_capacity = path_len + 80;
+        char *tmp_path = (char *)malloc(temp_capacity);
+        if (!tmp_path) {
+            spill_error(error, MILENA_ERR_MEMORY, "Memoria insuficiente al truncar spill");
+            return MILENA_ERR_MEMORY;
+        }
+        FILE *output = NULL;
+        for (unsigned int attempt = 0; attempt < 16 && !output; attempt++) {
+            unsigned long serial = ++spill_temp_counter;
+            int n = snprintf(tmp_path, temp_capacity, "%s.recover.%lu.%lu",
+                             path, current_process_id(), serial);
+            if (n < 0 || (size_t)n >= temp_capacity) break;
+            output = fopen(tmp_path, "wbx");
+            if (!output && errno != EEXIST) break;
+        }
+        if (!output) {
+            free(tmp_path);
+            spill_error(error, MILENA_ERR_IO, "No se pudo crear spill recuperado");
+            return MILENA_ERR_IO;
+        }
         input = fopen(path, "rb");
-        FILE *output = fopen(tmp_path, "wb");
-        if (!input || !output) { if (input) fclose(input); if (output) fclose(output); free(tmp_path); spill_error(error, MILENA_ERR_IO, "No se pudo crear spill recuperado"); return MILENA_ERR_IO; }
-        unsigned char buffer[8192]; size_t left = valid;
-        while (left > 0) { size_t want = left < sizeof(buffer) ? left : sizeof(buffer); if (fread(buffer, 1, want, input) != want || fwrite(buffer, 1, want, output) != want) { fclose(input); fclose(output); remove(tmp_path); free(tmp_path); spill_error(error, MILENA_ERR_IO, "No se pudo copiar el spill recuperado"); return MILENA_ERR_IO; } left -= want; }
-        bool ok = fclose(input) == 0 && fclose(output) == 0 && remove(path) == 0 && rename(tmp_path, path) == 0;
+        if (!input) {
+            fclose(output);
+            remove(tmp_path);
+            free(tmp_path);
+            spill_error(error, MILENA_ERR_IO, "No se pudo reabrir spill para recuperarlo");
+            return MILENA_ERR_IO;
+        }
+        unsigned char buffer[8192];
+        size_t left = valid;
+        bool copied = true;
+        while (left > 0) {
+            size_t want = left < sizeof(buffer) ? left : sizeof(buffer);
+            if (fread(buffer, 1, want, input) != want ||
+                fwrite(buffer, 1, want, output) != want) {
+                copied = false;
+                break;
+            }
+            left -= want;
+        }
+        bool input_closed = fclose(input) == 0;
+        bool output_closed = fclose(output) == 0;
+        bool replaced = copied && input_closed && output_closed &&
+                        activate_recovered_file(tmp_path, path);
+        if (!replaced) remove(tmp_path);
         free(tmp_path);
-        if (!ok) { spill_error(error, MILENA_ERR_IO, "No se pudo activar el spill recuperado"); return MILENA_ERR_IO; }
+        if (!replaced) {
+            spill_error(error, MILENA_ERR_IO,
+                        "No se pudo activar spill recuperado; el original se conserva");
+            return MILENA_ERR_IO;
+        }
     }
     if (error) milena_error_clear(error);
     return MILENA_OK;
@@ -174,13 +271,29 @@ MilenaStatus milena_spill_store_visit(const char *path, size_t quota_bytes,
     if (status != MILENA_OK) return status;
     FILE *file = fopen(path, "rb");
     if (!file) {
-        if (errno == ENOENT) { if (error) milena_error_clear(error); return MILENA_OK; }
+        if (errno == ENOENT) {
+            if (error) milena_error_clear(error);
+            return MILENA_OK;
+        }
         spill_error(error, MILENA_ERR_IO, "No se pudo abrir el spill para recorrerlo");
         return MILENA_ERR_IO;
     }
     unsigned char header[MILENA_SPILL_HEADER_SIZE];
-    size_t index = 0;
-    while (fread(header, 1, sizeof(header), file) == sizeof(header)) {
+    size_t index = 0, bytes_seen = 0;
+    for (;;) {
+        size_t header_bytes = fread(header, 1, sizeof(header), file);
+        if (header_bytes == 0) {
+            if (ferror(file)) {
+                status = MILENA_ERR_IO;
+                spill_error(error, status, "Error al leer spill durante recorrido");
+            }
+            break;
+        }
+        if (header_bytes != sizeof(header)) {
+            status = MILENA_ERR_DATA;
+            spill_error(error, status, "Cabecera spill truncada durante recorrido");
+            break;
+        }
         uint64_t raw_length = get_u64(header + 8);
         if (memcmp(header, SPILL_MAGIC, 4) != 0 ||
             get_u32(header + 4) != MILENA_SPILL_VERSION ||
@@ -189,21 +302,47 @@ MilenaStatus milena_spill_store_visit(const char *path, size_t quota_bytes,
             spill_error(error, status, "Cabecera spill inválida durante recorrido");
             break;
         }
-        size_t length = (size_t)raw_length;
+        size_t length = (size_t)raw_length, record_bytes = 0, end_offset = 0;
+        if (!milena_size_add(MILENA_SPILL_HEADER_SIZE, length, &record_bytes) ||
+            !milena_size_add(record_bytes, MILENA_SPILL_TRAILER_SIZE, &record_bytes) ||
+            !milena_size_add(bytes_seen, record_bytes, &end_offset) ||
+            end_offset > quota_bytes) {
+            status = MILENA_ERR_OVERFLOW;
+            spill_error(error, status, "El spill excede la cuota durante recorrido");
+            break;
+        }
         unsigned char *payload = length ? (unsigned char *)malloc(length) : NULL;
-        if (length && !payload) { status = MILENA_ERR_MEMORY; spill_error(error, status, "Memoria insuficiente al recorrer spill"); break; }
+        if (length && !payload) {
+            status = MILENA_ERR_MEMORY;
+            spill_error(error, status, "Memoria insuficiente al recorrer spill");
+            break;
+        }
         unsigned char trailer[MILENA_SPILL_TRAILER_SIZE];
-        if (!read_exact(file, payload, length) || !read_exact(file, trailer, sizeof(trailer)) ||
-            spill_checksum(payload, length) != get_u32(trailer)) {
-            free(payload); status = MILENA_ERR_DATA; spill_error(error, status, "Registro spill inválido durante recorrido"); break;
+        bool complete = read_exact(file, payload, length) &&
+                        read_exact(file, trailer, sizeof(trailer));
+        bool checksum_ok = complete &&
+            spill_checksum(payload, length) == get_u32(trailer);
+        if (!checksum_ok) {
+            free(payload);
+            status = ferror(file) ? MILENA_ERR_IO : MILENA_ERR_DATA;
+            spill_error(error, status, "Registro spill inválido durante recorrido");
+            break;
         }
         status = visitor(payload, length, index, context, error);
         free(payload);
         if (status != MILENA_OK) break;
+        if (index == SIZE_MAX) {
+            status = MILENA_ERR_OVERFLOW;
+            spill_error(error, status, "Demasiados registros durante recorrido");
+            break;
+        }
         index++;
+        bytes_seen = end_offset;
     }
-    if (status == MILENA_OK && ferror(file)) { status = MILENA_ERR_IO; spill_error(error, status, "Error al recorrer spill"); }
-    if (fclose(file) != 0 && status == MILENA_OK) { status = MILENA_ERR_IO; spill_error(error, status, "No se pudo cerrar spill"); }
+    if (fclose(file) != 0 && status == MILENA_OK) {
+        status = MILENA_ERR_IO;
+        spill_error(error, status, "No se pudo cerrar spill");
+    }
     if (status == MILENA_OK && error) milena_error_clear(error);
     return status;
 }
@@ -218,46 +357,77 @@ MilenaStatus milena_spill_store_open(const char *path, size_t quota_bytes,
         return MILENA_ERR_ARGUMENT;
     }
     MilenaSpillRecovery recovery;
-    MilenaStatus status = milena_spill_store_recover(path, quota_bytes, max_record_bytes, &recovery, error);
+    MilenaStatus status = milena_spill_store_recover(path, quota_bytes,
+                                                      max_record_bytes,
+                                                      &recovery, error);
     if (status != MILENA_OK) return status;
     FILE *file = fopen(path, "ab");
-    if (!file) { spill_error(error, MILENA_ERR_IO, "No se pudo abrir el spill para escritura"); return MILENA_ERR_IO; }
-    store->path = milena_strdup(path);
-    if (!store->path) { fclose(file); spill_error(error, MILENA_ERR_MEMORY, "Memoria insuficiente para abrir spill"); return MILENA_ERR_MEMORY; }
-    store->file = file; store->quota_bytes = quota_bytes; store->max_record_bytes = max_record_bytes;
-    store->bytes_used = recovery.bytes_recovered; store->record_count = recovery.records_recovered;
+    if (!file) {
+        spill_error(error, MILENA_ERR_IO, "No se pudo abrir el spill para escritura");
+        return MILENA_ERR_IO;
+    }
+    char *store_path = milena_strdup(path);
+    if (!store_path) {
+        fclose(file);
+        spill_error(error, MILENA_ERR_MEMORY, "Memoria insuficiente para abrir spill");
+        return MILENA_ERR_MEMORY;
+    }
+    store->path = store_path;
+    store->file = file;
+    store->quota_bytes = quota_bytes;
+    store->max_record_bytes = max_record_bytes;
+    store->bytes_used = recovery.bytes_recovered;
+    store->record_count = recovery.records_recovered;
+    store->failed = false;
     if (error) milena_error_clear(error);
     return MILENA_OK;
 }
 
 MilenaStatus milena_spill_store_append(MilenaSpillStore *store, const void *data,
                                        size_t length, MilenaError *error) {
-    if (!store || !store->file || (length > 0 && !data) || length > store->max_record_bytes) {
-        spill_error(error, MILENA_ERR_ARGUMENT, "Registro inválido para spill"); return MILENA_ERR_ARGUMENT;
+    if (!store || !store->file || store->failed ||
+        (length > 0 && !data) || length > store->max_record_bytes) {
+        spill_error(error, store && store->failed ? MILENA_ERR_IO : MILENA_ERR_ARGUMENT,
+                    "Registro inválido o spill requiere recuperación tras error de escritura");
+        return store && store->failed ? MILENA_ERR_IO : MILENA_ERR_ARGUMENT;
     }
     size_t total = 0;
-    if (!milena_size_add(MILENA_SPILL_HEADER_SIZE, length, &total) ||
+    if (store->bytes_used > store->quota_bytes || store->record_count == SIZE_MAX ||
+        !milena_size_add(MILENA_SPILL_HEADER_SIZE, length, &total) ||
         !milena_size_add(total, MILENA_SPILL_TRAILER_SIZE, &total) ||
         total > store->quota_bytes - store->bytes_used) {
-        spill_error(error, MILENA_ERR_OVERFLOW, "La cuota de spill fue agotada"); return MILENA_ERR_OVERFLOW;
+        spill_error(error, MILENA_ERR_OVERFLOW, "La cuota de spill fue agotada");
+        return MILENA_ERR_OVERFLOW;
     }
     unsigned char header[MILENA_SPILL_HEADER_SIZE], trailer[MILENA_SPILL_TRAILER_SIZE];
-    memcpy(header, SPILL_MAGIC, 4); put_u32(header + 4, MILENA_SPILL_VERSION); put_u64(header + 8, (uint64_t)length);
+    memcpy(header, SPILL_MAGIC, 4);
+    put_u32(header + 4, MILENA_SPILL_VERSION);
+    put_u64(header + 8, (uint64_t)length);
     put_u32(trailer, spill_checksum((const unsigned char *)data, length));
     if (fwrite(header, 1, sizeof(header), store->file) != sizeof(header) ||
         (length > 0 && fwrite(data, 1, length, store->file) != length) ||
-        fwrite(trailer, 1, sizeof(trailer), store->file) != sizeof(trailer) || fflush(store->file) != 0) {
-        spill_error(error, MILENA_ERR_IO, "No se pudo escribir el registro spill"); return MILENA_ERR_IO;
+        fwrite(trailer, 1, sizeof(trailer), store->file) != sizeof(trailer) ||
+        fflush(store->file) != 0) {
+        store->failed = true;
+        spill_error(error, MILENA_ERR_IO, "No se pudo escribir el registro spill; reabra para recuperar");
+        return MILENA_ERR_IO;
     }
-    store->bytes_used += total; store->record_count++;
+    store->bytes_used += total;
+    store->record_count++;
     if (error) milena_error_clear(error);
     return MILENA_OK;
 }
 
 MilenaStatus milena_spill_store_close(MilenaSpillStore *store, MilenaError *error) {
-    if (!store || !store->file) { spill_error(error, MILENA_ERR_ARGUMENT, "Spill no abierto"); return MILENA_ERR_ARGUMENT; }
+    if (!store || !store->file) {
+        spill_error(error, MILENA_ERR_ARGUMENT, "Spill no abierto");
+        return MILENA_ERR_ARGUMENT;
+    }
     MilenaStatus status = fclose(store->file) == 0 ? MILENA_OK : MILENA_ERR_IO;
-    free(store->path); store->path = NULL; store->file = NULL;
-    if (status != MILENA_OK) spill_error(error, status, "No se pudo cerrar el spill"); else if (error) milena_error_clear(error);
+    free(store->path);
+    store->path = NULL;
+    store->file = NULL;
+    if (status != MILENA_OK) spill_error(error, status, "No se pudo cerrar el spill");
+    else if (error) milena_error_clear(error);
     return status;
 }

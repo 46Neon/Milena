@@ -12,12 +12,13 @@ paralelo.
 2. **Reducción distribuible** — implementada en esta actualización: consumir
    resultados decodificados fuera de orden, rechazar duplicados/faltantes y
    conservar equivalencia monolítica.
-3. **Spill-to-disk** — serializar estados parciales y limitar espacio temporal.
-4. **Formatos masivos** — Parquet/Arrow, row groups, compresión y pushdown.
-5. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
-6. **Coordinador** — leases, heartbeats, reintentos, checkpoints y cancelación.
-7. **Transporte** — adaptar el mismo protocolo a IPC y red autenticada.
-8. **SLO medidos** — benchmarks con p50/p95/p99, memoria, shuffle y fallos.
+3. **Spill-to-disk básico** — implementado en esta rama: registros limitados, validación y replay incremental; no equivale a un motor de spill completo.
+4. **Agregación externa y merge de runs** — siguiente fase pendiente; combinar estados mergeables usando replay sin materializar todos los datos en RAM.
+5. **Formatos masivos** — Parquet/Arrow, row groups, compresión y pushdown.
+6. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
+7. **Coordinador** — leases, heartbeats, reintentos, checkpoints y cancelación.
+8. **Transporte** — adaptar el mismo protocolo a IPC y red autenticada.
+9. **SLO medidos** — benchmarks reproducibles con p50/p95/p99, memoria, shuffle y fallos.
 
 Una fase no se considera terminada solo porque compile: necesita contrato,
 prueba de integración, caso de error y comparación con el resultado local.
@@ -40,10 +41,11 @@ cambiar el frontend del lenguaje.
 ## Alcance honesto
 
 PR #27 deja la base local: planner, particiones, workers, presupuestos,
-cancelación, reducción e IPC POSIX. PR #28 comienza la interoperabilidad del
-resultado. Todavía no existe procesamiento entre máquinas, Parquet, shuffle,
-spill-to-disk ni un SLO de latencia fija. Cada una requiere implementación y
-medición propia.
+cancelación, reducción e IPC POSIX. PR #28 añade interoperabilidad del resultado
+y un almacén spill append-only con replay secuencial validado. No existe todavía
+procesamiento entre máquinas, Parquet/Arrow, shuffle distribuido, agregación
+externa general ni un SLO medido de latencia. Cada una requiere implementación,
+pruebas y medición propias.
 
 ## Reducción implementada
 
@@ -70,11 +72,17 @@ Esta fase añade un almacén append-only con registros autocontenidos: magic,
 versión, longitud canónica y checksum FNV-1a. Tiene cuota total y tamaño máximo
 por registro, rechaza escrituras que excedan el presupuesto, valida el prefijo
 completo al abrir y recupera automáticamente un tail incompleto o corrupto
-mediante un archivo temporal y un reemplazo atómico lógico. La recuperación
-expone cuántos registros y bytes conserva y cuánto descarta; no confunde una
-recuperación parcial con datos válidos. Es la base para ordenamiento externo,
-agregaciones con spill y checkpoints posteriores, no una afirmación de que ya
-exista tolerancia a fallos de clúster.
+copiando el prefijo verificado a un temporal único y reemplazando el nombre sin
+borrar antes el original (rename en POSIX; reemplazo del sistema en Windows).
+Si el reemplazo falla, el original queda en su lugar y se devuelve error. Los
+registros completos que exceden la cuota o el límite por registro se rechazan
+con overflow y no se truncan, para evitar pérdida silenciosa al reabrir con
+límites menores. La recuperación expone cuántos registros y bytes conserva y
+cuánto descarta; no confunde recuperación parcial con datos válidos. El acceso
+concurrente de varios escritores/recuperadores al mismo archivo no está
+soportado. `fflush` confirma la descarga a la capa C, no persistencia ante corte
+de energía; no se promete crash durability. Esto prepara ordenamiento externo,
+agregaciones con spill y checkpoints, no tolerancia a fallos de clúster.
 
 ## Replay incremental
 

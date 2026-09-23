@@ -14,6 +14,7 @@ typedef struct {
     size_t max_record_bytes;
     size_t bytes_used;
     size_t record_count;
+    bool failed; /* A partial write requires close/reopen recovery before appending. */
 } MilenaSpillStore;
 
 typedef MilenaStatus (*MilenaSpillVisitFn)(const void *data, size_t length,
@@ -36,7 +37,8 @@ MilenaStatus milena_spill_store_append(MilenaSpillStore *store,
                                        MilenaError *error);
 MilenaStatus milena_spill_store_close(MilenaSpillStore *store,
                                       MilenaError *error);
-/* Validates the append-only prefix and rewrites away an incomplete/corrupt tail. */
+/* Validates the append-only prefix and replaces the file without deleting the
+ * original first. Valid records over the configured quota/size are rejected. */
 MilenaStatus milena_spill_store_recover(const char *path, size_t quota_bytes,
                                         size_t max_record_bytes,
                                         MilenaSpillRecovery *recovery,
