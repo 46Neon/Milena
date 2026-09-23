@@ -63,3 +63,15 @@ serializa byte a byte. Esto evita depender del endianness o del layout nativo de
 la máquina y deja el contrato preparado para workers heterogéneos. El cambio de
 representación incrementa la versión del protocolo y obliga a rechazar mensajes
 de versiones anteriores en lugar de interpretarlos ambiguamente.
+
+## Spill-to-disk y recuperación
+
+Esta fase añade un almacén append-only con registros autocontenidos: magic,
+versión, longitud canónica y checksum FNV-1a. Tiene cuota total y tamaño máximo
+por registro, rechaza escrituras que excedan el presupuesto, valida el prefijo
+completo al abrir y recupera automáticamente un tail incompleto o corrupto
+mediante un archivo temporal y un reemplazo atómico lógico. La recuperación
+expone cuántos registros y bytes conserva y cuánto descarta; no confunde una
+recuperación parcial con datos válidos. Es la base para ordenamiento externo,
+agregaciones con spill y checkpoints posteriores, no una afirmación de que ya
+exista tolerancia a fallos de clúster.
