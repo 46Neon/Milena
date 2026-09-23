@@ -223,7 +223,7 @@ int main(void) {
     };
     memset(&grouped_report, 0, sizeof(grouped_report));
     assert(milena_stream_csv_grouped_spill_with_options(group_input,
-        spill_group_output, "zona", &grouped_metrics[0], &grouped_options,
+        spill_group_output, "zona", &grouped_metrics[0], 1u, &grouped_options,
         &plan_spill_policy, &grouped_report, &grouped_error) == MILENA_OK);
     assert(grouped_report.groups == 2);
     json = fopen(spill_group_output, "rb");
