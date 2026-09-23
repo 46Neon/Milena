@@ -9,6 +9,7 @@ parser = (ROOT / "src/parser.c").read_text()
 runtime = (ROOT / "src/language_runtime.c").read_text()
 planner = (ROOT / "src/query_plan.c").read_text()
 make = (ROOT / "Makefile").read_text()
+windows_build = (ROOT / "packaging/windows/build.ps1").read_text()
 manifest = (ROOT / "scripts/check_source_manifest.py").read_text()
 stream = (ROOT / "src/stream.c").read_text()
 stream_header = (ROOT / "include/stream.h").read_text()
@@ -86,7 +87,8 @@ if "Dataset" in spill_stream or "MilenaTable" in spill_stream:
 if "src/stream.c" not in make or '"stream.c"' not in manifest:
     raise SystemExit("stream.c is not classified as official product")
 if ("src/group_key_codec.c" not in make or '"group_key_codec.c"' not in manifest or
-        "group_key_codec.h" not in stream or (ROOT / "tests/support/group_key_codec.c").exists()):
+        "group_key_codec.c" not in windows_build or "group_key_codec.h" not in stream or
+        (ROOT / "tests/support/group_key_codec.c").exists()):
     raise SystemExit("group key codec must be a single linked product source")
 if "milena_stream_csv_grouped_spill_with_options" not in stream_runtime:
     raise SystemExit("canonical caller must remain on the single-key compatibility adapter")
