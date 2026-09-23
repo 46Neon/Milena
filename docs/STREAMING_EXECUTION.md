@@ -76,7 +76,12 @@ mantiene fuera del producto los módulos experimentales de VM/IR/GC.
 - También admite agrupación tipada en el mismo AST/runtime, tanto el mapa
   acotado en memoria como el corte spill de una clave de texto y una métrica.
   El modo spill emite en orden bytewise desde el callback y mantiene el
-  presupuesto del reductor separado del registro CSV.
+  presupuesto del reductor separado del registro CSV. El planner físico coloca
+  explícitamente `SCAN_CSV_RECORDS → GROUPED_SPILL → REDUCE_PARTIAL_STATES →
+  ORDER_BY_KEY → JSON_SINK`; la fusión externa combina estados parciales por
+  clave y produce un orden global determinista. El escaneo permanece secuencial
+  y solo consume registros CSV completos, por lo que las comillas/saltos de
+  línea no se parten en fronteras arbitrarias.
 - Rechaza columnas inexistentes, demasiadas columnas (máximo 4096), registros
   que exceden el límite y CSV con comillas sin cerrar.
 - Reporta filas leídas, filas válidas, filas malformadas, límite de registro,

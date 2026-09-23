@@ -315,6 +315,12 @@ MilenaStatus milena_stream_plan_build_csv(bool grouped, bool spill,
         plan->operators[plan->operator_count++] = spill ?
             MILENA_STREAM_PLAN_GROUPED_SPILL :
             MILENA_STREAM_PLAN_GROUPED_AGGREGATE;
+        if (spill) {
+            /* The spill reducer merges equal-key partial states across runs
+             * before the final global key-order operator emits the sink. */
+            plan->operators[plan->operator_count++] =
+                MILENA_STREAM_PLAN_REDUCE_PARTIAL_STATES;
+        }
         plan->operators[plan->operator_count++] =
             MILENA_STREAM_PLAN_ORDER_BY_KEY;
     }
@@ -349,6 +355,10 @@ MilenaStatus milena_stream_plan_validate_csv(
             plan->kind == MILENA_STREAM_PLAN_GROUPED_SPILL_MODE ?
                 MILENA_STREAM_PLAN_GROUPED_SPILL :
                 MILENA_STREAM_PLAN_GROUPED_AGGREGATE;
+        if (plan->kind == MILENA_STREAM_PLAN_GROUPED_SPILL_MODE) {
+            expected[expected_count++] =
+                MILENA_STREAM_PLAN_REDUCE_PARTIAL_STATES;
+        }
         expected[expected_count++] = MILENA_STREAM_PLAN_ORDER_BY_KEY;
     }
     expected[expected_count++] = MILENA_STREAM_PLAN_JSON_SINK;

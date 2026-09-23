@@ -73,6 +73,7 @@ typedef enum {
     MILENA_STREAM_PLAN_SUMMARY_AGGREGATE,
     MILENA_STREAM_PLAN_GROUPED_AGGREGATE,
     MILENA_STREAM_PLAN_GROUPED_SPILL,
+    MILENA_STREAM_PLAN_REDUCE_PARTIAL_STATES,
     MILENA_STREAM_PLAN_ORDER_BY_KEY,
     MILENA_STREAM_PLAN_JSON_SINK
 } MilenaStreamPlanOperator;
@@ -83,7 +84,9 @@ typedef enum {
     MILENA_STREAM_PLAN_GROUPED_SPILL_MODE
 } MilenaStreamPlanKind;
 
-#define MILENA_STREAM_PLAN_MAX_OPERATORS 4u
+/* A spillable grouped CSV plan names scan, local aggregate/run creation,
+ * partial-state reduction, deterministic key ordering, and its sink. */
+#define MILENA_STREAM_PLAN_MAX_OPERATORS 5u
 
 typedef struct {
     MilenaStreamPlanKind kind;
@@ -96,8 +99,11 @@ typedef struct {
     const char *reason;
 } MilenaStreamExecutionPlan;
 
-/* Current CSV physical plans are a single record-aware scan. The generic
- * byte-range planner is deliberately not used for quoted/multiline CSV. */
+/* CSV physical plans begin with a single record-aware scan. Grouped spill
+ * plans push aggregation, partial-state reduction, and final bytewise key
+ * ordering before the JSON sink. The generic byte-range planner is deliberately
+ * not used for quoted/multiline CSV; CSV plans remain sequential until a
+ * record-boundary-aware partitioner and global reducer are implemented. */
 MilenaStatus milena_stream_plan_build_csv(bool grouped, bool spill,
                                           MilenaStreamExecutionPlan *plan,
                                           MilenaError *error);

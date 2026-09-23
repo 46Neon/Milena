@@ -58,12 +58,29 @@ int main(void) {
     assert(milena_stream_plan_build_csv(true, true, &execution_plan,
                                         &error) == MILENA_OK);
     assert(execution_plan.kind == MILENA_STREAM_PLAN_GROUPED_SPILL_MODE &&
-           execution_plan.operator_count == 4 &&
+           execution_plan.operator_count == 5 &&
+           execution_plan.operators[0] == MILENA_STREAM_PLAN_SCAN_CSV_RECORDS &&
            execution_plan.operators[1] == MILENA_STREAM_PLAN_GROUPED_SPILL &&
-           execution_plan.operators[2] == MILENA_STREAM_PLAN_ORDER_BY_KEY);
-    execution_plan.parallel_enabled = true;
-    assert(milena_stream_plan_validate_csv(&execution_plan, &error) ==
+           execution_plan.operators[2] ==
+               MILENA_STREAM_PLAN_REDUCE_PARTIAL_STATES &&
+           execution_plan.operators[3] == MILENA_STREAM_PLAN_ORDER_BY_KEY &&
+           execution_plan.operators[4] == MILENA_STREAM_PLAN_JSON_SINK &&
+           execution_plan.partition_count == 1 &&
+           execution_plan.worker_count == 1 &&
+           execution_plan.csv_record_safe &&
+           !execution_plan.parallel_enabled);
+    MilenaStreamExecutionPlan unsafe_plan = execution_plan;
+    unsafe_plan.parallel_enabled = true;
+    assert(milena_stream_plan_validate_csv(&unsafe_plan, &error) ==
            MILENA_ERR_UNSUPPORTED);
+    unsafe_plan = execution_plan;
+    unsafe_plan.csv_record_safe = false;
+    assert(milena_stream_plan_validate_csv(&unsafe_plan, &error) ==
+           MILENA_ERR_UNSUPPORTED);
+    unsafe_plan = execution_plan;
+    unsafe_plan.operators[2] = MILENA_STREAM_PLAN_ORDER_BY_KEY;
+    assert(milena_stream_plan_validate_csv(&unsafe_plan, &error) ==
+           MILENA_ERR_DATA);
     assert(milena_stream_plan_build_csv(false, true, &execution_plan,
                                         &error) == MILENA_ERR_ARGUMENT);
     assert(report.rows_read == 4);
