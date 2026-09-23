@@ -20,6 +20,14 @@ paralelo.
 8. **Transporte** — adaptar el mismo protocolo a IPC y red autenticada.
 9. **Mediciones observadas (no SLO)** — el workflow determinista valida 1.000.000 de filas y 1.000 grupos con el reducer configurado a 262.144 bytes y repite cada workload tres veces. En el run `35869526200` (`workflow_dispatch`, head `9cc3ca31`, Linux x86_64), el workload de un millón de filas midió medianas de 0,320 s en memoria y 5,841 s con spill. `ru_maxrss` por proceso hijo osciló entre 12.079.104–12.115.968 bytes (memoria) y 12.013.568–12.087.296 bytes (spill); el scratch máximo muestreado cada 10 ms osciló entre 255.654.528 y 255.689.216 bytes. Son tres observaciones de una ejecución/workload, no un SLO ni una cota global de RSS. No se deriva garantía para otras plataformas o cardinalidades.
 
+El workflow ahora añade un gate separado con un archivo CSV generado de al menos
+10.000.000.000 bytes, 1.000.000 de filas y 4 grupos; compara resultados
+canónicos en memoria y con spill, y registra RSS de proceso y scratch de disco.
+El relleno repetido hace determinista el tamaño y el archivo se escribe de forma
+no dispersa, pero este caso de baja cardinalidad no demuestra alta cardinalidad,
+una cota global de RAM ni procesamiento distribuido. No se marcará como validado
+hasta que termine con éxito la CI del head que incorpora el gate.
+
 Una fase no se considera terminada solo porque compile: necesita contrato,
 prueba de integración, caso de error y comparación con el resultado local.
 

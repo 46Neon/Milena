@@ -12,6 +12,7 @@ import json
 import math
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -103,7 +104,8 @@ def _scratch_size(scratch: Path | None) -> int:
 
 
 def run(binary: Path, script: Path, cwd: Path,
-        scratch: Path | None = None) -> tuple[dict, float, int | None, int]:
+        scratch: Path | None = None,
+        timeout_seconds: int = RUN_TIMEOUT_SECONDS) -> tuple[dict, float, int | None, int]:
     command = [str(binary), "run", str(script)]
     stop = threading.Event()
     observed_scratch = [0]
@@ -119,9 +121,9 @@ def run(binary: Path, script: Path, cwd: Path,
     try:
         wrapper = subprocess.run(
             [sys.executable, "-c", _MEASURE_CHILD,
-             json.dumps(command), str(RUN_TIMEOUT_SECONDS)],
+             json.dumps(command), str(timeout_seconds)],
             cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=RUN_TIMEOUT_SECONDS + 15)
+            timeout=timeout_seconds + 15)
     finally:
         stop.set()
         sampler.join()
@@ -172,6 +174,17 @@ def assert_row_contract(report: dict, rows: int, groups: int) -> None:
             raise AssertionError(f"valid-row count mismatch for {key}")
         if metric.get("valores_nulos") != 0 or metric.get("valores_invalidos") != 0:
             raise AssertionError(f"unexpected null/invalid rows for {key}")
+
+
+def assert_full_input_read(report: dict, expected_bytes: int, route: str) -> None:
+    if report.get("bytes_entrada") != expected_bytes:
+        raise AssertionError(
+            f"{route} reports {report.get('bytes_entrada')} input bytes; "
+            f"expected {expected_bytes}")
+    if report.get("bytes_leidos") != expected_bytes:
+        raise AssertionError(
+            f"{route} consumed {report.get('bytes_leidos')} bytes; "
+            f"expected the full {expected_bytes}-byte CSV")
 
 
 def run_case(rows: int, groups: int, repetitions: int) -> dict:
@@ -229,11 +242,137 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
                 "measurements": measurements}
 
 
+def write_padded_csv(path: Path, rows: int, groups: int,
+                     minimum_bytes: int) -> tuple[int, int, int]:
+    if rows < 1 or groups < 1 or groups > 32 or groups > rows:
+        raise ValueError("large-file workload requires 1..32 groups and valid rows")
+    header = b"grupo,valor,relleno\n"
+    first_prefix = b"G000000,1,"
+    base_record_bytes = len(first_prefix) + 1  # plus line feed
+    wanted_per_row = max(base_record_bytes,
+                         (max(0, minimum_bytes - len(header)) + rows - 1) // rows)
+    padding_bytes = wanted_per_row - base_record_bytes
+    filler = b"x" * padding_bytes
+    cycle = b"".join(
+        f"G{group:06d},1,".encode("ascii") + filler + b"\n"
+        for group in range(groups))
+    full_cycles, remainder = divmod(rows, groups)
+    cycles_per_chunk = max(1, min(256, (8 * 1024 * 1024) // len(cycle)))
+    with path.open("wb") as stream:
+        stream.write(header)
+        for start in range(0, full_cycles, cycles_per_chunk):
+            count = min(cycles_per_chunk, full_cycles - start)
+            stream.write(cycle * count)
+        for group in range(remainder):
+            stream.write(f"G{group:06d},1,".encode("ascii"))
+            stream.write(filler)
+            stream.write(b"\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    file_stat = path.stat()
+    actual_bytes = file_stat.st_size
+    allocated_bytes = getattr(file_stat, "st_blocks", 0) * 512
+    if actual_bytes < minimum_bytes:
+        raise AssertionError(
+            f"generated CSV is only {actual_bytes} bytes; need {minimum_bytes}")
+    if allocated_bytes and allocated_bytes < minimum_bytes * 0.9:
+        raise AssertionError(
+            f"CSV allocation looks sparse: {allocated_bytes} allocated bytes "
+            f"for {actual_bytes} logical bytes")
+    return actual_bytes, padding_bytes, allocated_bytes or actual_bytes
+
+
+def run_large_file_case(minimum_bytes: int, rows: int, groups: int,
+                        repetitions: int) -> dict:
+    if minimum_bytes < 10_000_000_000:
+        raise ValueError("the large-file gate requires at least 10,000,000,000 bytes")
+    with tempfile.TemporaryDirectory(prefix="milena-grouped-spill-10gb-") as td:
+        root = Path(td)
+        free_before = shutil.disk_usage(root).free
+        if free_before < minimum_bytes + 512 * 1024 * 1024:
+            raise SystemExit(
+                f"need at least {minimum_bytes + 512 * 1024 * 1024} free bytes; "
+                f"found {free_before}")
+        csv_path = root / "ten-gib.csv"
+        input_bytes, padding_bytes, allocated_bytes = write_padded_csv(
+            csv_path, rows, groups, minimum_bytes)
+        free_after_generation = shutil.disk_usage(root).free
+        quota = min(4_294_967_296,
+                    max(1_048_576, input_bytes * SPILL_QUOTA_MULTIPLIER))
+        measurements = []
+        for repetition in range(repetitions):
+            memory_script = root / f"large-memory-{repetition}.milena"
+            spill_script = root / f"large-spill-{repetition}.milena"
+            memory_text = render_script(csv_path,
+                f"large-memory-{repetition}.json", groups, rows + 1)
+            spill_path = root / f"large-scratch-{repetition}.bin"
+            spill_text = render_script(csv_path,
+                f"large-spill-{repetition}.json", groups, rows + 1,
+                scratch=spill_path, spill_quota=quota)
+            declaration = "    variable valor numerica\n"
+            if declaration not in memory_text or declaration not in spill_text:
+                raise AssertionError("cannot add the padding column to the Milena script")
+            memory_script.write_text(memory_text.replace(
+                declaration, declaration + "    variable relleno texto\n"),
+                encoding="utf-8")
+            spill_script.write_text(spill_text.replace(
+                declaration, declaration + "    variable relleno texto\n"),
+                encoding="utf-8")
+            memory_report, memory_seconds, memory_rss, _ = run(
+                BINARY, memory_script, root, timeout_seconds=2400)
+            spill_report, spill_seconds, spill_rss, scratch_peak = run(
+                BINARY, spill_script, root, scratch=spill_path,
+                timeout_seconds=2400)
+            assert_row_contract(memory_report, rows, groups)
+            assert_row_contract(spill_report, rows, groups)
+            assert_full_input_read(memory_report, input_bytes, "in-memory route")
+            assert_full_input_read(spill_report, input_bytes, "spill route")
+            memory_values = values(memory_report, "flujo_agrupado", groups)
+            spill_values = values(spill_report, "flujo_agrupado_spill", groups)
+            if memory_values != spill_values:
+                raise AssertionError("large-file memory/spill outputs differ")
+            if spill_path.exists():
+                raise AssertionError("large-file scratch file remains after success")
+            measurements.append({
+                "repetition": repetition + 1,
+                "memory_elapsed_seconds": memory_seconds,
+                "spill_elapsed_seconds": spill_seconds,
+                "memory_peak_rss_bytes": memory_rss,
+                "spill_peak_rss_bytes": spill_rss,
+                "spill_scratch_peak_bytes_sampled": scratch_peak,
+                "input_bytes_read_memory": memory_report.get("bytes_leidos"),
+                "input_bytes_read_spill": spill_report.get("bytes_leidos"),
+                "spill_output_bytes": spill_report.get("bytes_salida"),
+            })
+        return {
+            "minimum_file_bytes": minimum_bytes,
+            "actual_file_bytes": input_bytes,
+            "allocated_file_bytes": allocated_bytes,
+            "rows": rows,
+            "groups": groups,
+            "padding_bytes_per_row": padding_bytes,
+            "spill_memory_budget_bytes": MEMORY_BUDGET_BYTES,
+            "spill_quota_bytes": quota,
+            "free_disk_bytes_before": free_before,
+            "free_disk_bytes_after_generation": free_after_generation,
+            "measurements": measurements,
+            "limitations": [
+                "Synthetic deterministic CSV with a repeated padding column, one million rows and low group cardinality; this proves byte-volume streaming only for this workload.",
+                "RSS is per-process peak RSS, not global/cgroup RSS or a system memory cap; sampled scratch is disk usage, not RAM.",
+            ],
+        }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--large-rows", type=int, default=0,
                         help="opt-in workload up to one million rows")
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--large-file-bytes", type=int, default=0,
+                        help="also validate a generated CSV of at least 10 GB")
+    parser.add_argument("--large-file-rows", type=int, default=1_000_000)
+    parser.add_argument("--large-file-groups", type=int, default=4)
+    parser.add_argument("--large-file-repetitions", type=int, default=1)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not BINARY.is_file():
@@ -242,15 +381,27 @@ def main() -> int:
         raise SystemExit("--repetitions must be between 1 and 20")
     if not 0 <= args.large_rows <= MAX_ROWS:
         raise SystemExit(f"--large-rows must be between 0 and {MAX_ROWS}")
+    if args.large_file_bytes and args.large_file_bytes < 10_000_000_000:
+        raise SystemExit("--large-file-bytes must be at least 10,000,000,000")
+    if not 1 <= args.large_file_rows <= MAX_ROWS:
+        raise SystemExit(f"--large-file-rows must be between 1 and {MAX_ROWS}")
+    if not 1 <= args.large_file_groups <= 32 or args.large_file_groups > args.large_file_rows:
+        raise SystemExit("--large-file-groups must be between 1 and 32 and not exceed rows")
+    if not 1 <= args.large_file_repetitions <= 5:
+        raise SystemExit("--large-file-repetitions must be between 1 and 5")
     cases = [("small", 100, 4), ("medium", 10_000, 32)]
     if args.large_rows:
         cases.append(("large-opt-in", args.large_rows,
                       min(args.large_rows, 1_000)))
     payload = {
-        "schema": "milena-grouped-spill-benchmark-v2",
+        "schema": "milena-grouped-spill-benchmark-v3",
         "workloads": [{"fixture": name, **run_case(rows, groups,
                                                        args.repetitions)}
                       for name, rows, groups in cases],
+        "large_file_gate": (run_large_file_case(
+            args.large_file_bytes, args.large_file_rows,
+            args.large_file_groups, args.large_file_repetitions)
+            if args.large_file_bytes else None),
         "environment": {"platform": platform.platform(),
                         "machine": platform.machine(),
                         "compiler": os.environ.get("CC", "make default CC"),
@@ -264,6 +415,7 @@ def main() -> int:
             "Peak RSS is per-process child ru_maxrss (or null on unsupported platforms), not aggregate cgroup/system RSS or a memory guarantee.",
             "Scratch peak is a 10 ms sampled sum of files prefixed by the configured path; short-lived peaks can be missed and final scratch is cleaned up.",
             "No SLO or performance guarantee; results apply only to the recorded environment and workload.",
+            "The optional >=10 GB gate is a generated CSV with a repeated padding field, one million rows and low group cardinality; it proves input-byte streaming only for this workload, not high-cardinality or distributed scale.",
             "No CSV-aware partition execution, Arrow/Parquet, cloud or distributed execution is measured.",
         ],
     }

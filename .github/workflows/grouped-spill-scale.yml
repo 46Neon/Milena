@@ -1,4 +1,4 @@
-name: Grouped spill million-row validation
+name: Grouped spill scale and 10 GB validation
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ jobs:
   grouped-spill-million-row:
     name: Canonical grouped spill (1,000,000 rows)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
@@ -26,11 +26,25 @@ jobs:
             --large-rows 1000000 \
             --repetitions 3 \
             --output artifacts/grouped-spill-million-row.json
+      - name: Run real 10 GB CSV acceptance gate
+        env:
+          CC: gcc
+        run: |
+          mkdir -p artifacts
+          python3 benchmarks/grouped_spill_benchmark.py \
+            --large-file-bytes 10000000000 \
+            --large-file-rows 1000000 \
+            --large-file-groups 4 \
+            --large-file-repetitions 1 \
+            --repetitions 1 \
+            --output artifacts/grouped-spill-ten-gb.json
       - name: Upload reproducible workload observation
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: grouped-spill-million-row-${{ github.sha }}
-          path: artifacts/grouped-spill-million-row.json
+          name: grouped-spill-large-file-acceptance-${{ github.sha }}
+          path: |
+            artifacts/grouped-spill-million-row.json
+            artifacts/grouped-spill-ten-gb.json
           if-no-files-found: warn
           retention-days: 30
