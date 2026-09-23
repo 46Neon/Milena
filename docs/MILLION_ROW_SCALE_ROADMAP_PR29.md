@@ -192,3 +192,12 @@ en el workflow separado `Million-row scale validation` en PRs que cambien los
 componentes de escala, manualmente o en su calendario semanal. El workflow
 adjunta el JSON del resultado cuando el job termina correctamente. El proceso falla si no se validan los conteos y valores
 esperados o si el informe no acredita el búfer acotado.
+
+
+## Actual integration with PR #28 (PR #29 stacked)
+
+PR #29 is now based on the open PR #28 branch `feature/massive-scalability-pr28` at the verified dependency head. Its history is preserved with a normal two-parent merge commit; PR #28 itself is not modified. The typed physical planner recognizes the AST spill policy and routes `.analisis` streaming groups to PR #28's `milena_stream_csv_grouped_spill_with_options` API, reusing its bounded CSV parser, versioned spill store, deterministic reducer/finalizer and transactional report publishing rather than copying storage/reducer code. The table runtime continues to use PR #28's canonical language adapter.
+
+The opt-in million-row validation now exercises 128 distinct spill groups with `con grupos de 128`, 4,096 bytes of reducer memory, an explicit 128 MiB scratch quota, 128-byte key cap, one-million row cap, and 1 MiB record cap. It checks all group sums/counts/malformed values, sorted deterministic keys, successful scratch cleanup, and identical output on a repeated run. Existing PR #28 end-to-end tests cover row, time, disk-quota, group-quota and invalid-type/multi-metric rejections with no partial report or stale files. These configured limits bound reducer state, output cardinality and scratch use; they are not a process-wide RSS guarantee.
+
+The task `make scale-million-row` remains an opt-in workflow rather than part of `make test`; its result is observational and has no portable throughput threshold. Cloud/Arrow/Parquet/ETL, distributed execution and ML remain future phases.

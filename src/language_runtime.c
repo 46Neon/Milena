@@ -1423,9 +1423,13 @@ static MilenaStatus run_stream_dataset_with_options(
     const ASTNode *summary_block = plan->summary;
     const ASTNode *group_block = plan->group;
     const ASTNode *group_key = plan->group_key;
-    bool grouped = plan->physical_operator == MILENA_PHYSICAL_CSV_STREAM_GROUPED;
+    bool spill_grouped = plan->physical_operator ==
+                         MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL;
+    bool grouped = plan->physical_operator == MILENA_PHYSICAL_CSV_STREAM_GROUPED ||
+                   spill_grouped;
     if ((!grouped && plan->physical_operator != MILENA_PHYSICAL_CSV_STREAM_SUMMARY) ||
         grouped != (group_block != NULL) || (grouped && !group_key) ||
+        spill_grouped != (plan->spill_policy != NULL) ||
         plan->logical_operator_count != 3 ||
         plan->logical_operators[0] != MILENA_LOGICAL_CSV_SCAN ||
         plan->logical_operators[2] != MILENA_LOGICAL_JSON_REPORT) {
@@ -1528,11 +1532,32 @@ static MilenaStatus run_stream_dataset_with_options(
         return MILENA_ERR_PARSE;
     }
     MilenaStreamReport report = {0};
-    MilenaStatus status = grouped
-        ? milena_stream_csv_grouped_with_options(input_path, output_path,
-              group_key->value, metrics, metric_count, options, &report, error)
-        : milena_stream_csv_summary_with_options(input_path, output_path,
-              metrics, metric_count, options, &report, error);
+    MilenaStatus status;
+    if (spill_grouped) {
+        if (metric_count != 1) {
+            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                          "#spill agrupado en flujo admite exactamente una métrica");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+        const ASTNode *ast_policy = plan->spill_policy;
+        MilenaStreamSpillPolicy policy = {
+            ast_policy->value,
+            ast_policy->group_memory_budget_bytes,
+            ast_policy->group_spill_quota_bytes,
+            ast_policy->group_max_key_bytes,
+            ast_policy->group_max_output_groups,
+            ast_policy->group_max_output_bytes
+        };
+        status = milena_stream_csv_grouped_spill_with_options(
+            input_path, output_path, group_key->value, &metrics[0], options,
+            &policy, &report, error);
+    } else if (grouped) {
+        status = milena_stream_csv_grouped_with_options(input_path, output_path,
+            group_key->value, metrics, metric_count, options, &report, error);
+    } else {
+        status = milena_stream_csv_summary_with_options(input_path, output_path,
+            metrics, metric_count, options, &report, error);
+    }
     if (status == MILENA_OK && output) {
         fprintf(output, "Programa de flujo ejecutado: %s\n", input_path);
         fprintf(output, "Filas: %zu | Válidas: %zu | Malformadas: %zu | Lote: %zu | Registro máximo observado: %zu bytes | Tiempo medido: %.3f ms\n",
@@ -1784,11 +1809,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 }
             } else if (block->type == AST_BLOQUE_AGRUPAR) {
                 const ASTNode *group_key = NULL;
+                const ASTNode *spill_policy = NULL;
                 const ASTNode *summaries[16];
                 size_t summary_count = 0;
                 for (size_t j = 0; j < block->child_count; j++) {
                     if (block->children[j]->type == AST_AGRUPACION_POR) {
                         group_key = block->children[j];
+                    } else if (block->children[j]->type == AST_AGRUPACION_SPILL) {
+                        spill_policy = block->children[j];
                     } else if (block->children[j]->type == AST_RESUMEN_METRICA &&
                                summary_count < 16) {
                         summaries[summary_count++] = block->children[j];
@@ -1831,10 +1859,20 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     const char *key_names[1] = {group_key->value};
                     MilenaTable grouped = {0};
                     milena_table_init(&grouped);
-                    status = milena_table_group_by(&grouped, &canonical_table,
-                                                   key_names, 1,
-                                                   specifications, summary_count,
-                                                   error);
+                    if (spill_policy) {
+                        if (summary_count != 1) {
+                            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                "#spill agrupado admite exactamente una métrica");
+                            status = MILENA_ERR_UNSUPPORTED;
+                        } else {
+                            status = milena_language_group_by_spill(&grouped,
+                                &canonical_table, group_key->value,
+                                &specifications[0], spill_policy, error);
+                        }
+                    } else {
+                        status = milena_table_group_by(&grouped, &canonical_table,
+                            key_names, 1, specifications, summary_count, error);
+                    }
                     if (status == MILENA_OK) {
                         milena_table_swap(&canonical_table, &grouped);
                         for (size_t j = 0; j < summary_count; j++) {

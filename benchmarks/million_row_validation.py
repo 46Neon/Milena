@@ -30,18 +30,19 @@ RUN_TIMEOUT_SECONDS = 600
 
 
 def generate_csv(path: Path) -> tuple[int, int]:
-    """Write a stable three-column fixture; return malformed rows and bytes."""
+    """Write a stable four-column fixture; return malformed rows and bytes."""
     malformed = 0
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream, lineterminator="\n")
-        writer.writerow(["id", "importe", "grupo"])
+        writer.writerow(["id", "importe", "grupo", "grupo_spill"])
         for row in range(ROWS):
             group = "A" if row % 2 == 0 else "B"
+            spill_group = f"g{row % 128:03d}"
             if (row + 1) % MALFORMED_EVERY == 0:
-                writer.writerow([row, "no-num", group])
+                writer.writerow([row, "no-num", group, spill_group])
                 malformed += 1
             else:
-                writer.writerow([row, f"{(row % 1000) / 10:.1f}", group])
+                writer.writerow([row, f"{(row % 1000) / 10:.1f}", group, spill_group])
     return malformed, path.stat().st_size
 
 
@@ -65,6 +66,57 @@ def expected_grouped() -> dict[str, dict[str, int]]:
             item["valid"] += 1
             item["ticks"] += row % 1000
     return result
+
+
+def expected_spill_groups() -> dict[str, dict[str, int]]:
+    groups = {f"g{i:03d}": {"rows": 0, "valid": 0, "invalid": 0, "ticks": 0}
+              for i in range(128)}
+    for row in range(ROWS):
+        item = groups[f"g{row % 128:03d}"]
+        item["rows"] += 1
+        if (row + 1) % MALFORMED_EVERY == 0:
+            item["invalid"] += 1
+        else:
+            item["valid"] += 1
+            item["ticks"] += row % 1000
+    return groups
+
+
+def validate_spill_report(report: dict[str, Any], malformed_expected: int,
+                          input_bytes: int) -> dict[str, Any]:
+    expected = expected_spill_groups()
+    if report.get("modo") != "flujo_agrupado":
+        raise AssertionError(f"expected grouped spill mode, got {report.get('modo')!r}")
+    for field, value in {"filas": ROWS, "filas_validas": ROWS - malformed_expected,
+                         "filas_malformadas": malformed_expected, "grupos": 128,
+                         "limite_grupos": 128, "bytes_entrada": input_bytes}.items():
+        if report.get(field) != value:
+            raise AssertionError(f"spill {field}: expected {value!r}, got {report.get(field)!r}")
+    results = report.get("resultados")
+    if not isinstance(results, list) or len(results) != 128:
+        raise AssertionError("spill report did not materialize exactly the bounded 128 output groups")
+    keys = [item.get("clave") for item in results if isinstance(item, dict)]
+    if keys != sorted(expected):
+        raise AssertionError("spill groups are not complete and deterministically ordered")
+    for item in results:
+        key = item["clave"]
+        metrics = item.get("metricas")
+        if not isinstance(metrics, list) or len(metrics) != 1:
+            raise AssertionError(f"spill group {key} has invalid metric shape")
+        metric = metrics[0]
+        values = expected[key]
+        target = values["ticks"] / 10.0
+        if (metric.get("operacion") != "suma" or
+                metric.get("valores_validos") != values["valid"] or
+                metric.get("valores_invalidos") != values["invalid"] or
+                not isinstance(metric.get("valor"), (int, float)) or
+                not math.isclose(float(metric["valor"]), target, rel_tol=1e-12, abs_tol=1e-9)):
+            raise AssertionError(f"spill aggregate mismatch for {key}: {metric!r}")
+    return {"groups": len(results), "distinct_keys": 128,
+            "configured_group_state_bytes": 4096,
+            "scratch_quota_bytes": 134217728,
+            "backend_elapsed_milliseconds": report.get("tiempo_ms"),
+            "backend_rows_per_second": report.get("filas_por_segundo")}
 
 
 def validate_grouped_report(report: dict[str, Any], malformed_expected: int,
@@ -325,6 +377,54 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
             "configured_groups": 1, "required_groups": 2,
             "rejected_without_partial_report": True}
 
+        spill_report_path = work / "reporte_spill.json"
+        scratch_path = work / "spill.bin"
+        spill_script_path = work / "spill_millon.milena"
+        spill_source = f'''.analisis validacion_spill_millon_filas {{
+    datos desde {csv_literal}
+        procesar por lotes de {CHUNK_ROWS} filas
+        con registros de hasta 1 MiB
+        con columnas de 16
+        con filas hasta {ROWS}
+        con grupos de 128
+    agrupar por "grupo_spill" #spill({json.dumps(str(scratch_path), ensure_ascii=False)}, 4096, 134217728, 128, 128)
+        resumir {{ suma de "importe"; }}
+    guardar resultado en {json.dumps(str(spill_report_path), ensure_ascii=False)}
+}}
+'''
+        spill_script_path.write_text(spill_source, encoding="utf-8")
+        spill_started = time.perf_counter()
+        spill_process = subprocess.run(
+            [str(BINARY), "run", str(spill_script_path)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        spill_seconds = time.perf_counter() - spill_started
+        if spill_process.returncode != 0:
+            raise RuntimeError(
+                f"million-row spill milena run failed with exit {spill_process.returncode}:\n"
+                f"{spill_process.stderr}\n{spill_process.stdout}")
+        if not spill_report_path.is_file():
+            raise AssertionError("spill milena run succeeded without its report")
+        spill_report = json.loads(spill_report_path.read_text(encoding="utf-8"))
+        spill_validated = validate_spill_report(spill_report, malformed, input_bytes)
+        if scratch_path.exists():
+            raise AssertionError("successful spill execution left scratch state behind")
+        # Re-run the same program to prove stable report ordering and successful cleanup.
+        repeat_report = work / "reporte_spill_repeat.json"
+        repeat_script = work / "spill_repeat.milena"
+        repeat_script.write_text(spill_source.replace(str(spill_report_path), str(repeat_report)),
+                                 encoding="utf-8")
+        repeat = subprocess.run([str(BINARY), "run", str(repeat_script)], cwd=ROOT,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                timeout=RUN_TIMEOUT_SECONDS, check=False)
+        if repeat.returncode != 0 or not repeat_report.is_file() or scratch_path.exists():
+            raise AssertionError("repeated spill execution failed or left scratch/report state incomplete")
+        repeated_doc = json.loads(repeat_report.read_text(encoding="utf-8"))
+        for field in ("modo", "filas", "filas_validas", "filas_malformadas",
+                      "grupos", "limite_grupos", "bytes_entrada", "resultados"):
+            if repeated_doc.get(field) != spill_report.get(field):
+                raise AssertionError(f"repeated spill execution changed deterministic {field}")
+
         rss_bytes = peak_child_rss_bytes()
         result: dict[str, Any] = {
             "schema": "milena-million-row-validation-v1",
@@ -347,14 +447,19 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
             "grouped_stream_measurements": {**grouped_validated,
                                             "process_elapsed_seconds": grouped_seconds,
                                             "process_rows_per_second": ROWS / grouped_seconds if grouped_seconds else None},
+            "grouped_spill_measurements": {**spill_validated,
+                                           "process_elapsed_seconds": spill_seconds,
+                                           "process_rows_per_second": ROWS / spill_seconds if spill_seconds else None,
+                                           "repeat_deterministic": True,
+                                           "scratch_removed_after_success": True},
             "environment": {"platform": platform.platform(),
                             "machine": platform.machine(),
                             "python": platform.python_version(),
                             "compiler": os.environ.get("CC", "make default CC"),
                             "commit": os.environ.get("GITHUB_SHA", "unknown")},
             "limitations": [
-                "This pass proves only global aggregation and a two-key bounded-cardinality CSV group operation with an end-to-end group-limit rejection, this input, build and hardware.",
-                "It does not prove grouped spill, high-cardinality grouping, joins, general ETL, distributed/cloud execution, Arrow/Parquet or ML.",
+                "This pass proves global and two-key aggregation plus grouped spill over 1,000,000 rows with bounded 128-key output and 4 KiB reducer memory policy for this input/build/hardware.",
+                "It does not prove arbitrary high-cardinality output, joins, general ETL, distributed/cloud execution, Arrow/Parquet or ML.",
                 "Throughput and peak RSS are observations; no universal latency or RSS threshold is asserted.",
             ],
         }

@@ -15,7 +15,8 @@ typedef enum {
 
 typedef enum {
     MILENA_PHYSICAL_CSV_STREAM_SUMMARY = 1,
-    MILENA_PHYSICAL_CSV_STREAM_GROUPED
+    MILENA_PHYSICAL_CSV_STREAM_GROUPED,
+    MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL
 } MilenaPhysicalOperator;
 
 typedef struct {
@@ -25,6 +26,7 @@ typedef struct {
     const ASTNode *group;
     const ASTNode *group_key;
     const ASTNode *group_summary;
+    const ASTNode *spill_policy;
     MilenaLogicalOperator logical_operators[3];
     size_t logical_operator_count;
     MilenaPhysicalOperator physical_operator;

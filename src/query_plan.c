@@ -113,6 +113,17 @@ MilenaStatus milena_stream_execution_plan_build(
                     return plan_error(error, MILENA_ERR_PARSE,
                                       "El plan agrupado requiere un único resumen");
                 plan->group_summary = child;
+            } else if (child->type == AST_AGRUPACION_SPILL) {
+                if (plan->spill_policy || !child->value || !child->value[0] ||
+                    child->group_memory_budget_bytes == 0 ||
+                    child->group_spill_quota_bytes == 0 ||
+                    child->group_max_key_bytes < 2 ||
+                    child->group_max_output_groups == 0 ||
+                    child->group_max_output_bytes == 0 ||
+                    child->group_max_output_bytes > 1073741824u)
+                    return plan_error(error, MILENA_ERR_PARSE,
+                                      "La política spill del plan es única y debe tener límites positivos");
+                plan->spill_policy = child;
             } else {
                 return plan_error(error, MILENA_ERR_UNSUPPORTED,
                                   "El plan agrupado contiene un operador no soportado");
@@ -122,7 +133,9 @@ MilenaStatus milena_stream_execution_plan_build(
             return plan_error(error, MILENA_ERR_PARSE,
                               "El plan agrupado requiere clave y métricas tipadas");
         plan->summary = plan->group_summary;
-        plan->physical_operator = MILENA_PHYSICAL_CSV_STREAM_GROUPED;
+        plan->physical_operator = plan->spill_policy
+            ? MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL
+            : MILENA_PHYSICAL_CSV_STREAM_GROUPED;
         plan->logical_operators[1] = MILENA_LOGICAL_GROUP_AGGREGATE;
     } else {
         if (!valid_summary(global_summary, true))

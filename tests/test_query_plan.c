@@ -76,6 +76,30 @@ static void test_grouped_stream_plan(void) {
     ast_destroy(analysis);
 }
 
+
+static void test_grouped_spill_stream_plan(void) {
+    ASTNode *analysis = new_analysis();
+    ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
+    assert(group);
+    assert(ast_add_child(group, leaf_with_value(AST_AGRUPACION_POR, "region")));
+    assert(ast_add_child(group, summary_block()));
+    ASTNode *policy = leaf_with_value(AST_AGRUPACION_SPILL, "scratch.bin");
+    policy->group_memory_budget_bytes = 4096;
+    policy->group_spill_quota_bytes = 1024 * 1024;
+    policy->group_max_key_bytes = 128;
+    policy->group_max_output_groups = 100;
+    policy->group_max_output_bytes = 1073741824u;
+    assert(ast_add_child(group, policy));
+    assert(ast_add_child(analysis, group));
+    MilenaStreamExecutionPlan plan;
+    MilenaError error = {0};
+    assert(milena_stream_execution_plan_build(analysis, &plan, &error) == MILENA_OK);
+    assert(plan.group == group && plan.spill_policy == policy);
+    assert(plan.group_key == group->children[0]);
+    assert(plan.physical_operator == MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL);
+    ast_destroy(analysis);
+}
+
 static void test_legacy_global_summary_plan(void) {
     ASTNode *analysis = new_analysis();
     ASTNode *summary = ast_create(AST_BLOQUE_RESUMIR);
@@ -120,6 +144,7 @@ static void test_ambiguous_and_unsupported_plans(void) {
 int main(void) {
     test_global_stream_plan();
     test_grouped_stream_plan();
+    test_grouped_spill_stream_plan();
     test_legacy_global_summary_plan();
     test_ambiguous_and_unsupported_plans();
     puts("Canonical logical/physical stream plans validated.");
