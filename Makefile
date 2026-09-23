@@ -20,7 +20,7 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
-          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/partition_protocol.c src/partition_protocol_reduce.c src/spill_store.c src/mergeable_aggregate.c src/grouped_aggregate.c src/external_merge.c src/external_sort.c src/query_plan.c src/entrypoints.c
+          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/group_key_codec.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/partition_protocol.c src/partition_protocol_reduce.c src/spill_store.c src/mergeable_aggregate.c src/grouped_aggregate.c src/external_merge.c src/external_sort.c src/query_plan.c src/entrypoints.c
 OBJECTS = $(SOURCES:.c=.o)
 SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
@@ -85,8 +85,8 @@ test-entrypoints: tests/test_entrypoints
 tests/test_entrypoints: tests/test_entrypoints.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-tests/test_stream: tests/test_stream.c src/stream.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c
-	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
+tests/test_stream: tests/test_stream.c src/stream.c src/group_key_codec.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c
+	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/group_key_codec.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
 
 test-partition-plan: tests/test_partition_plan
 	./tests/test_partition_plan
@@ -142,8 +142,8 @@ test-spill-store: tests/test_spill_store
 test-group-key-codec: tests/test_group_key_codec
 	./tests/test_group_key_codec
 
-tests/test_group_key_codec: tests/test_group_key_codec.c tests/support/group_key_codec.c src/common.c include/group_key_codec.h
-	$(CC) $(CFLAGS) tests/test_group_key_codec.c tests/support/group_key_codec.c src/common.c $(LDFLAGS) -o $@
+tests/test_group_key_codec: tests/test_group_key_codec.c src/group_key_codec.c src/common.c include/group_key_codec.h
+	$(CC) $(CFLAGS) tests/test_group_key_codec.c src/group_key_codec.c src/common.c $(LDFLAGS) -o $@
 
 tests/test_spill_store: tests/test_spill_store.c src/spill_store.c src/common.c
 	$(CC) $(CFLAGS) tests/test_spill_store.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
@@ -212,7 +212,7 @@ tests/test_lexer_safety: tests/test_lexer_safety.c src/lexer.c src/common.c
 test-language-runtime: tests/test_language_runtime
 	timeout --signal=TERM --kill-after=5s 60s ./tests/test_language_runtime
 
-tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/query_plan.c
+tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/group_key_codec.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/query_plan.c
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 .PHONY: test-parser-array

@@ -233,6 +233,69 @@ int main(void) {
     assert(spill_report_file == NULL);
     remove(spill_output);
 
+    /* Pair-key backend path: separators and CSV quotes stay unambiguous, the
+     * same first key with a different second key is distinct, valid empty
+     * strings remain distinct from invalid UTF-8 components, and each group
+     * still carries the declared multi-metric aggregate state. */
+    const char *pair_input = "tests/.stream_pair_spill_fixture.csv";
+    const char *pair_output = "tests/.stream_pair_spill_report.json";
+    const char *pair_scratch = "tests/.stream_pair_spill_scratch";
+    FILE *pair_file = fopen(pair_input, "wb");
+    assert(pair_file != NULL);
+    fputs("zona,subzona,importe\n", pair_file);
+    fputs("\"north|\"\"quoted\"\"\",\"a,b|c\",1\n", pair_file);
+    fputs("\"north|\"\"quoted\"\"\",\"a,b|c\",2\n", pair_file);
+    fputs("\"north|\"\"quoted\"\"\",third,3\n", pair_file);
+    fputs(",,4\n", pair_file);
+    fputc(0xff, pair_file);
+    fputs(",invalid-component,5\n", pair_file);
+    assert(fclose(pair_file) == 0);
+    MilenaStreamGroupKeyDescriptor pair_keys[] = {
+        {"zona", MILENA_STREAM_GROUP_KEY_TEXT},
+        {"subzona", MILENA_STREAM_GROUP_KEY_TEXT}
+    };
+    MilenaStreamMetric pair_metrics[] = {
+        {"importe", "importe_suma", MILENA_STREAM_SUM},
+        {"importe", "filas", MILENA_STREAM_COUNT}
+    };
+    MilenaStreamSpillPolicy pair_policy = {pair_scratch, 4096, 1048576,
+        128, 16, 2097152, 4096};
+    spill_options = milena_stream_options_default();
+    spill_options.max_groups = 16;
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_spill_with_keys_and_options(
+        pair_input, pair_output, pair_keys, 2, pair_metrics, 2,
+        &spill_options, &pair_policy, &spill_report, &grouped_error) == MILENA_OK);
+    assert(spill_report.groups == 4);
+    assert(spill_report.spill_bytes > 0 && spill_report.spill_records > 0);
+    json = fopen(pair_output, "rb");
+    assert(json != NULL);
+    memset(buffer, 0, sizeof(buffer));
+    assert(fread(buffer, 1, sizeof(buffer) - 1, json) > 0);
+    assert(fclose(json) == 0);
+    assert(strstr(buffer, "\"columnas_grupo\":[{\"nombre\":\"zona\",\"tipo\":\"texto\"},{\"nombre\":\"subzona\",\"tipo\":\"texto\"}]") != NULL);
+    assert(strstr(buffer, "\"valor\":\"north|\\\"quoted\\\"\",\"valido\":true") != NULL);
+    assert(strstr(buffer, "\"valor\":\"a,b|c\",\"valido\":true") != NULL);
+    assert(strstr(buffer, "\"valor\":\"third\",\"valido\":true") != NULL);
+    assert(strstr(buffer, "\"valor\":\"\",\"valido\":true") != NULL);
+    assert(strstr(buffer, "\"valor\":null,\"valido\":false") != NULL);
+    assert(strstr(buffer, "\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":3") != NULL);
+    assert(strstr(buffer, "\"grupos\":4") != NULL);
+    assert(fopen(pair_scratch, "rb") == NULL);
+    remove(pair_output);
+
+    /* A group-limit failure never publishes a partial JSON report and still
+     * releases both reducer scratch and the sibling staging file. */
+    pair_policy.max_output_groups = 1;
+    spill_options.max_groups = 1;
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_spill_with_keys_and_options(
+        pair_input, pair_output, pair_keys, 2, pair_metrics, 2,
+        &spill_options, &pair_policy, &spill_report, &grouped_error) == MILENA_ERR_OVERFLOW);
+    assert(fopen(pair_output, "rb") == NULL);
+    assert(fopen(pair_scratch, "rb") == NULL);
+    remove(pair_input);
+
     spill_options.max_groups = 1;
     memset(&spill_report, 0xA5, sizeof(spill_report));
     milena_error_clear(&grouped_error);

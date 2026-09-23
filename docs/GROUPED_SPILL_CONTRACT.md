@@ -1,6 +1,6 @@
 # Contrato para spill-to-disk de agrupaciones en flujo
 
-**Estado:** hay dos cortes locales distintos. El `.agrupar` tabular canónico conserva su adaptador de tabla existente y sigue materializando la entrada/salida en RAM. La agrupación de CSV en el runtime streaming ahora tiene un primer corte de spill directo `stream.c → grouped_aggregate.c`: no crea `Dataset`/`MilenaTable`, reutiliza el lector CSV existente y emite el JSON desde un callback ordenado a un staging file antes de publicarlo. El adaptador tabular conserva una sola métrica. La ruta CSV streaming admite una sola clave de texto y hasta 64 métricas tipadas por operación spill, con el mismo reducer; no es una capacidad industrial general ni una ruta distribuida.
+**Estado:** hay dos cortes locales distintos. El `.agrupar` tabular canónico conserva su adaptador de tabla existente y sigue materializando la entrada/salida en RAM. La agrupación de CSV en el runtime streaming tiene un corte de spill directo `stream.c → grouped_aggregate.c`: no crea `Dataset`/`MilenaTable`, reutiliza el lector CSV existente y emite el JSON desde un callback ordenado a un staging file antes de publicarlo. El adaptador tabular conserva una clave y una métrica. El backend CSV ahora ofrece una API directa para una o dos claves tipadas TEXT y hasta 64 métricas; la ruta canónica `.analisis` aún llama al adaptador de una clave y su parser rechaza una segunda clave. Esta fase de backend no habilita sintaxis ni comportamiento de usuario para claves compuestas, y no es una capacidad industrial general ni una ruta distribuida.
 
 ## Límite arquitectónico
 
@@ -82,11 +82,19 @@ pueden consumir hasta dos cuotas adicionales (hasta 3× la cuota en total),
 aparte del reporte staging. El reporte cuenta con una cuota independiente de
 bytes configurada en AST; no se mezcla con la cuota de scratch.
 
-No se agregan varias claves, claves compuestas tipadas, unión, ordenamiento
-de filas, Parquet/Arrow ni workers/red. Operaciones `Dataset` y `MilenaTable`
-siguen en memoria. La ruta scratch la proporciona el programa y se crea en modo exclusivo; si ya existe,
+No se agregan varias claves al lenguaje/caller canónico, claves numéricas compuestas, unión, ordenamiento de filas, Parquet/Arrow ni workers/red. El backend directo únicamente agrega la variante de dos claves TEXT descrita arriba. Operaciones `Dataset` y `MilenaTable` siguen en memoria. La ruta scratch la proporciona el programa y se crea en modo exclusivo; si ya existe,
 se rechaza sin sobrescribirla. No se prometen nombres aleatorios privados ni
 concurrencia de writers sobre la misma ruta. No se ha medido RSS global ni se promete latencia.
+
+## Subfase backend: dos claves de texto tipadas
+
+El backend CSV expone `milena_stream_csv_grouped_spill_with_keys_and_options`, que recibe un array de uno o dos descriptores `{name, type}`. En esta subfase ambos descriptores deben declarar `MILENA_STREAM_GROUP_KEY_TEXT`; tipos numéricos, más de dos claves y nombres de columna repetidos se rechazan. La API anterior de una sola clave permanece como adaptador fino a esta llamada, por lo que no hay copias del codec ni reducers paralelos. Ambas formas reutilizan el reducer agrupado, sus hasta 64 métricas, presupuestos de memoria/scratch/clave/salida/runs, telemetría, ordenamiento externo, staging atómico y limpieza existentes.
+
+Las claves de dos partes usan el codec de producto `group_key_codec.c`: wire versionado MGK v1 con longitud prefijada, etiqueta de tipo y validez explícita por componente. El límite `max_key_bytes` incluye el codec y el framing grupo/métrica; el codec impone además un tope propio de 4096 bytes. Las claves se comparan como bytes completos del wire para reducir, de modo que separadores dentro de valores, longitudes distintas y claves con el mismo primer componente pero distinto segundo no colisionan. Las cadenas CSV válidas vacías se conservan como `valor:""` y son diferentes del componente inválido; bytes que no formen UTF-8 en una clave TEXT se normalizan al componente inválido (por tanto, esos valores inválidos se agrupan entre sí) y se reportan con `valor:null` y `valido:false`.
+
+El JSON mantiene el esquema previo para una sola clave (`clave`). Para dos claves, la cabecera informa `columnas_grupo:[{"nombre":"...","tipo":"texto"}, ...]` y cada fila de `resultados` usa `claves:[{"nombre":"...","tipo":"texto","valor":"...","valido":true}, ...]` seguida por el mismo array `metricas`; el componente inválido conserva su nombre/tipo con `valor:null,"valido":false`. Los contadores de grupos, orden determinista por bytes del wire, métricas múltiples y atomicidad de publicación no cambian. La prueba backend directa cubre comas/comillas CSV, componente vacío e inválido, mismo primer componente/diferente segundo, dos métricas y fallo del límite de grupos sin salida parcial.
+
+**Límite de integración:** el parser y el caller canónico `.analisis` continúan admitiendo una sola clave, y la guarda de parsing mantiene el rechazo de una segunda componente antes de abrir fuente/scratch. Esta subfase no se anuncia como capacidad de lenguaje; el benchmark de un millón de filas tampoco valida aún agrupación compuesta. La integración AST/semántica/planner/runtime se deja para la fase siguiente.
 
 ## Semántica y determinismo
 
@@ -97,7 +105,7 @@ concurrencia de writers sobre la misma ruta. No se ha medido RSS global ni se pr
 
 ## Formato persistente
 
-El estado de agregado actual usa wire v3 determinista little-endian: contador de válidos, contador de nulos, contador de inválidos, seis campos binary64 y checksum; el tamaño es 84 bytes. El reducer trata la clave como bytes opacos y no almacena un esquema de métricas: el adaptador CSV codifica el índice de métrica en la clave interna y usa el estado escalar existente. No hay clave compuesta tipada ni esquema persistente que permita cambiar la interpretación entre ejecuciones. Cualquier evolución del protocolo seguirá usando longitudes y valores de ancho fijo definidos, nunca `fwrite` de structs C con padding o ABI dependiente. Checksums detectan corrupción, no autenticidad criptográfica.
+El estado de agregado actual usa wire v3 determinista little-endian: contador de válidos, contador de nulos, contador de inválidos, seis campos binary64 y checksum; el tamaño es 84 bytes. El reducer trata la clave como bytes opacos y no almacena un esquema de métricas: el adaptador CSV codifica el índice de métrica en la clave interna y usa el estado escalar existente. Para dos claves TEXT, el backend ahora encapsula sus componentes en el wire versionado MGK v1 descrito arriba; este framing no convierte al reducer en un almacén tipado ni habilita reinterpretación arbitraria entre ejecuciones. El estado de agregación continúa con su formato versionado independiente. Cualquier evolución del protocolo seguirá usando longitudes y valores de ancho fijo definidos, nunca `fwrite` de structs C con padding o ABI dependiente. Checksums detectan corrupción, no autenticidad criptográfica.
 
 ## Recursos y fallos
 

@@ -48,6 +48,15 @@ typedef struct {
     MilenaStreamOperation operation;
 } MilenaStreamMetric;
 
+typedef enum {
+    MILENA_STREAM_GROUP_KEY_TEXT = 1
+} MilenaStreamGroupKeyType;
+
+typedef struct {
+    const char *name;
+    MilenaStreamGroupKeyType type;
+} MilenaStreamGroupKeyDescriptor;
+
 typedef struct {
     const char *scratch_path;
     size_t memory_budget_bytes;
@@ -121,8 +130,25 @@ MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
                                        MilenaError *error);
 
 /* CSV -> bounded parser -> spillable reducer -> callback-written JSON report.
- * Reducer memory is a separate budget, additional to record/header/column
- * buffers and one callback key; this does not claim a process-wide RSS cap. */
+ * The backend accepts one or two typed group-key descriptors; this phase
+ * supports TEXT for both components. Reducer memory is a separate budget,
+ * additional to record/header/column buffers and one callback key; this does
+ * not claim a process-wide RSS cap. Pair reports use `claves` objects, while
+ * the single-key schema remains `clave`. */
+MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options(
+                                       const char *input_path,
+                                       const char *output_path,
+                                       const MilenaStreamGroupKeyDescriptor *group_keys,
+                                       size_t group_key_count,
+                                       const MilenaStreamMetric *metrics,
+                                       size_t metric_count,
+                                       const MilenaStreamOptions *options,
+                                       const MilenaStreamSpillPolicy *policy,
+                                       MilenaStreamReport *report,
+                                       MilenaError *error);
+
+/* Compatibility adapter for the canonical language caller, which currently
+ * supplies exactly one group key. */
 MilenaStatus milena_stream_csv_grouped_spill_with_options(
                                        const char *input_path,
                                        const char *output_path,

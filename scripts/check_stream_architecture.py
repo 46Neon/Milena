@@ -77,7 +77,7 @@ for marker in ("STREAM_HARD_MAX_GROUPS", "STREAM_GROUP_STATE_BUDGET", "qsort(gro
         raise SystemExit(f"bounded/deterministic grouping guard missing: {marker}")
 if "sscanf(summary->value" in stream_runtime:
     raise SystemExit("natural stream metrics still use textual scanning")
-spill_stream_start = stream.index("MilenaStatus milena_stream_csv_grouped_spill_with_options")
+spill_stream_start = stream.index("MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options")
 spill_stream = stream[spill_stream_start:]
 if "stream_read_record" not in spill_stream or "stream_split" not in spill_stream:
     raise SystemExit("streaming spill bypasses the existing bounded CSV parser")
@@ -85,6 +85,11 @@ if "Dataset" in spill_stream or "MilenaTable" in spill_stream:
     raise SystemExit("streaming spill materializes Dataset/MilenaTable")
 if "src/stream.c" not in make or '"stream.c"' not in manifest:
     raise SystemExit("stream.c is not classified as official product")
+if ("src/group_key_codec.c" not in make or '"group_key_codec.c"' not in manifest or
+        "group_key_codec.h" not in stream or (ROOT / "tests/support/group_key_codec.c").exists()):
+    raise SystemExit("group key codec must be a single linked product source")
+if "milena_stream_csv_grouped_spill_with_options" not in stream_runtime:
+    raise SystemExit("canonical caller must remain on the single-key compatibility adapter")
 # Related analysis, SST, and finance remain language-runtime capabilities.
 for marker in ("AST_COMANDO_SST", "runtime_write_sst", "milena_simple_interest", "src/finance.c"):
     if marker not in runtime + make:

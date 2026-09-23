@@ -3,9 +3,10 @@
 
 #include "common.h"
 
-/* Versioned, bounded wire representation for the upcoming two-text-key spill
- * slice. Payloads are borrowed UTF-8 bytes; this codec never interprets or
- * normalizes text. The stream caller must separately enforce its policy cap. */
+/* Versioned, bounded product wire representation for two TEXT group-key
+ * components. Payloads are borrowed UTF-8 bytes; this codec never interprets
+ * or normalizes text. The stream caller validates UTF-8 and separately
+ * enforces its policy cap. */
 #define MILENA_GROUP_KEY_CODEC_VERSION 1u
 #define MILENA_GROUP_KEY_CODEC_MAX_BYTES 4096u
 
