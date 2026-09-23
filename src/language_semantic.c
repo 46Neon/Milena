@@ -1,7 +1,9 @@
 #include "language_semantic.h"
 #include "table.h"
 #include "grouped_aggregate.h"
+#include "stream.h"
 #include <string.h>
+#include <math.h>
 
 static bool known_sst_command(const char *name) {
     static const char *const commands[] = {
@@ -157,12 +159,16 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
         case AST_BLOQUE_AGRUPAR:
             if (node->type_name && strcmp(node->type_name, "flujo") == 0) {
                 size_t keys = 0, summaries = 0, policies = 0;
-                const ASTNode *key = NULL, *summary = NULL, *policy = NULL;
+                const ASTNode *key_nodes[2] = {NULL, NULL};
+                const ASTNode *summary = NULL, *policy = NULL;
                 for (size_t i = 0; i < node->child_count; i++) {
                     const ASTNode *child = node->children[i];
                     if (!child) return semantic_error(node, error,
                         "Agrupación de flujo con nodo AST nulo");
-                    if (child->type == AST_AGRUPACION_POR) { keys++; key = child; }
+                    if (child->type == AST_AGRUPACION_POR) {
+                        if (keys < 2) key_nodes[keys] = child;
+                        keys++;
+                    }
                     else if (child->type == AST_BLOQUE_RESUMIR) {
                         summaries++;
                         summary = child;
@@ -172,10 +178,18 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                     } else return semantic_error(node, error,
                         "La agrupación de flujo solo admite clave, spill opcional y resumen tipado");
                 }
-                if (keys != 1 || summaries != 1 || policies > 1 || !summary ||
+                if (keys == 0 || keys > 2 || summaries != 1 || policies > 1 || !summary ||
                     summary->child_count == 0 || summary->child_count > 64)
                     return semantic_error(node, error,
-                        "La agrupación de flujo requiere una clave, un resumen tipado y como máximo una política spill");
+                        "La agrupación de flujo requiere una o dos claves, un resumen tipado y como máximo una política spill");
+                if (keys > 1 && policies == 0)
+                    return semantic_error(key_nodes[1], error,
+                        "La agrupación de varias claves solo está soportada con #spill");
+                if (keys == 2 && (!key_nodes[0] || !key_nodes[1] ||
+                    !key_nodes[0]->value || !key_nodes[1]->value ||
+                    strcmp(key_nodes[0]->value, key_nodes[1]->value) == 0))
+                    return semantic_error(key_nodes[1], error,
+                        "Las claves de agrupación deben ser columnas distintas");
                 for (size_t i = 0; i < summary->child_count; i++) {
                     const ASTNode *metric = summary->children[i];
                     if (!metric || metric->type != AST_RESUMEN_METRICA ||
@@ -186,32 +200,39 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                             "La métrica agrupada debe usar una operación de flujo tipada");
                 }
                 if (policies) {
-                    if (summary->child_count != 1)
+                    if (summary->child_count > MILENA_STREAM_MAX_METRICS)
                         return semantic_error(summary, error,
-                            "#spill de flujo admite una sola clave y una sola métrica por operación");
-                    const ASTNode *metric = summary->children[0];
-                    if (!grouped_spill_operation(metric->stream_operation))
-                        return semantic_error(metric, error,
-                            "#spill de flujo solo admite suma, media, minimo, maximo o conteo");
-                    const ASTNode *key_decl = stream_find_column_declaration(
-                        node->parent, key->value);
-                    const ASTNode *metric_decl = stream_find_column_declaration(
-                        node->parent, metric->value);
-                    if (!key_decl || !key_decl->type_name ||
-                        strcmp(key_decl->type_name, "texto") != 0)
-                        return semantic_error(key, error,
-                            "La clave de #spill en flujo debe declararse variable <columna> texto");
-                    if (!metric_decl || !metric_decl->type_name)
-                        return semantic_error(metric, error,
-                            "La métrica de #spill en flujo debe tener declaración tipada");
-                    if (metric->stream_operation != AST_STREAM_OPERATION_COUNT &&
-                        strcmp(metric_decl->type_name, "numerica") != 0)
-                        return semantic_error(metric, error,
-                            "Las métricas numéricas de #spill requieren variable <columna> numerica (FLOAT64)");
-                    if (strcmp(key->value, metric->value) == 0 &&
-                        metric->stream_operation != AST_STREAM_OPERATION_COUNT)
-                        return semantic_error(metric, error,
-                            "La clave textual de #spill no puede reutilizarse como métrica numérica");
+                            "#spill de flujo admite como máximo 64 métricas por operación");
+                    for (size_t key_index = 0; key_index < keys; ++key_index) {
+                        const ASTNode *group_key = key_nodes[key_index];
+                        const ASTNode *key_decl = stream_find_column_declaration(
+                            node->parent, group_key->value);
+                        if (!key_decl || !key_decl->type_name ||
+                            strcmp(key_decl->type_name, "texto") != 0)
+                            return semantic_error(group_key, error,
+                                "Cada clave de #spill en flujo debe declararse variable <columna> texto");
+                    }
+                    for (size_t i = 0; i < summary->child_count; ++i) {
+                        const ASTNode *metric = summary->children[i];
+                        if (!grouped_spill_operation(metric->stream_operation))
+                            return semantic_error(metric, error,
+                                "#spill de flujo solo admite suma, media, minimo, maximo o conteo");
+                        const ASTNode *metric_decl = stream_find_column_declaration(
+                            node->parent, metric->value);
+                        if (!metric_decl || !metric_decl->type_name)
+                            return semantic_error(metric, error,
+                                "Cada métrica de #spill debe tener declaración tipada");
+                        if (metric->stream_operation != AST_STREAM_OPERATION_COUNT &&
+                            strcmp(metric_decl->type_name, "numerica") != 0)
+                            return semantic_error(metric, error,
+                                "Las métricas numéricas de #spill requieren variable <columna> numerica (FLOAT64)");
+                        for (size_t key_index = 0; key_index < keys; ++key_index) {
+                            if (strcmp(key_nodes[key_index]->value, metric->value) == 0 &&
+                                metric->stream_operation != AST_STREAM_OPERATION_COUNT)
+                                return semantic_error(metric, error,
+                                    "La clave textual de #spill solo puede reutilizarse en una métrica contar");
+                        }
+                    }
                     const ASTNode *stream_load = stream_find_load(node->parent);
                     if (!stream_load || stream_load->stream_row_limit == 0 ||
                         stream_load->stream_time_limit_ms <= 0.0)
@@ -223,7 +244,7 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                         policy->group_memory_budget_bytes > 536870912u ||
                         policy->group_spill_quota_bytes == 0 ||
                         policy->group_spill_quota_bytes > 4294967296u ||
-                        policy->group_max_key_bytes < 2u ||
+                        policy->group_max_key_bytes < 3u ||
                         policy->group_max_key_bytes > 1048576u ||
                         policy->group_max_output_groups == 0 ||
                         policy->group_max_output_groups > 1000000u ||
@@ -258,6 +279,34 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                         "La política #spill de #agrupar requiere exactamente una métrica");
             }
             break;
+        case AST_STREAM_FILTER: {
+            if (!node->value || !node->value[0])
+                return semantic_error(node, error,
+                    "El filtro de flujo requiere una columna declarada");
+            if (!node->parent || node->parent->type != AST_BLOQUE_ANALISIS ||
+                !stream_find_load(node->parent))
+                return semantic_error(node, error,
+                    "filtrar solo se admite dentro de un análisis con datos desde en modo flujo");
+            const ASTNode *column = stream_find_column_declaration(
+                node->parent, node->value);
+            if (!column || !column->type_name)
+                return semantic_error(node, error,
+                    "La columna del filtro debe tener una declaración variable tipada");
+            if (node->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+                if (!node->type_name || strcmp(column->type_name, "texto") != 0)
+                    return semantic_error(node, error,
+                        "El filtro == requiere una columna declarada texto y un literal textual");
+            } else if (node->stream_filter_kind == AST_STREAM_FILTER_NUMERIC_GREATER) {
+                if (node->type_name || !isfinite(node->number_value) ||
+                    strcmp(column->type_name, "numerica") != 0)
+                    return semantic_error(node, error,
+                        "El filtro > requiere una columna declarada numerica y un literal finito");
+            } else {
+                return semantic_error(node, error,
+                    "Tipo de predicado de flujo no soportado");
+            }
+            break;
+        }
         case AST_AGRUPACION_POR:
         case AST_AGRUPACION_SPILL:
         case AST_RESUMEN_METRICA:

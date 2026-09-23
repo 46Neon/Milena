@@ -274,6 +274,14 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
                     raise AssertionError(f"value mismatch for {key}: {expected} != {observed}")
             if scratch.exists():
                 raise AssertionError("spill scratch file remains after successful run")
+            spill_counters = {
+                "source_spill_bytes": spill_report.get("bytes_spill"),
+                "source_spill_records": spill_report.get("registros_spill"),
+                "initial_sorted_runs": spill_report.get("runs_spill"),
+            }
+            if any(not isinstance(value, int) or value < 0
+                   for value in spill_counters.values()):
+                raise AssertionError("spill report omitted reducer telemetry")
             measurements.append({
                 "repetition": repetition + 1,
                 "memory_elapsed_seconds": memory_seconds,
@@ -285,6 +293,7 @@ def run_case(rows: int, groups: int, repetitions: int) -> dict:
                 "memory_peak_rss_bytes": memory_rss,
                 "spill_peak_rss_bytes": spill_rss,
                 "spill_scratch_peak_bytes_sampled": scratch_peak,
+                **spill_counters,
             })
         return {"rows": rows, "groups": groups, "input_bytes": byte_count,
                 "spill_memory_budget_bytes": MEMORY_BUDGET_BYTES,
@@ -482,10 +491,10 @@ def main() -> int:
                         "commit": os.environ.get("GITHUB_SHA", "unknown")},
         "methodology": ("Deterministic generated CSV; canonical lexer-parser-AST-"
                         "semantic-runtime-stream backend; compare in-memory and "
-                        "spill output values, wall-clock time, per-process peak RSS "
-                        "(Windows peak working set or resource.getrusage where "
-                        "available), and sample scratch bytes every 10 ms during "
-                        "spill runs."),
+                        "spill output values, per-process peak RSS (Windows peak working "
+                        "set or resource.getrusage where available), scratch sampled every "
+                        "10 ms, actual reducer spill byte/record and initial-run counters, "
+                        "and wall-clock observations."),
         "limitations": [
             "Peak RSS is per-process child working set on Windows or ru_maxrss on Linux/macOS (null elsewhere), not aggregate cgroup/system RSS or a memory guarantee.",
             "Scratch peak is a 10 ms sampled sum of logical file sizes for files prefixed by the configured path; short-lived peaks can be missed and final scratch is cleaned up. Scratch bytes are on disk, not RAM.",

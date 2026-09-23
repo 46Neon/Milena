@@ -49,8 +49,14 @@ typedef enum {
     AST_COMANDO_DERECHA,
     AST_COMANDO_CLAVE,
     AST_COMANDO_SST,
+    AST_STREAM_FILTER,
     AST_NODE_TYPE_COUNT
 } ASTNodeType;
+
+typedef enum {
+    AST_STREAM_FILTER_TEXT_EQUAL = 0,
+    AST_STREAM_FILTER_NUMERIC_GREATER
+} ASTStreamFilterKind;
 
 typedef enum {
     AST_ESTADISTICA_NINGUNA,
@@ -88,6 +94,7 @@ typedef struct ASTNode {
     bool zeros_constructor;
     /* Contrato explícito de flujo; cero significa valor predeterminado. */
     ASTStreamOperation stream_operation;
+    ASTStreamFilterKind stream_filter_kind;
     size_t stream_chunk_rows;
     size_t stream_record_limit;
     size_t stream_column_limit;

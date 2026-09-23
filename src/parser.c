@@ -668,6 +668,8 @@ static ASTNode *parse_stream_group(Parser *parser) {
     if (!parser_expect(parser, TOKEN_CADENA,
                        "Se esperaba el nombre de la columna de agrupación entre comillas"))
         return NULL;
+    /* Copy each lexeme into the AST before advancing: lexer token storage is
+     * transient and a comma/next key may overwrite the previous token text. */
     ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
     if (!group) {
         parser_error(parser, "Sin memoria para crear la agrupación de flujo");
@@ -685,6 +687,31 @@ static ASTNode *parse_stream_group(Parser *parser) {
                           "Sin memoria para la clave de agrupación")) {
         ast_destroy(group);
         return NULL;
+    }
+    if (parser_match(parser, TOKEN_COMA)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "Se esperaba la segunda columna de agrupación entre comillas")) {
+            ast_destroy(group);
+            return NULL;
+        }
+        key = ast_create_leaf(AST_AGRUPACION_POR, parser->previous.lexeme);
+        if (!key) {
+            ast_destroy(group);
+            parser_error(parser, "Sin memoria para la segunda clave de agrupación");
+            return NULL;
+        }
+        if (!parser_add_child(parser, group, key,
+                              "Sin memoria para la segunda clave de agrupación")) {
+            ast_destroy(group);
+            return NULL;
+        }
+        if (parser_match(parser, TOKEN_COMA)) {
+            ast_destroy(group);
+            parser_error(parser,
+                "#agrupar admite como máximo dos claves de texto con #spill");
+            return NULL;
+        }
     }
     if (parser_match(parser, TOKEN_NUMERAL)) {
         ASTNode *policy = parse_spill_policy_node(parser);
@@ -793,6 +820,60 @@ fail:
     return NULL;
 }
 
+static ASTNode *parse_human_stream_filter(Parser *parser) {
+    if (!parser_expect(parser, TOKEN_KW_FILTRAR, "Se esperaba 'filtrar'")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA,
+                       "Se esperaba el nombre de columna entre comillas")) return NULL;
+    char column[MAX_TOKEN_LEN];
+    strncpy(column, parser->previous.lexeme, sizeof(column) - 1);
+    column[sizeof(column) - 1] = '\0';
+
+    ASTStreamFilterKind filter_kind;
+    char text_value[MAX_TOKEN_LEN] = {0};
+    double number_value = 0.0;
+    if (parser_match(parser, TOKEN_IGUAL_IGUAL)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "El filtro == requiere un valor de texto entre comillas")) return NULL;
+        strncpy(text_value, parser->previous.lexeme, sizeof(text_value) - 1);
+        text_value[sizeof(text_value) - 1] = '\0';
+        filter_kind = AST_STREAM_FILTER_TEXT_EQUAL;
+    } else if (parser_match(parser, TOKEN_MAYOR)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_NUMERO,
+                           "El filtro > requiere un literal numérico")) return NULL;
+        number_value = parser->previous.number_value;
+        if (!isfinite(number_value)) {
+            parser_error(parser, "El límite numérico del filtro debe ser finito");
+            return NULL;
+        }
+        filter_kind = AST_STREAM_FILTER_NUMERIC_GREATER;
+    } else {
+        parser_error(parser,
+            "El filtro de flujo solo admite igualdad textual == o comparación numérica >");
+        return NULL;
+    }
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después del filtro de flujo")) return NULL;
+    ASTNode *filter = ast_create_leaf(AST_STREAM_FILTER, column);
+    if (!filter) {
+        parser_error(parser, "Sin memoria para el filtro de flujo");
+        return NULL;
+    }
+    filter->stream_filter_kind = filter_kind;
+    if (filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+        filter->type_name = milena_strdup(text_value);
+        if (!filter->type_name) {
+            ast_destroy(filter);
+            parser_error(parser, "Sin memoria para el valor del filtro de flujo");
+            return NULL;
+        }
+    } else {
+        filter->number_value = number_value;
+    }
+    return filter;
+}
+
 static ASTNode *parse_human_stream_export(Parser *parser) {
     parser_advance(parser);
     if (!parser_expect_word(parser, "resultado", "Se esperaba 'resultado'")) return NULL;
@@ -825,6 +906,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             ASTNode *load = parse_human_stream_load(parser);
             if (load && !parser_add_child(parser, node, load,
                                            "Sin memoria para cargar datos")) break;
+        } else if (parser_match(parser, TOKEN_KW_FILTRAR)) {
+            ASTNode *filter = parse_human_stream_filter(parser);
+            if (filter && !parser_add_child(parser, node, filter,
+                                             "Sin memoria para el filtro de flujo")) break;
         } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
             ASTNode *group = parse_stream_group(parser);
             if (group && !parser_add_child(parser, node, group,

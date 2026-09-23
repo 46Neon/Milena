@@ -1,0 +1,41 @@
+name: Million-row scale validation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/million-row-scale.yml'
+      - 'benchmarks/million_row_validation.py'
+      - 'docs/MILLION_ROW_SCALE_ROADMAP_PR29.md'
+      - 'Makefile'
+  schedule:
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  million-row-canonical-language:
+    name: Canonical .milena CSV aggregation (1,000,000 rows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build canonical Milena product
+        run: |
+          set -euxo pipefail
+          make clean
+          make CC=gcc all
+      - name: Generate, run and verify one-million-row CSV workload
+        env:
+          CC: gcc
+          GITHUB_SHA: ${{ github.sha }}
+        run: make CC=gcc scale-million-row SCALE_RESULT=million-row-results.json
+      - name: Upload scale observation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: million-row-scale-${{ github.run_id }}
+          path: million-row-results.json
+          if-no-files-found: ignore
+          retention-days: 30

@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+"""Validate one million rows through Milena's canonical language/runtime path.
+
+Only fixture generation and result checking happen in Python. The CSV scan and
+aggregation are executed by ``milena run`` using the human .analisis syntax.
+Timings and RSS are observations, not portable performance promises.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import math
+import os
+import platform
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+BINARY = ROOT / "milena"
+ROWS = 1_000_000
+MALFORMED_EVERY = 100_003
+CHUNK_ROWS = 4_096
+MAX_RECORD_BYTES = 1 * 1024 * 1024
+RUN_TIMEOUT_SECONDS = 600
+
+
+def generate_csv(path: Path) -> tuple[int, int]:
+    """Write a stable four-column fixture; return malformed rows and bytes."""
+    malformed = 0
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(["id", "importe", "grupo", "grupo_spill"])
+        for row in range(ROWS):
+            group = "A" if row % 2 == 0 else "B"
+            # Keep each key in one contiguous, balanced range. With a 4 KiB
+            # resident reducer budget, round-robin keys force millions of tiny
+            # repeated flushes (and exceed the configured 4096 initial-run cap)
+            # without testing a meaningful cardinality boundary. Existing
+            # runtime tests cover interleaved-key correctness; this workload
+            # exercises the million-row spill path and bounded external merge.
+            spill_group = f"g{row * 128 // ROWS:03d}"
+            if (row + 1) % MALFORMED_EVERY == 0:
+                writer.writerow([row, "no-num", group, spill_group])
+                malformed += 1
+            else:
+                writer.writerow([row, f"{(row % 1000) / 10:.1f}", group, spill_group])
+    return malformed, path.stat().st_size
+
+
+def expected_ticks() -> int:
+    """Exact integer-tenths sum, independent of floating-point accumulation."""
+    return sum(row % 1000 for row in range(ROWS)
+               if (row + 1) % MALFORMED_EVERY != 0)
+
+
+def expected_grouped() -> dict[str, dict[str, int]]:
+    """Exact group counts and integer-tenths sums for the generated fixture."""
+    result = {key: {"rows": 0, "valid": 0, "invalid": 0, "ticks": 0}
+              for key in ("A", "B")}
+    for row in range(ROWS):
+        group = "A" if row % 2 == 0 else "B"
+        item = result[group]
+        item["rows"] += 1
+        if (row + 1) % MALFORMED_EVERY == 0:
+            item["invalid"] += 1
+        else:
+            item["valid"] += 1
+            item["ticks"] += row % 1000
+    return result
+
+
+def expected_spill_groups() -> dict[str, dict[str, int]]:
+    groups = {f"g{i:03d}": {"rows": 0, "valid": 0, "invalid": 0, "ticks": 0}
+              for i in range(128)}
+    for row in range(ROWS):
+        item = groups[f"g{row * 128 // ROWS:03d}"]
+        item["rows"] += 1
+        if (row + 1) % MALFORMED_EVERY == 0:
+            item["invalid"] += 1
+        else:
+            item["valid"] += 1
+            item["ticks"] += row % 1000
+    return groups
+
+
+def validate_spill_report(report: dict[str, Any], malformed_expected: int,
+                          input_bytes: int) -> dict[str, Any]:
+    expected = expected_spill_groups()
+    if report.get("modo") != "flujo_agrupado_spill":
+        raise AssertionError(f"expected grouped spill mode, got {report.get('modo')!r}")
+    for field, value in {"filas": ROWS, "filas_validas": ROWS,
+                         "filas_malformadas": malformed_expected, "grupos": 128,
+                         "limite_grupos": 128, "limite_salida_bytes": 16777216,
+                         "bytes_entrada": input_bytes}.items():
+        if report.get(field) != value:
+            raise AssertionError(f"spill {field}: expected {value!r}, got {report.get(field)!r}")
+    spill_bytes = report.get("bytes_spill")
+    spill_records = report.get("registros_spill")
+    spill_runs = report.get("runs_spill")
+    if not isinstance(spill_bytes, int) or spill_bytes <= 0:
+        raise AssertionError(f"1M workload did not report actual source spill bytes: {spill_bytes!r}")
+    if not isinstance(spill_records, int) or spill_records <= 0:
+        raise AssertionError(f"1M workload did not report actual source spill records: {spill_records!r}")
+    if not isinstance(spill_runs, int) or spill_runs <= 0:
+        raise AssertionError(f"1M workload did not report reducer-created sort runs: {spill_runs!r}")
+    results = report.get("resultados")
+    if not isinstance(results, list) or len(results) != 128:
+        raise AssertionError("spill report did not materialize exactly the bounded 128 output groups")
+    keys = [item.get("clave") for item in results if isinstance(item, dict)]
+    if keys != sorted(expected):
+        raise AssertionError("spill groups are not complete and deterministically ordered")
+    for item in results:
+        key = item["clave"]
+        metrics = item.get("metricas")
+        if not isinstance(metrics, list) or len(metrics) != 3:
+            raise AssertionError(f"spill group {key} has invalid metric shape")
+        by_operation = {metric.get("operacion"): metric for metric in metrics}
+        if list(by_operation) != ["suma", "media", "conteo"]:
+            raise AssertionError(f"spill group {key} has missing or reordered metrics")
+        values = expected[key]
+        total = values["ticks"] / 10.0
+        expected_values = {"suma": total,
+                           "media": total / values["valid"] if values["valid"] else None,
+                           "conteo": values["rows"]}
+        for operation, metric in by_operation.items():
+            valid = values["rows"] if operation == "conteo" else values["valid"]
+            invalid = 0 if operation == "conteo" else values["invalid"]
+            target = expected_values[operation]
+            if (metric.get("valores_validos") != valid or
+                    metric.get("valores_invalidos") != invalid or
+                    metric.get("valores_nulos") != 0 or
+                    not isinstance(metric.get("valor"), (int, float)) or
+                    not math.isclose(float(metric["valor"]), float(target),
+                                     rel_tol=1e-12, abs_tol=1e-9)):
+                raise AssertionError(f"spill {operation} mismatch for {key}: {metric!r}")
+    return {"groups": len(results), "distinct_keys": 128,
+            "configured_group_state_bytes": 4096,
+            "scratch_quota_bytes": 134217728,
+            "output_byte_quota": 16777216,
+            "max_initial_runs": 4096,
+            "observed_source_spill_bytes": spill_bytes,
+            "observed_source_spill_records": spill_records,
+            "observed_initial_sorted_runs": spill_runs,
+            "backend_elapsed_milliseconds": report.get("tiempo_ms"),
+            "backend_rows_per_second": report.get("filas_por_segundo")}
+
+
+def validate_grouped_report(report: dict[str, Any], malformed_expected: int,
+                            input_bytes: int) -> dict[str, Any]:
+    expected = expected_grouped()
+    exact_fields = {
+        "modo": "flujo_agrupado",
+        "filas": ROWS,
+        # Row-level "valid" means at least one selected metric can consume
+        # the row; count accepts non-empty text even if sum rejects it. These
+        # counters may overlap by contract.
+        "filas_validas": ROWS,
+        "filas_malformadas": malformed_expected,
+        "grupos": 2,
+        "limite_grupos": 2,
+        "bytes_entrada": input_bytes,
+    }
+    for field, value in exact_fields.items():
+        if report.get(field) != value:
+            raise AssertionError(f"grouped {field}: expected {value!r}, got {report.get(field)!r}")
+    record_peak = report.get("pico_registro_bytes")
+    buffer_capacity = report.get("capacidad_buffer_registro_bytes")
+    if not isinstance(record_peak, int) or not isinstance(buffer_capacity, int):
+        raise AssertionError("grouped report omitted record/buffer observations")
+    if not (0 < record_peak <= buffer_capacity <= MAX_RECORD_BYTES < input_bytes):
+        raise AssertionError("grouped CSV record buffer violates its configured bound")
+    results = report.get("resultados")
+    if not isinstance(results, list) or len(results) != 2:
+        raise AssertionError("grouped report did not return exactly two result groups")
+    observed: dict[str, Any] = {}
+    for group in results:
+        if not isinstance(group, dict) or group.get("clave") not in expected:
+            raise AssertionError(f"unexpected grouped key: {group!r}")
+        key = group["clave"]
+        observed[key] = group
+        metrics = group.get("metricas")
+        if not isinstance(metrics, list):
+            raise AssertionError(f"group {key} omitted metric results")
+        by_operation = {m.get("operacion"): m for m in metrics if isinstance(m, dict)}
+        if set(by_operation) != {"suma", "conteo"}:
+            raise AssertionError(f"group {key} returned unexpected metrics")
+        for operation in ("suma", "conteo"):
+            metric = by_operation[operation]
+            values = expected[key]
+            if metric.get("columna") != "importe":
+                raise AssertionError(f"group {key} {operation} used the wrong column")
+            metric_valid = values["valid"] if operation == "suma" else values["rows"]
+            metric_invalid = values["invalid"] if operation == "suma" else 0
+            if metric.get("valores_validos") != metric_valid or metric.get("valores_invalidos") != metric_invalid:
+                raise AssertionError(f"group {key} {operation} has incorrect valid/invalid counts")
+            target = values["ticks"] / 10.0 if operation == "suma" else float(values["rows"])
+            actual = metric.get("valor")
+            if not isinstance(actual, (int, float)) or not math.isclose(float(actual), target, rel_tol=1e-12, abs_tol=1e-9):
+                raise AssertionError(f"group {key} {operation}: expected {target}, got {actual!r}")
+    if set(observed) != {"A", "B"} or [g.get("clave") for g in results] != ["A", "B"]:
+        raise AssertionError("grouped results are missing a group or are not deterministic")
+    return {"group_count": len(results),
+            "groups": {key: {"rows": values["rows"], "valid": values["valid"],
+                             "invalid": values["invalid"], "sum": values["ticks"] / 10.0}
+                       for key, values in expected.items()},
+            "observed_record_bytes": record_peak,
+            "record_buffer_capacity_bytes": buffer_capacity,
+            "configured_record_limit_bytes": MAX_RECORD_BYTES,
+            "backend_elapsed_milliseconds": report.get("tiempo_ms"),
+            "backend_rows_per_second": report.get("filas_por_segundo")}
+
+
+def peak_child_rss_bytes() -> int | None:
+    """Read the child-process peak RSS when Python's resource API supports it."""
+    try:
+        import resource
+        value = int(resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)
+    except (ImportError, AttributeError, OSError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    # POSIX leaves units platform-specific: Darwin reports bytes, Linux/BSD
+    # commonly report KiB. This workflow runs on Ubuntu; retain a portable label.
+    if sys.platform == "darwin":
+        normalized = value
+    else:
+        normalized = value * 1024
+    # ru_maxrss is a high-water mark across children; this script launches only
+    # the Milena success and row-budget validation processes being measured.
+    return normalized
+
+
+def validate_report(report: dict[str, Any], malformed_expected: int,
+                    input_bytes: int) -> dict[str, Any]:
+    expected_valid = ROWS - malformed_expected
+    if report.get("modo") != "flujo":
+        raise AssertionError(f"expected global stream mode, got {report.get('modo')!r}")
+    exact_fields = {
+        "filas": ROWS,
+        "filas_validas": expected_valid,
+        "filas_malformadas": malformed_expected,
+        "bytes_entrada": input_bytes,
+        "bytes_leidos": input_bytes,
+        "tamano_lote": CHUNK_ROWS,
+        "limite_registro_bytes": MAX_RECORD_BYTES,
+    }
+    for field, expected in exact_fields.items():
+        actual = report.get(field)
+        if actual != expected:
+            raise AssertionError(f"{field}: expected {expected}, got {actual!r}")
+
+    record_peak = report.get("pico_registro_bytes")
+    buffer_capacity = report.get("capacidad_buffer_registro_bytes")
+    if not isinstance(record_peak, int) or not isinstance(buffer_capacity, int):
+        raise AssertionError("stream report omitted record/buffer observations")
+    if not (0 < record_peak <= buffer_capacity <= MAX_RECORD_BYTES):
+        raise AssertionError("observed CSV record buffer violates configured bound")
+    if buffer_capacity >= input_bytes:
+        raise AssertionError("record buffer is not smaller than the complete CSV input")
+
+    results = report.get("resultados")
+    if not isinstance(results, list):
+        raise AssertionError("stream report omitted aggregate results")
+    by_operation = {item.get("operacion"): item for item in results
+                    if isinstance(item, dict)}
+    expected_operations = {"suma", "media", "conteo"}
+    if set(by_operation) != expected_operations:
+        raise AssertionError(f"unexpected aggregate operations: {sorted(by_operation)}")
+
+    valid_count = expected_valid
+    sum_value = expected_ticks() / 10.0
+    mean_value = sum_value / valid_count
+    expected_values = {"suma": sum_value, "media": mean_value,
+                       "conteo": float(valid_count)}
+    for operation, expected in expected_values.items():
+        metric = by_operation[operation]
+        if metric.get("columna") != "importe":
+            raise AssertionError(f"{operation} used an unexpected input column")
+        if metric.get("valores_validos") != valid_count:
+            raise AssertionError(f"{operation} valid count is incorrect")
+        if metric.get("valores_invalidos") != malformed_expected:
+            raise AssertionError(f"{operation} malformed-value count is incorrect")
+        actual = metric.get("valor")
+        if not isinstance(actual, (int, float)) or not math.isfinite(actual):
+            raise AssertionError(f"{operation} returned a non-finite result")
+        # The input decimals are binary64; assert the exact mathematical result
+        # within a tight representation tolerance, while row/error counts are exact.
+        if not math.isclose(float(actual), expected, rel_tol=1e-12, abs_tol=1e-9):
+            raise AssertionError(f"{operation}: expected {expected:.17g}, got {actual!r}")
+
+    return {
+        "rows": ROWS,
+        "valid_rows": expected_valid,
+        "malformed_rows": malformed_expected,
+        "bytes": input_bytes,
+        "aggregates": {name: by_operation[name]["valor"]
+                       for name in sorted(expected_operations)},
+        "observed_record_bytes": record_peak,
+        "record_buffer_capacity_bytes": buffer_capacity,
+        "configured_record_limit_bytes": MAX_RECORD_BYTES,
+        "chunk_rows": CHUNK_ROWS,
+        "backend_elapsed_milliseconds": report.get("tiempo_ms"),
+        "backend_rows_per_second": report.get("filas_por_segundo"),
+        "backend_megabytes_per_second": report.get("megabytes_por_segundo"),
+    }
+
+
+def run_validation(output_path: Path | None) -> dict[str, Any]:
+    if not BINARY.is_file():
+        raise SystemExit("build the canonical product first (make all)")
+    with tempfile.TemporaryDirectory(prefix="milena-million-row-") as tmp:
+        work = Path(tmp)
+        csv_path = work / "datos_millon.csv"
+        script_path = work / "resumen_millon.milena"
+        report_path = work / "reporte.json"
+        generation_started = time.perf_counter()
+        malformed, input_bytes = generate_csv(csv_path)
+        generation_seconds = time.perf_counter() - generation_started
+        csv_literal = json.dumps(str(csv_path), ensure_ascii=False)
+        report_literal = json.dumps(str(report_path), ensure_ascii=False)
+        script_path.write_text(
+            f'''.analisis validacion_millon_filas {{\n    datos desde {csv_literal}\n        procesar por lotes de {CHUNK_ROWS} filas\n        con registros de hasta 1 MiB\n        con columnas de 16\n        con filas hasta {ROWS}\n    resumir {{\n        suma de "importe";\n        media de "importe";\n        contar de "importe";\n    }}\n    guardar resultado en {report_literal}\n}}\n''',
+            encoding="utf-8")
+
+        started = time.perf_counter()
+        completed = subprocess.run(
+            [str(BINARY), "run", str(script_path)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        process_seconds = time.perf_counter() - started
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"milena run failed with exit {completed.returncode}:\n"
+                f"{completed.stderr}\n{completed.stdout}")
+        if not report_path.is_file():
+            raise AssertionError("milena run succeeded without writing its report")
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        validated = validate_report(report, malformed, input_bytes)
+
+        # Exercise the AST-carried row budget too: a run capped one row below
+        # the fixture must fail and must not publish a successful partial report.
+        limited_report = work / "reporte_limite.json"
+        limited_script = work / "limite.milena"
+        limited_script.write_text(
+            f'''.analisis validacion_limite_filas {{\n    datos desde {csv_literal}\n        procesar por lotes de {CHUNK_ROWS} filas\n        con registros de hasta 1 MiB\n        con columnas de 16\n        con filas hasta {ROWS - 1}\n    resumir {{ suma de "importe"; }}\n    guardar resultado en {json.dumps(str(limited_report), ensure_ascii=False)}\n}}\n''',
+            encoding="utf-8")
+        limit_started = time.perf_counter()
+        limited = subprocess.run(
+            [str(BINARY), "run", str(limited_script)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        limit_seconds = time.perf_counter() - limit_started
+        if limited.returncode == 0 or limited_report.exists():
+            raise AssertionError("row-limit overflow must fail without a partial success report")
+
+        # Prove bounded-cardinality grouping on the same fixture through the
+        # canonical Spanish AST/runtime path, separately from global aggregation.
+        grouped_report_path = work / "reporte_agrupado.json"
+        grouped_script_path = work / "agrupado_millon.milena"
+        grouped_source = f'''.analisis validacion_agrupada_millon_filas {{
+    datos desde {csv_literal}
+        procesar por lotes de {CHUNK_ROWS} filas
+        con registros de hasta 1 MiB
+        con columnas de 16
+        con filas hasta {ROWS}
+        con grupos de 2
+    agrupar por "grupo" resumir {{ suma de "importe"; contar de "importe"; }}
+    guardar resultado en {json.dumps(str(grouped_report_path), ensure_ascii=False)}
+}}
+'''
+        grouped_script_path.write_text(grouped_source, encoding="utf-8")
+        grouped_started = time.perf_counter()
+        grouped_process = subprocess.run(
+            [str(BINARY), "run", str(grouped_script_path)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        grouped_seconds = time.perf_counter() - grouped_started
+        if grouped_process.returncode != 0:
+            raise RuntimeError(
+                f"million-row grouped milena run failed with exit {grouped_process.returncode}:\n"
+                f"{grouped_process.stderr}\n{grouped_process.stdout}")
+        if not grouped_report_path.is_file():
+            raise AssertionError("grouped milena run succeeded without writing its report")
+        grouped_report = json.loads(grouped_report_path.read_text(encoding="utf-8"))
+        grouped_validated = validate_grouped_report(grouped_report, malformed, input_bytes)
+
+        # A resource contract below observed cardinality must reject through
+        # the language/runtime path and never publish a partial report.
+        limited_group_report = work / "reporte_grupos_limitados.json"
+        limited_group_script = work / "agrupado_limite_insuficiente.milena"
+        limited_group_script.write_text(
+            grouped_source.replace("con grupos de 2", "con grupos de 1")
+                .replace(str(grouped_report_path), str(limited_group_report)),
+            encoding="utf-8")
+        limited_group_process = subprocess.run(
+            [str(BINARY), "run", str(limited_group_script)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        if limited_group_process.returncode == 0 or limited_group_report.exists():
+            raise AssertionError(
+                "group limit below fixture cardinality must fail without a partial report")
+        grouped_validated["group_limit_check"] = {
+            "configured_groups": 1, "required_groups": 2,
+            "rejected_without_partial_report": True}
+
+        spill_report_path = work / "reporte_spill.json"
+        scratch_path = work / "spill.bin"
+        spill_script_path = work / "spill_millon.milena"
+        spill_source = f'''.analisis validacion_spill_millon_filas {{
+    variable grupo_spill texto
+    variable importe numerica
+    datos desde {csv_literal}
+        procesar por lotes de {CHUNK_ROWS} filas
+        con registros de hasta 1 MiB
+        con columnas de 16
+        con filas hasta {ROWS}
+        con tiempo hasta 600000 ms
+        con grupos de 128
+    agrupar por "grupo_spill" #spill({json.dumps(str(scratch_path), ensure_ascii=False)}, 4096, 134217728, 128, 128, 16777216, 4096)
+        resumir {{ suma de "importe"; media de "importe"; contar de "importe"; }}
+    guardar resultado en {json.dumps(str(spill_report_path), ensure_ascii=False)}
+}}
+'''
+        spill_script_path.write_text(spill_source, encoding="utf-8")
+        spill_started = time.perf_counter()
+        spill_process = subprocess.run(
+            [str(BINARY), "run", str(spill_script_path)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        spill_seconds = time.perf_counter() - spill_started
+        if spill_process.returncode != 0:
+            raise RuntimeError(
+                f"million-row spill milena run failed with exit {spill_process.returncode}:\n"
+                f"{spill_process.stderr}\n{spill_process.stdout}")
+        if not spill_report_path.is_file():
+            raise AssertionError("spill milena run succeeded without its report")
+        spill_report = json.loads(spill_report_path.read_text(encoding="utf-8"))
+        spill_validated = validate_spill_report(spill_report, malformed, input_bytes)
+        if scratch_path.exists():
+            raise AssertionError("successful spill execution left scratch state behind")
+        # Re-run the same program to prove stable report ordering and successful cleanup.
+        repeat_report = work / "reporte_spill_repeat.json"
+        repeat_script = work / "spill_repeat.milena"
+        repeat_script.write_text(spill_source.replace(str(spill_report_path), str(repeat_report)),
+                                 encoding="utf-8")
+        repeat = subprocess.run([str(BINARY), "run", str(repeat_script)], cwd=ROOT,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                timeout=RUN_TIMEOUT_SECONDS, check=False)
+        if repeat.returncode != 0 or not repeat_report.is_file() or scratch_path.exists():
+            raise AssertionError("repeated spill execution failed or left scratch/report state incomplete")
+        repeated_doc = json.loads(repeat_report.read_text(encoding="utf-8"))
+        for field in ("modo", "filas", "filas_validas", "filas_malformadas",
+                      "grupos", "limite_grupos", "bytes_entrada", "resultados"):
+            if repeated_doc.get(field) != spill_report.get(field):
+                raise AssertionError(f"repeated spill execution changed deterministic {field}")
+
+        rss_bytes = peak_child_rss_bytes()
+        result: dict[str, Any] = {
+            "schema": "milena-million-row-validation-v1",
+            "status": "passed",
+            "execution": "milena run with .analisis / datos desde / resumir / guardar resultado",
+            "canonical_path": "lexer -> parser -> AST -> semantic/resources -> runtime -> stream backend",
+            "fixture": {"rows_requested": ROWS,
+                        "malformed_every": MALFORMED_EVERY,
+                        "spill_key_order": "128 contiguous balanced key ranges",
+                        "malformed_expected": malformed,
+                        "valid_expected": ROWS - malformed,
+                        "generation_seconds": generation_seconds},
+            "resource_limit_check": {"row_limit": ROWS - 1,
+                                     "rejected_without_partial_report": True,
+                                     "process_elapsed_seconds": limit_seconds},
+            "measurements": {**validated,
+                             "process_elapsed_seconds": process_seconds,
+                             "process_rows_per_second": ROWS / process_seconds if process_seconds else None,
+                             "peak_rss_bytes": rss_bytes,
+                             "peak_rss_supported": rss_bytes is not None},
+            "grouped_stream_measurements": {**grouped_validated,
+                                            "process_elapsed_seconds": grouped_seconds,
+                                            "process_rows_per_second": ROWS / grouped_seconds if grouped_seconds else None},
+            "grouped_spill_measurements": {**spill_validated,
+                                           "process_elapsed_seconds": spill_seconds,
+                                           "process_rows_per_second": ROWS / spill_seconds if spill_seconds else None,
+                                           "repeat_deterministic": True,
+                                           "scratch_removed_after_success": True},
+            "environment": {"platform": platform.platform(),
+                            "machine": platform.machine(),
+                            "python": platform.python_version(),
+                            "compiler": os.environ.get("CC", "make default CC"),
+                            "commit": os.environ.get("GITHUB_SHA", "unknown")},
+            "limitations": [
+                "This pass proves global and two-key aggregation plus grouped spill with three metrics over 1,000,000 rows with bounded 128-key output and a 4 KiB reducer memory policy for the documented contiguous-key fixture, build and hardware.",
+                "It does not prove arbitrary high-cardinality output, joins, general ETL, distributed/cloud execution, Arrow/Parquet or ML.",
+                "Throughput and peak RSS are observations; no universal latency or RSS threshold is asserted.",
+            ],
+        }
+        rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+        if output_path:
+            output_path.write_text(rendered, encoding="utf-8")
+        print(rendered, end="")
+        return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path,
+                        help="also save the JSON observation to this path")
+    args = parser.parse_args()
+    run_validation(args.output)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
