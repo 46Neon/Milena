@@ -49,16 +49,17 @@ Termux.
 ## Hito de un millón de filas (opt-in)
 
 `make scale-million-row` genera un CSV determinista de exactamente 1.000.000
-filas y ejecuta un resumen global mediante `milena run` y la sintaxis española
-canónica. Valida filas leídas/válidas/malformadas, suma/media/conteo, bytes de
-entrada y límites de registro/búfer; comprueba además que un límite de filas
-infractor falla sin producir un reporte parcial de éxito. Informa throughput,
-tiempo, capacidad y
-pico del búfer y RSS pico portable cuando Python/el sistema lo soportan. Los
-conteos son exactos; los agregados de punto flotante se comparan con tolerancia
-numérica estrecha. El resultado es una observación de ese workload/build/hardware,
-no un umbral, una latencia garantizada ni evidencia de Big Data arbitrario,
-spill, ejecución distribuida, cloud o ML.
+filas y ejecuta dos programas mediante `milena run` y la sintaxis española
+canónica: un resumen global y una agrupación streaming de cardinalidad acotada
+(A/B). Valida conteos, valores inválidos, sumas y conteos por grupo, bytes de
+entrada, orden determinista y límites de registro/búfer; también comprueba que
+un límite de filas infractor falla sin producir un reporte parcial de éxito.
+Informa throughput y tiempo por ejecución, capacidad y pico del búfer y RSS pico
+portable cuando Python/el sistema lo soportan. Los conteos son exactos; los
+agregados de punto flotante se comparan con tolerancia numérica estrecha. El
+resultado es una observación de esos workloads/build/hardware, no un umbral, una
+latencia garantizada ni evidencia de spill, alta cardinalidad, joins, ETL general,
+ejecución distribuida, cloud, Arrow/Parquet o ML.
 
 Este target no se incorpora a `make test`. El workflow independiente
 `.github/workflows/million-row-scale.yml` lo ejecuta en PRs que cambien los

@@ -156,6 +156,19 @@ un planner general de operadores, esquema, costos, filtros o formatos.
   validación de presupuesto y benchmark comparativo. La fase no debe prometer
   modelos o escala no implementados y medidos.
 
+## Estado de implementación de PR #29
+
+- Implementado en este PR: planner tipado inicial para el corte CSV streaming
+  actual y validación end-to-end de un millón de filas para resumen global.
+- Siguiente ampliación ejecutable en curso: repetir esa escala por el backend de
+  agrupación streaming con solo dos claves, comprobando resultados por grupo,
+  contadores de filas inválidas y límite de estado. Esto demuestra una forma
+  acotada de agregación, no spill ni cardinalidad arbitraria.
+- Las fases 2–6 siguen siendo trabajo futuro: no se marcan como completas solo
+  porque estén descritas aquí. Los contratos de spill del PR #28 son externos a
+  este PR mientras no estén fusionados en `main`; deben revalidarse antes de
+  integrar sus APIs.
+
 ## Ejecución reproducible del hito de este PR
 
 ```sh

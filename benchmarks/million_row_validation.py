@@ -36,11 +36,12 @@ def generate_csv(path: Path) -> tuple[int, int]:
         writer = csv.writer(stream, lineterminator="\n")
         writer.writerow(["id", "importe", "grupo"])
         for row in range(ROWS):
+            group = "A" if row % 2 == 0 else "B"
             if (row + 1) % MALFORMED_EVERY == 0:
-                writer.writerow([row, "no-num", "invalida"])
+                writer.writerow([row, "no-num", group])
                 malformed += 1
             else:
-                writer.writerow([row, f"{(row % 1000) / 10:.1f}", "A" if row % 2 else "B"])
+                writer.writerow([row, f"{(row % 1000) / 10:.1f}", group])
     return malformed, path.stat().st_size
 
 
@@ -48,6 +49,82 @@ def expected_ticks() -> int:
     """Exact integer-tenths sum, independent of floating-point accumulation."""
     return sum(row % 1000 for row in range(ROWS)
                if (row + 1) % MALFORMED_EVERY != 0)
+
+
+def expected_grouped() -> dict[str, dict[str, int]]:
+    """Exact group counts and integer-tenths sums for the generated fixture."""
+    result = {key: {"rows": 0, "valid": 0, "invalid": 0, "ticks": 0}
+              for key in ("A", "B")}
+    for row in range(ROWS):
+        group = "A" if row % 2 == 0 else "B"
+        item = result[group]
+        item["rows"] += 1
+        if (row + 1) % MALFORMED_EVERY == 0:
+            item["invalid"] += 1
+        else:
+            item["valid"] += 1
+            item["ticks"] += row % 1000
+    return result
+
+
+def validate_grouped_report(report: dict[str, Any], malformed_expected: int,
+                            input_bytes: int) -> dict[str, Any]:
+    expected = expected_grouped()
+    exact_fields = {
+        "modo": "flujo_agrupado",
+        "filas": ROWS,
+        "filas_validas": ROWS - malformed_expected,
+        "filas_malformadas": malformed_expected,
+        "grupos": 2,
+        "limite_grupos": 2,
+        "bytes_entrada": input_bytes,
+    }
+    for field, value in exact_fields.items():
+        if report.get(field) != value:
+            raise AssertionError(f"grouped {field}: expected {value!r}, got {report.get(field)!r}")
+    record_peak = report.get("pico_registro_bytes")
+    buffer_capacity = report.get("capacidad_buffer_registro_bytes")
+    if not isinstance(record_peak, int) or not isinstance(buffer_capacity, int):
+        raise AssertionError("grouped report omitted record/buffer observations")
+    if not (0 < record_peak <= buffer_capacity <= MAX_RECORD_BYTES < input_bytes):
+        raise AssertionError("grouped CSV record buffer violates its configured bound")
+    results = report.get("resultados")
+    if not isinstance(results, list) or len(results) != 2:
+        raise AssertionError("grouped report did not return exactly two result groups")
+    observed: dict[str, Any] = {}
+    for group in results:
+        if not isinstance(group, dict) or group.get("clave") not in expected:
+            raise AssertionError(f"unexpected grouped key: {group!r}")
+        key = group["clave"]
+        observed[key] = group
+        metrics = group.get("metricas")
+        if not isinstance(metrics, list):
+            raise AssertionError(f"group {key} omitted metric results")
+        by_operation = {m.get("operacion"): m for m in metrics if isinstance(m, dict)}
+        if set(by_operation) != {"suma", "conteo"}:
+            raise AssertionError(f"group {key} returned unexpected metrics")
+        for operation in ("suma", "conteo"):
+            metric = by_operation[operation]
+            values = expected[key]
+            if metric.get("columna") != "importe":
+                raise AssertionError(f"group {key} {operation} used the wrong column")
+            if metric.get("valores_validos") != values["valid"] or metric.get("valores_invalidos") != values["invalid"]:
+                raise AssertionError(f"group {key} {operation} has incorrect valid/invalid counts")
+            target = values["ticks"] / 10.0 if operation == "suma" else float(values["valid"])
+            actual = metric.get("valor")
+            if not isinstance(actual, (int, float)) or not math.isclose(float(actual), target, rel_tol=1e-12, abs_tol=1e-9):
+                raise AssertionError(f"group {key} {operation}: expected {target}, got {actual!r}")
+    if set(observed) != {"A", "B"} or [g.get("clave") for g in results] != ["A", "B"]:
+        raise AssertionError("grouped results are missing a group or are not deterministic")
+    return {"group_count": len(results),
+            "groups": {key: {"rows": values["rows"], "valid": values["valid"],
+                             "invalid": values["invalid"], "sum": values["ticks"] / 10.0}
+                       for key, values in expected.items()},
+            "observed_record_bytes": record_peak,
+            "record_buffer_capacity_bytes": buffer_capacity,
+            "configured_record_limit_bytes": MAX_RECORD_BYTES,
+            "backend_elapsed_milliseconds": report.get("tiempo_ms"),
+            "backend_rows_per_second": report.get("filas_por_segundo")}
 
 
 def peak_child_rss_bytes() -> int | None:
@@ -193,6 +270,37 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
         if limited.returncode == 0 or limited_report.exists():
             raise AssertionError("row-limit overflow must fail without a partial success report")
 
+        # Prove bounded-cardinality grouping on the same fixture through the
+        # canonical Spanish AST/runtime path, separately from global aggregation.
+        grouped_report_path = work / "reporte_agrupado.json"
+        grouped_script_path = work / "agrupado_millon.milena"
+        grouped_script_path.write_text(
+            f'''.analisis validacion_agrupada_millon_filas {{
+    datos desde {csv_literal}
+        procesar por lotes de {CHUNK_ROWS} filas
+        con registros de hasta 1 MiB
+        con columnas de 16
+        con filas hasta {ROWS}
+        con grupos de 2
+    agrupar por "grupo" resumir {{ suma de "importe"; contar de "importe"; }}
+    guardar resultado en {json.dumps(str(grouped_report_path), ensure_ascii=False)}
+}}
+''', encoding="utf-8")
+        grouped_started = time.perf_counter()
+        grouped_process = subprocess.run(
+            [str(BINARY), "run", str(grouped_script_path)], cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=RUN_TIMEOUT_SECONDS, check=False)
+        grouped_seconds = time.perf_counter() - grouped_started
+        if grouped_process.returncode != 0:
+            raise RuntimeError(
+                f"million-row grouped milena run failed with exit {grouped_process.returncode}:\n"
+                f"{grouped_process.stderr}\n{grouped_process.stdout}")
+        if not grouped_report_path.is_file():
+            raise AssertionError("grouped milena run succeeded without writing its report")
+        grouped_report = json.loads(grouped_report_path.read_text(encoding="utf-8"))
+        grouped_validated = validate_grouped_report(grouped_report, malformed, input_bytes)
+
         rss_bytes = peak_child_rss_bytes()
         result: dict[str, Any] = {
             "schema": "milena-million-row-validation-v1",
@@ -212,14 +320,17 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
                              "process_rows_per_second": ROWS / process_seconds if process_seconds else None,
                              "peak_rss_bytes": rss_bytes,
                              "peak_rss_supported": rss_bytes is not None},
+            "grouped_stream_measurements": {**grouped_validated,
+                                            "process_elapsed_seconds": grouped_seconds,
+                                            "process_rows_per_second": ROWS / grouped_seconds if grouped_seconds else None},
             "environment": {"platform": platform.platform(),
                             "machine": platform.machine(),
                             "python": platform.python_version(),
                             "compiler": os.environ.get("CC", "make default CC"),
                             "commit": os.environ.get("GITHUB_SHA", "unknown")},
             "limitations": [
-                "This pass proves only this global CSV aggregation, input, build and hardware.",
-                "It does not prove arbitrary Big Data workloads, grouped spill, joins, ETL, distributed/cloud execution, Arrow/Parquet or ML.",
+                "This pass proves only global aggregation and a two-key bounded-cardinality CSV group operation, this input, build and hardware.",
+                "It does not prove grouped spill, high-cardinality grouping, joins, general ETL, distributed/cloud execution, Arrow/Parquet or ML.",
                 "Throughput and peak RSS are observations; no universal latency or RSS threshold is asserted.",
             ],
         }
