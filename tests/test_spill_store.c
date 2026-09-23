@@ -98,7 +98,7 @@ int main(void) {
     assert(recovery.records_recovered == 0);
     assert(recovery.truncated_tail);
 
-    assert(milena_spill_store_open(path, 80, 128, &store, &error) == MILENA_OK);
+    assert(milena_spill_store_open(path, 60, 128, &store, &error) == MILENA_OK);
     assert(milena_spill_store_append(&store, "cuatro", 6, &error) == MILENA_OK);
     assert(milena_spill_store_append(&store, "12345678901234567890", 20, &error) == MILENA_ERR_OVERFLOW);
     assert(milena_spill_store_close(&store, &error) == MILENA_OK);
