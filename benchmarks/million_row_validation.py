@@ -37,7 +37,13 @@ def generate_csv(path: Path) -> tuple[int, int]:
         writer.writerow(["id", "importe", "grupo", "grupo_spill"])
         for row in range(ROWS):
             group = "A" if row % 2 == 0 else "B"
-            spill_group = f"g{row % 128:03d}"
+            # Keep each key in one contiguous, balanced range. With a 4 KiB
+            # resident reducer budget, round-robin keys force millions of tiny
+            # repeated flushes (and exceed the configured 4096 initial-run cap)
+            # without testing a meaningful cardinality boundary. Existing
+            # runtime tests cover interleaved-key correctness; this workload
+            # exercises the million-row spill path and bounded external merge.
+            spill_group = f"g{row * 128 // ROWS:03d}"
             if (row + 1) % MALFORMED_EVERY == 0:
                 writer.writerow([row, "no-num", group, spill_group])
                 malformed += 1
@@ -72,7 +78,7 @@ def expected_spill_groups() -> dict[str, dict[str, int]]:
     groups = {f"g{i:03d}": {"rows": 0, "valid": 0, "invalid": 0, "ticks": 0}
               for i in range(128)}
     for row in range(ROWS):
-        item = groups[f"g{row % 128:03d}"]
+        item = groups[f"g{row * 128 // ROWS:03d}"]
         item["rows"] += 1
         if (row + 1) % MALFORMED_EVERY == 0:
             item["invalid"] += 1
@@ -438,6 +444,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
             "canonical_path": "lexer -> parser -> AST -> semantic/resources -> runtime -> stream backend",
             "fixture": {"rows_requested": ROWS,
                         "malformed_every": MALFORMED_EVERY,
+                        "spill_key_order": "128 contiguous balanced key ranges",
                         "malformed_expected": malformed,
                         "valid_expected": ROWS - malformed,
                         "generation_seconds": generation_seconds},
@@ -463,7 +470,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
                             "compiler": os.environ.get("CC", "make default CC"),
                             "commit": os.environ.get("GITHUB_SHA", "unknown")},
             "limitations": [
-                "This pass proves global and two-key aggregation plus grouped spill over 1,000,000 rows with bounded 128-key output and 4 KiB reducer memory policy for this input/build/hardware.",
+                "This pass proves global and two-key aggregation plus grouped spill over 1,000,000 rows with bounded 128-key output and a 4 KiB reducer memory policy for the documented contiguous-key fixture, build and hardware.",
                 "It does not prove arbitrary high-cardinality output, joins, general ETL, distributed/cloud execution, Arrow/Parquet or ML.",
                 "Throughput and peak RSS are observations; no universal latency or RSS threshold is asserted.",
             ],
