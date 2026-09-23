@@ -115,8 +115,12 @@ int main(void) {
     CHECK_OK(milena_grouped_aggregate_close(&grouped, &error));
     assert(remove(path) == 0);
 
-    /* A tiny spill quota must fail instead of exceeding its configured limit. */
-    CHECK_OK(milena_grouped_aggregate_open(path, 2048, 64, 100,
+    /* Exactly one serialized single-byte-key record fits; flushing the next
+     * record must fail at the configured quota after preserving that prefix. */
+    const size_t one_key_record = sizeof(uint32_t) + 1u + MILENA_AGGREGATE_WIRE_SIZE;
+    const size_t one_record_quota = MILENA_SPILL_HEADER_SIZE +
+        MILENA_SPILL_HEADER_SIZE + one_key_record + MILENA_SPILL_TRAILER_SIZE;
+    CHECK_OK(milena_grouped_aggregate_open(path, 2048, 64, one_record_quota,
                                             &grouped, &error));
     for (size_t i = 0; i < grouped.group_capacity; ++i) {
         char key = (char)('a' + i);
