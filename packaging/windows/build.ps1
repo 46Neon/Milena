@@ -45,6 +45,8 @@ foreach ($SourceName in $SourceNames) {
     }
     if (-not (Test-Path $Source)) { throw "Fuente Windows ausente: $SourceName" }
     $Object = Join-Path $ObjectDir ($SourceName -replace '\.c$', '.o')
+    $ObjectParent = Split-Path -Parent $Object
+    New-Item -ItemType Directory -Force -Path $ObjectParent | Out-Null
     Write-Host "[Windows] Compilando $SourceName"
     & $Compiler @Flags '-c' $Source '-o' $Object
     if ($LASTEXITCODE -ne 0) { throw "Falló la compilación Windows de $SourceName" }
