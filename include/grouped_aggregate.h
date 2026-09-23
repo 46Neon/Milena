@@ -24,6 +24,7 @@ typedef struct {
 typedef struct {
     char *spill_path;
     size_t memory_budget_bytes;
+    size_t workspace_budget_bytes;
     size_t max_key_bytes;
     size_t group_capacity;
     size_t group_count;
@@ -36,11 +37,12 @@ typedef struct {
     bool finalized;
 } MilenaGroupedAggregate;
 
-/* memory_budget_bytes bounds reducer-owned heap buffers, including the map,
- * one maximal spill payload, and bounded finalization key buffers; it excludes
+/* memory_budget_bytes bounds the resident map and external-sort payload
+ * buffers, reserving bounded space for temporary path strings; it excludes
  * caller allocations and libc/stdio internals. spill_quota_bytes bounds the
- * append-only spill; max_key_bytes bounds every accepted key and record. The
- * scratch path must not already exist, and concurrent writers are unsupported. */
+ * append-only input spill; external-sort runs are independently capped at
+ * 2x that quota in aggregate. max_key_bytes bounds every accepted key/record.
+ * The scratch path must not already exist; concurrent writers are unsupported. */
 MilenaStatus milena_grouped_aggregate_open(
     const char *spill_path, size_t memory_budget_bytes, size_t max_key_bytes,
     size_t spill_quota_bytes, MilenaGroupedAggregate *grouped,
@@ -48,8 +50,10 @@ MilenaStatus milena_grouped_aggregate_open(
 MilenaStatus milena_grouped_aggregate_add(
     MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
     double value, MilenaError *error);
-/* Finalization scans the bounded spill repeatedly, so memory stays bounded
- * independent of group cardinality; callback order is deterministic. */
+/* Finalization sorts bounded runs and pairwise-merges them externally; cost is
+ * O(R log R), memory stays within the configured reducer budget, and callback
+ * order is deterministic unsigned-byte lexicographic order. Temporary sort
+ * runs are capped at twice spill_quota_bytes in addition to the source spill. */
 MilenaStatus milena_grouped_aggregate_finalize(
     MilenaGroupedAggregate *grouped, MilenaGroupedAggregateVisitFn visitor,
     void *context, size_t *groups_emitted, MilenaError *error);

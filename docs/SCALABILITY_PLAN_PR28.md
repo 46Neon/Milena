@@ -130,17 +130,23 @@ claves, índice hash y buffers temporales internos acotados; al llenarse, serial
 append-only existente y reinicia el mapa. El spill tiene cuota de bytes total,
 límite de tamaño por clave/registro y checksum heredado del almacén. El caller debe proporcionar una ruta scratch
 nueva (se rechaza una ruta existente); escritores concurrentes sobre una misma
-ruta no están soportados. Se valida cada fila numérica con las mismas reglas finitas del agregado global. Al
-finalizar, se recorre el spill de forma acotada, se combinan entradas duplicadas
-y se emite cada grupo en orden lexicográfico binario estable a través de un
-callback; no se materializa el resultado completo en RAM.
+ruta no están soportados. Se valida cada fila numérica con las mismas reglas finitas del agregado global. Al finalizar, lee el spill una sola vez y forma runs ordenados por clave con un
+lote dimensionado desde el presupuesto de memoria. Después hace pasadas de
+fusión externa de dos vías: las claves iguales se combinan con los estados
+mergeables durante la fusión, y la salida final se emite en orden lexicográfico
+binario estable a través de un callback sin materializar todos los grupos en
+RAM. El costo esperado pasa a O(R log R) I/O/CPU para R registros serializados,
+frente al escaneo repetido O(G × R) anterior; la memoria del mapa, lote y
+buffers de lectura/fusión queda acotada por el presupuesto del reducer.
 
-La primera versión prioriza límites explícitos y simplicidad verificable: para
-cada grupo de salida vuelve a recorrer el spill, por lo que su costo de CPU/IO
-puede crecer aproximadamente como O(grupos × registros). No es aún una fusión
-externa eficiente de runs de claves, hash partitioning, agregación paralela ni
-un operador visible en sintaxis `.milena`; no debe usarse como una promesa de
-rendimiento industrial. Las pruebas fuerzan derrames con un mapa pequeño y
-comprueban reducción repetida, orden de salida, grupo con clave vacía y rechazo
-de una configuración de memoria insuficiente.
+El spill de entrada mantiene su cuota configurada y los runs temporales se
+limitan en conjunto a dos veces esa cuota (además del spill de entrada); una
+falta de espacio o cuota falla explícitamente, y se eliminan los temporales
+creados por la operación fallida cuando es posible. El scratch debe ser nuevo,
+los escritores concurrentes sobre una misma ruta no están soportados, y esta
+fusión local no equivale a hash partitioning distribuido ni a una promesa de
+rendimiento industrial. Las pruebas cubren derrames, múltiples pasadas para
+120 claves distintas, reducción repetida, orden determinista, clave vacía,
+fallo de cuota y rechazo de una configuración de memoria insuficiente. La API
+sigue sin estar expuesta en sintaxis `.milena` o en el AST/runtime canónico.
 

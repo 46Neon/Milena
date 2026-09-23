@@ -151,7 +151,7 @@ tests/test_mergeable_aggregate: tests/test_mergeable_aggregate.c src/mergeable_a
 test-grouped-aggregate: tests/test_grouped_aggregate
 	./tests/test_grouped_aggregate
 
-tests/test_grouped_aggregate: tests/test_grouped_aggregate.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c
+tests/test_grouped_aggregate: tests/test_grouped_aggregate.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c include/grouped_aggregate.h include/mergeable_aggregate.h include/spill_store.h
 	$(CC) $(CFLAGS) tests/test_grouped_aggregate.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
 
 test-external-merge: tests/test_external_merge
