@@ -73,15 +73,15 @@ jobs:
             --checksum "$package.sha256" --provenance "$package.provenance.json" \
             --require-provenance --require-elf
           python3 - "$package" "$package.provenance.json" <<'PY'
-import hashlib, json, pathlib, subprocess, sys
-package, provenance = map(pathlib.Path, sys.argv[1:])
-record = json.loads(provenance.read_text(encoding="utf-8"))
-assert record["package"] == package.name
-assert record["architecture"] == "aarch64"
-assert record["sha256"] == hashlib.sha256(package.read_bytes()).hexdigest()
-assert record["version"] == subprocess.check_output(["dpkg-deb", "-f", str(package), "Version"], text=True).strip()
-assert record["source_commit"] != "unknown"
-PY
+          import hashlib, json, pathlib, subprocess, sys
+          package, provenance = map(pathlib.Path, sys.argv[1:])
+          record = json.loads(provenance.read_text(encoding="utf-8"))
+          assert record["package"] == package.name
+          assert record["architecture"] == "aarch64"
+          assert record["sha256"] == hashlib.sha256(package.read_bytes()).hexdigest()
+          assert record["version"] == subprocess.check_output(["dpkg-deb", "-f", str(package), "Version"], text=True).strip()
+          assert record["source_commit"] != "unknown"
+          PY
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           dpkg-deb --fsys-tarfile "$package" | tar -xOf - ./data/data/com.termux/files/usr/bin/milena > "$tmp/milena"
