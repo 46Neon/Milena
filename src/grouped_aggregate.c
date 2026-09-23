@@ -636,7 +636,11 @@ MilenaStatus milena_grouped_aggregate_finalize(
     if (status != MILENA_OK) { remove_run_set(grouped->spill_path, pass, run_count); return status; }
 
     char *final_path = sorted_run_path(grouped->spill_path, pass, 0);
-    if (!final_path) { group_error(error, MILENA_ERR_MEMORY, "No se pudo abrir la salida agrupada"); return MILENA_ERR_MEMORY; }
+    if (!final_path) {
+        remove_run_set(grouped->spill_path, pass, 1u);
+        group_error(error, MILENA_ERR_MEMORY, "No se pudo abrir la salida agrupada");
+        return MILENA_ERR_MEMORY;
+    }
     unsigned char *record = malloc(max_record);
     if (!record) { free(final_path); group_error(error, MILENA_ERR_MEMORY, "Sin memoria para leer salida agrupada"); remove_run_set(grouped->spill_path, pass, 1u); return MILENA_ERR_MEMORY; }
     MilenaSpillReader final_reader = {0};
