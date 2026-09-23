@@ -116,7 +116,7 @@ int main(void) {
     assert(remove(path) == 0);
 
     /* A tiny spill quota must fail instead of exceeding its configured limit. */
-    CHECK_OK(milena_grouped_aggregate_open(path, 2048, 64, 100,
+    CHECK_OK(milena_grouped_aggregate_open(path, 2048, 64, 150,
                                             &grouped, &error));
     for (size_t i = 0; i < grouped.group_capacity; ++i) {
         char key = (char)('a' + i);
