@@ -92,6 +92,17 @@ configurado. Esto permite construir reducción de runs, merge sort externo y
 replay de agregados sin materializar el spill completo en RAM. Los tests de
 spill forman parte de `make test` y cubren recorrido, cuota, truncamiento y
 corrupción de payload/checksum.
+## Lector secuencial y merge sort externo acotado
+
+Se añadió un lector incremental de spill que valida cabeceras, tamaño, cuota y
+checksum por cada registro sin cargar el archivo entero. Sobre él, `external_merge`
+fusiona runs ya ordenados de valores binary64 usando un heap de una cabeza por
+run, preserva el orden por run para empates y rechaza runs mal ordenados,
+valores no finitos, fan-in inválido, cuotas excedidas y salidas existentes.
+La salida se construye en un temporal y solo se activa al completar la fusión;
+la RAM queda acotada por el fan-in. Esta es una etapa de fusión de runs, no aún
+un planner automático multi-pasada ni sort de tablas/grupos arbitrarios.
+
 ## Estados de agregación mergeables
 
 Esta fase incorpora un estado numérico mergeable con conteo, suma,

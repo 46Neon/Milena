@@ -431,3 +431,81 @@ MilenaStatus milena_spill_store_close(MilenaSpillStore *store, MilenaError *erro
     else if (error) milena_error_clear(error);
     return status;
 }
+
+MilenaStatus milena_spill_reader_open(const char *path, size_t quota_bytes,
+                                      size_t max_record_bytes,
+                                      MilenaSpillReader *reader,
+                                      MilenaError *error) {
+    if (!path || !path[0] || !reader || max_record_bytes == 0) {
+        spill_error(error, MILENA_ERR_ARGUMENT, "Parámetros inválidos para lector spill");
+        return MILENA_ERR_ARGUMENT;
+    }
+    MilenaSpillRecovery recovery;
+    MilenaStatus status = milena_spill_store_recover(path, quota_bytes,
+                                                      max_record_bytes,
+                                                      &recovery, error);
+    if (status != MILENA_OK) return status;
+    FILE *file = fopen(path, "rb");
+    if (!file) { spill_error(error, MILENA_ERR_IO, "No se pudo abrir run spill"); return MILENA_ERR_IO; }
+    reader->file = file; reader->quota_bytes = quota_bytes;
+    reader->max_record_bytes = max_record_bytes; reader->bytes_read = 0;
+    reader->record_count = 0;
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}
+
+MilenaStatus milena_spill_reader_next(MilenaSpillReader *reader,
+                                      void *buffer, size_t capacity,
+                                      size_t *length, bool *has_record,
+                                      MilenaError *error) {
+    if (!reader || !reader->file || !length || !has_record) {
+        spill_error(error, MILENA_ERR_ARGUMENT, "Lector spill no inicializado");
+        return MILENA_ERR_ARGUMENT;
+    }
+    *length = 0; *has_record = false;
+    unsigned char header[MILENA_SPILL_HEADER_SIZE];
+    size_t got = fread(header, 1, sizeof(header), reader->file);
+    if (got == 0) {
+        if (ferror(reader->file)) { spill_error(error, MILENA_ERR_IO, "Error al leer run spill"); return MILENA_ERR_IO; }
+        if (error) milena_error_clear(error);
+        return MILENA_OK;
+    }
+    if (got != sizeof(header)) { spill_error(error, MILENA_ERR_DATA, "Cabecera spill truncada"); return MILENA_ERR_DATA; }
+    uint64_t raw_length = get_u64(header + 8);
+    if (memcmp(header, SPILL_MAGIC, 4) != 0 || get_u32(header + 4) != MILENA_SPILL_VERSION ||
+        raw_length > SIZE_MAX || raw_length > reader->max_record_bytes) {
+        spill_error(error, MILENA_ERR_DATA, "Cabecera de run spill inválida"); return MILENA_ERR_DATA;
+    }
+    size_t record_length = (size_t)raw_length, record_size = 0, next_bytes = 0;
+    if (!milena_size_add(MILENA_SPILL_HEADER_SIZE, record_length, &record_size) ||
+        !milena_size_add(record_size, MILENA_SPILL_TRAILER_SIZE, &record_size) ||
+        !milena_size_add(reader->bytes_read, record_size, &next_bytes) ||
+        next_bytes > reader->quota_bytes) {
+        spill_error(error, MILENA_ERR_OVERFLOW, "Run spill excede cuota al leer"); return MILENA_ERR_OVERFLOW;
+    }
+    if (record_length > capacity || (record_length > 0 && !buffer)) {
+        spill_error(error, MILENA_ERR_OVERFLOW, "Buffer insuficiente para registro spill"); return MILENA_ERR_OVERFLOW;
+    }
+    unsigned char trailer[MILENA_SPILL_TRAILER_SIZE];
+    if (!read_exact(reader->file, buffer, record_length) || !read_exact(reader->file, trailer, sizeof(trailer))) {
+        spill_error(error, ferror(reader->file) ? MILENA_ERR_IO : MILENA_ERR_DATA, "Payload spill truncado");
+        return ferror(reader->file) ? MILENA_ERR_IO : MILENA_ERR_DATA;
+    }
+    if (spill_checksum((const unsigned char *)buffer, record_length) != get_u32(trailer)) {
+        spill_error(error, MILENA_ERR_DATA, "Checksum de registro spill inválido"); return MILENA_ERR_DATA;
+    }
+    if (reader->record_count == SIZE_MAX) { spill_error(error, MILENA_ERR_OVERFLOW, "Demasiados registros spill"); return MILENA_ERR_OVERFLOW; }
+    reader->bytes_read = next_bytes; reader->record_count++;
+    *length = record_length; *has_record = true;
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}
+
+MilenaStatus milena_spill_reader_close(MilenaSpillReader *reader,
+                                       MilenaError *error) {
+    if (!reader || !reader->file) { spill_error(error, MILENA_ERR_ARGUMENT, "Lector spill no abierto"); return MILENA_ERR_ARGUMENT; }
+    int result = fclose(reader->file); reader->file = NULL;
+    if (result != 0) { spill_error(error, MILENA_ERR_IO, "No se pudo cerrar lector spill"); return MILENA_ERR_IO; }
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}

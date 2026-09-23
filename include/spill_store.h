@@ -17,6 +17,14 @@ typedef struct {
     bool failed; /* A partial write requires close/reopen recovery before appending. */
 } MilenaSpillStore;
 
+typedef struct {
+    FILE *file;
+    size_t quota_bytes;
+    size_t max_record_bytes;
+    size_t bytes_read;
+    size_t record_count;
+} MilenaSpillReader;
+
 typedef MilenaStatus (*MilenaSpillVisitFn)(const void *data, size_t length,
                                            size_t record_index, void *context,
                                            MilenaError *error);
@@ -49,5 +57,15 @@ MilenaStatus milena_spill_store_visit(const char *path, size_t quota_bytes,
                                       MilenaSpillVisitFn visitor,
                                       void *context,
                                       MilenaError *error);
+MilenaStatus milena_spill_reader_open(const char *path, size_t quota_bytes,
+                                      size_t max_record_bytes,
+                                      MilenaSpillReader *reader,
+                                      MilenaError *error);
+MilenaStatus milena_spill_reader_next(MilenaSpillReader *reader,
+                                      void *buffer, size_t capacity,
+                                      size_t *length, bool *has_record,
+                                      MilenaError *error);
+MilenaStatus milena_spill_reader_close(MilenaSpillReader *reader,
+                                       MilenaError *error);
 
 #endif
