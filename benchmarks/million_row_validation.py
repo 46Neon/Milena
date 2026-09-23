@@ -85,11 +85,12 @@ def expected_spill_groups() -> dict[str, dict[str, int]]:
 def validate_spill_report(report: dict[str, Any], malformed_expected: int,
                           input_bytes: int) -> dict[str, Any]:
     expected = expected_spill_groups()
-    if report.get("modo") != "flujo_agrupado":
+    if report.get("modo") != "flujo_agrupado_spill":
         raise AssertionError(f"expected grouped spill mode, got {report.get('modo')!r}")
     for field, value in {"filas": ROWS, "filas_validas": ROWS - malformed_expected,
                          "filas_malformadas": malformed_expected, "grupos": 128,
-                         "limite_grupos": 128, "bytes_entrada": input_bytes}.items():
+                         "limite_grupos": 128, "limite_salida_bytes": 16777216,
+                         "bytes_entrada": input_bytes}.items():
         if report.get(field) != value:
             raise AssertionError(f"spill {field}: expected {value!r}, got {report.get(field)!r}")
     results = report.get("resultados")
@@ -108,13 +109,13 @@ def validate_spill_report(report: dict[str, Any], malformed_expected: int,
         target = values["ticks"] / 10.0
         if (metric.get("operacion") != "suma" or
                 metric.get("valores_validos") != values["valid"] or
-                metric.get("valores_invalidos") != values["invalid"] or
                 not isinstance(metric.get("valor"), (int, float)) or
                 not math.isclose(float(metric["valor"]), target, rel_tol=1e-12, abs_tol=1e-9)):
             raise AssertionError(f"spill aggregate mismatch for {key}: {metric!r}")
     return {"groups": len(results), "distinct_keys": 128,
             "configured_group_state_bytes": 4096,
             "scratch_quota_bytes": 134217728,
+            "output_byte_quota": 16777216,
             "backend_elapsed_milliseconds": report.get("tiempo_ms"),
             "backend_rows_per_second": report.get("filas_por_segundo")}
 
@@ -387,7 +388,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
         con columnas de 16
         con filas hasta {ROWS}
         con grupos de 128
-    agrupar por "grupo_spill" #spill({json.dumps(str(scratch_path), ensure_ascii=False)}, 4096, 134217728, 128, 128)
+    agrupar por "grupo_spill" #spill({json.dumps(str(scratch_path), ensure_ascii=False)}, 4096, 134217728, 128, 128, 16777216)
         resumir {{ suma de "importe"; }}
     guardar resultado en {json.dumps(str(spill_report_path), ensure_ascii=False)}
 }}

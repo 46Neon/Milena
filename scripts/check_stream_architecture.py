@@ -47,6 +47,10 @@ if ("AST_AGRUPACION_POR" not in planner or "plan->group_key" not in stream_runti
     raise SystemExit("grouping key bypasses the typed logical/physical plan")
 if "milena_stream_execution_plan_build" not in runtime:
     raise SystemExit("canonical runtime bypasses the typed streaming plan")
+if ("AST_AGRUPACION_SPILL" not in planner or
+        "MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL" not in planner or
+        "plan->spill_policy" not in runtime):
+    raise SystemExit("spill resource AST is not carried by the typed physical plan")
 if "milena_stream_csv_grouped_with_options" not in stream_header:
     raise SystemExit("grouped streaming API is not declared in the canonical contract")
 # The bounded CSV spill path uses the same AST/runtime and CSV record parser,

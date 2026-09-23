@@ -607,6 +607,7 @@ static ASTNode *parse_spill_policy_node(Parser *parser) {
     parser_advance(parser);
     ASTNode *policy = NULL;
     size_t memory_bytes = 0, quota_bytes = 0, max_key_bytes = 0, max_groups = 0;
+    size_t max_output_bytes = 1073741824u;
     bool ok = parser_expect(parser, TOKEN_PAR_IZQ,
                             "Se esperaba '(' después de #spill");
     if (ok && parser_expect(parser, TOKEN_CADENA,
@@ -631,6 +632,11 @@ static ASTNode *parse_spill_policy_node(Parser *parser) {
         "Se esperaba coma antes del límite de grupos");
     if (ok) ok = parser_spill_size(parser, 1u, 1000000u, &max_groups,
         "Límite de salida debe ser entero entre 1 y 1000000 grupos");
+    if (ok && parser_match(parser, TOKEN_COMA)) {
+        parser_advance(parser);
+        ok = parser_spill_size(parser, 1u, 1073741824u, &max_output_bytes,
+            "Límite de bytes de salida debe estar entre 1 y 1073741824");
+    }
     if (ok) ok = parser_expect(parser, TOKEN_PAR_DER,
                                "Se esperaba ')' después de la política spill");
     if (!ok) { ast_destroy(policy); return NULL; }
@@ -638,6 +644,7 @@ static ASTNode *parse_spill_policy_node(Parser *parser) {
     policy->group_spill_quota_bytes = quota_bytes;
     policy->group_max_key_bytes = max_key_bytes;
     policy->group_max_output_groups = max_groups;
+    policy->group_max_output_bytes = max_output_bytes;
     return policy;
 }
 
@@ -1074,6 +1081,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             ASTNode *policy = NULL;
                             size_t memory_bytes = 0, quota_bytes = 0;
                             size_t max_key_bytes = 0, max_groups = 0;
+                            size_t max_output_bytes = 1073741824u;
                             bool policy_ok = parser_expect(parser, TOKEN_PAR_IZQ,
                                 "Se esperaba '(' después de #spill");
                             if (policy_ok && parser_expect(parser, TOKEN_CADENA,
@@ -1104,6 +1112,12 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             if (policy_ok) policy_ok = parser_spill_size(parser,
                                 1u, 1000000u, &max_groups,
                                 "Límite de salida debe ser entero entre 1 y 1000000 grupos");
+                            if (policy_ok && parser_match(parser, TOKEN_COMA)) {
+                                parser_advance(parser);
+                                policy_ok = parser_spill_size(parser, 1u, 1073741824u,
+                                    &max_output_bytes,
+                                    "Límite de bytes de salida debe estar entre 1 y 1073741824");
+                            }
                             if (policy_ok) policy_ok = parser_expect(parser,
                                 TOKEN_PAR_DER, "Se esperaba ')' después de la política spill");
                             if (policy_ok && policy) {
@@ -1111,6 +1125,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 policy->group_spill_quota_bytes = quota_bytes;
                                 policy->group_max_key_bytes = max_key_bytes;
                                 policy->group_max_output_groups = max_groups;
+                                policy->group_max_output_bytes = max_output_bytes;
                                 if (!parser_add_child(parser, agrupar, policy,
                                     "Sin memoria para política spill de agrupación")) break;
                             } else ast_destroy(policy);
