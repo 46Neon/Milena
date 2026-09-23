@@ -194,7 +194,7 @@ esperados o si el informe no acredita el búfer acotado.
 
 ## Spill workload resource contract
 
-The opt-in spill benchmark uses 128 keys, 4 KiB reducer memory, a 128 MiB
+The spill program declares its `grupo_spill` and `importe` columns in the AST. The opt-in benchmark uses 128 keys, 4 KiB reducer memory, a 128 MiB
 scratch quota, 128-byte key cap, 16 MiB output cap, 4,096-run cap, one-million
 row cap and 1 MiB record cap. It validates group sums and malformed rows,
 sorted deterministic keys, cleanup and repeated semantic output. The small
