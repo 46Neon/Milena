@@ -2,6 +2,12 @@
 #include "spill.h"
 
 #include <assert.h>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#else
+#include <unistd.h>
+#endif
 
 static void test_spill_contract(void);
 static void test_grouped_spill(void);
@@ -166,8 +172,22 @@ static void test_grouped_spill(void) {
     MilenaStreamOptions spill = memory;
     spill.spill_directory = "."; spill.spill_partitions = 2;
     spill.spill_max_bytes = 4096; spill.spill_max_records = 16;
+    MilenaStreamReport spill_report = {0};
     assert(milena_stream_csv_grouped_with_options(input, spill_output, "grupo",
-        metrics, 2, &spill, NULL, &error) == MILENA_OK);
+        metrics, 2, &spill, &spill_report, &error) == MILENA_OK);
+    /* Prove the grouped spill path actually wrote and consumed partition data,
+       while preserving all rows and cleaning its temporary files. */
+    assert(spill_report.rows_read == 6);
+    assert(spill_report.spill_rows == 6);
+    assert(spill_report.spill_partitions == 2);
+    assert(spill_report.spill_temp_files == 2);
+    assert(spill_report.spilled_bytes > 0);
+    for (size_t i = 0; i < spill.spill_partitions; ++i) {
+        char path[128];
+        assert(snprintf(path, sizeof(path), "./milena-spill-%ld-%zu.bin",
+                        (long)getpid(), i) < (int)sizeof(path));
+        assert(fopen(path, "rb") == NULL);
+    }
     char *expected = read_all(memory_output); char *actual = read_all(spill_output);
     /* The only intentional difference is the execution mode marker. */
     char *p = strstr(expected, "\"derramado\":false");
