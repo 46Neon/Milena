@@ -109,11 +109,14 @@ configurable.
 
 ## Estados de agregación mergeables
 
-Esta fase incorpora un estado numérico mergeable con conteo, suma,
-media, M2 de Welford/Chan, mínimo y máximo. Puede actualizarse por filas,
-combinarse en orden determinista entre particiones y serializarse con versión,
-IEEE-754 binary64 canónico, endianness little-endian y checksum. El finalizador
-expone conteo exacto, suma, media, varianza/desviación poblacional y muestral,
+Esta fase incorpora un estado numérico mergeable con conteo, suma compensada
+(Neumaier), media, M2 de Welford/Chan, mínimo y máximo. Puede actualizarse por
+filas, combinarse en orden determinista entre particiones y serializarse con
+versión, IEEE-754 binary64 canónico, endianness little-endian y checksum. La
+versión 2 del formato conserva la corrección de la suma en cada spill/run para
+que las fusiones externas no pierdan bits bajos. La equivalencia con el camino
+sin spill se prueba con la tolerancia documentada. El finalizador expone conteo
+exacto, suma compensada, media, varianza/desviación poblacional y muestral,
 mínimo y máximo; para una muestra vacía o un único valor señala cuándo la
 varianza muestral no está definida. Los estados parciales se almacenan como
 registros del spill y se reproducen de uno en uno sin materializar los runs.

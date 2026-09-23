@@ -42,11 +42,32 @@ static double get_double(const unsigned char *in) {
     return value;
 }
 static bool state_is_valid(const MilenaAggregateState *state) {
-    if (!state || !isfinite(state->sum) || !isfinite(state->mean) ||
+    if (!state || !isfinite(state->sum) || !isfinite(state->sum_compensation) ||
+        !isfinite(state->sum + state->sum_compensation) || !isfinite(state->mean) ||
         !isfinite(state->m2) || !isfinite(state->min) || !isfinite(state->max)) return false;
-    if (state->count == 0) return state->sum == 0.0 && state->mean == 0.0 &&
-                                  state->m2 == 0.0 && state->min == 0.0 && state->max == 0.0;
+    if (state->count == 0) return state->sum == 0.0 && state->sum_compensation == 0.0 &&
+                                  state->mean == 0.0 && state->m2 == 0.0 &&
+                                  state->min == 0.0 && state->max == 0.0;
     return state->min <= state->max && state->m2 >= 0.0;
+}
+
+/* Neumaier summation retains low-order bits even when a later value is larger
+ * than the running total. Keeping both components in the state makes partial
+ * aggregates safe to spill and combine in the reducer's deterministic order. */
+static bool compensated_add(MilenaAggregateState *state, double value) {
+    double next = state->sum + value;
+    if (!isfinite(next)) return false;
+    double adjustment;
+    if (fabs(state->sum) >= fabs(value))
+        adjustment = (state->sum - next) + value;
+    else
+        adjustment = (value - next) + state->sum;
+    double compensation = state->sum_compensation + adjustment;
+    if (!isfinite(adjustment) || !isfinite(compensation) ||
+        !isfinite(next + compensation)) return false;
+    state->sum = next;
+    state->sum_compensation = compensation;
+    return true;
 }
 
 void milena_aggregate_state_init(MilenaAggregateState *state) {
@@ -69,12 +90,11 @@ MilenaStatus milena_aggregate_state_add(MilenaAggregateState *state,
     double new_mean = state->mean + delta / (double)new_count;
     double delta2 = value - new_mean;
     double new_m2 = state->m2 + delta * delta2;
-    double new_sum = state->sum + value;
-    if (!isfinite(new_mean) || !isfinite(new_m2) || !isfinite(new_sum)) {
+    if (!isfinite(new_mean) || !isfinite(new_m2) || !compensated_add(&next, value)) {
         aggregate_error(error, MILENA_ERR_OVERFLOW, "Desbordamiento numérico en agregación");
         return MILENA_ERR_OVERFLOW;
     }
-    next.count = new_count; next.mean = new_mean; next.m2 = new_m2; next.sum = new_sum;
+    next.count = new_count; next.mean = new_mean; next.m2 = new_m2;
     if (state->count == 0 || value < next.min) next.min = value;
     if (state->count == 0 || value > next.max) next.max = value;
     *state = next;
@@ -101,14 +121,18 @@ MilenaStatus milena_aggregate_state_merge(MilenaAggregateState *target,
     double mean = target->mean + delta * ratio;
     double cross = delta * delta * ((double)target->count * (double)other->count / (double)count);
     double m2 = target->m2 + other->m2 + cross;
-    double sum = target->sum + other->sum;
-    if (!isfinite(mean) || !isfinite(m2) || !isfinite(sum)) {
+    MilenaAggregateState merged = *target;
+    if (!isfinite(mean) || !isfinite(m2) ||
+        !compensated_add(&merged, other->sum) ||
+        !compensated_add(&merged, other->sum_compensation)) {
         aggregate_error(error, MILENA_ERR_OVERFLOW, "Desbordamiento numérico al combinar agregados");
         return MILENA_ERR_OVERFLOW;
     }
-    MilenaAggregateState merged = {count, sum, mean, m2,
-                                    fmin(target->min, other->min),
-                                    fmax(target->max, other->max)};
+    merged.count = count;
+    merged.mean = mean;
+    merged.m2 = m2;
+    merged.min = fmin(target->min, other->min);
+    merged.max = fmax(target->max, other->max);
     *target = merged;
     if (error) milena_error_clear(error);
     return MILENA_OK;
@@ -125,7 +149,7 @@ MilenaStatus milena_aggregate_state_finalize(const MilenaAggregateState *state,
     result->count = state->count;
     result->has_values = state->count > 0;
     if (state->count == 0) { if (error) milena_error_clear(error); return MILENA_OK; }
-    result->sum = state->sum; result->mean = state->mean;
+    result->sum = state->sum + state->sum_compensation; result->mean = state->mean;
     result->variance_population = state->m2 / (double)state->count;
     result->stddev_population = sqrt(result->variance_population);
     result->min = state->min; result->max = state->max;
@@ -159,9 +183,10 @@ MilenaStatus milena_aggregate_state_encode(const MilenaAggregateState *state,
     }
     memcpy(buffer, MAGIC, 4); put_u32(buffer + 4, MILENA_AGGREGATE_WIRE_VERSION);
     put_u64(buffer + 8, state->count); put_double(buffer + 16, state->sum);
-    put_double(buffer + 24, state->mean); put_double(buffer + 32, state->m2);
-    put_double(buffer + 40, state->min); put_double(buffer + 48, state->max);
-    put_u32(buffer + 56, checksum(buffer, 56)); *written = MILENA_AGGREGATE_WIRE_SIZE;
+    put_double(buffer + 24, state->sum_compensation);
+    put_double(buffer + 32, state->mean); put_double(buffer + 40, state->m2);
+    put_double(buffer + 48, state->min); put_double(buffer + 56, state->max);
+    put_u32(buffer + 64, checksum(buffer, 64)); *written = MILENA_AGGREGATE_WIRE_SIZE;
     if (error) milena_error_clear(error);
     return MILENA_OK;
 }
@@ -182,13 +207,16 @@ MilenaStatus milena_aggregate_state_decode(const unsigned char *buffer,
         aggregate_error(error, MILENA_ERR_PARSE, "Magic o versión de agregado inválidos");
         return MILENA_ERR_PARSE;
     }
-    if (get_u32(buffer + 56) != checksum(buffer, 56)) {
+    if (get_u32(buffer + 64) != checksum(buffer, 64)) {
         aggregate_error(error, MILENA_ERR_DATA, "Checksum del agregado no coincide");
         return MILENA_ERR_DATA;
     }
-    MilenaAggregateState decoded = {get_u64(buffer + 8), get_double(buffer + 16),
-                                    get_double(buffer + 24), get_double(buffer + 32),
-                                    get_double(buffer + 40), get_double(buffer + 48)};
+    MilenaAggregateState decoded = {
+        get_u64(buffer + 8), get_double(buffer + 16),
+        get_double(buffer + 24), get_double(buffer + 32),
+        get_double(buffer + 40), get_double(buffer + 48),
+        get_double(buffer + 56)
+    };
     if (!state_is_valid(&decoded)) {
         aggregate_error(error, MILENA_ERR_DATA, "Estado de agregado corrupto o no finito");
         return MILENA_ERR_DATA;

@@ -3,12 +3,14 @@
 
 #include "common.h"
 
-#define MILENA_AGGREGATE_WIRE_VERSION 1u
-#define MILENA_AGGREGATE_WIRE_SIZE 60u
+#define MILENA_AGGREGATE_WIRE_VERSION 2u
+#define MILENA_AGGREGATE_WIRE_SIZE 68u
 
 typedef struct {
     uint64_t count;
     double sum;
+    /* Neumaier correction retained across spill serialization and merges. */
+    double sum_compensation;
     double mean;
     double m2;
     double min;
