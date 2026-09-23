@@ -802,6 +802,7 @@ static bool script_has_canonical_marker(const char *script) {
     if (!script) return false;
     return strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL ||
            strstr(script, "dataset cargar") != NULL ||
+           strstr(script, ".analisis") != NULL ||
            strstr(script, ".limpiar") != NULL || strstr(script, ".transformar") != NULL;
 }
 
