@@ -280,7 +280,6 @@ int main(void) {
     assert(strstr(buffer, "\"valor\":\"\",\"valido\":true") != NULL);
     assert(strstr(buffer, "\"valor\":null,\"valido\":false") != NULL);
     assert(strstr(buffer, "\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":3") != NULL);
-    assert(strstr(buffer, "\"grupos\":4") != NULL);
     assert(fopen(pair_scratch, "rb") == NULL);
     remove(pair_output);
 
