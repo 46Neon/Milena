@@ -107,6 +107,8 @@ int main(void) {
     const char *group_output = "tests/.stream_group_report.json";
     FILE *group_file = fopen(group_input, "wb");
     assert(group_file != NULL);
+    /* The final empty CSV cell is intentional: the stream splitter must keep
+       a trailing delimiter as an empty third column. */
     fputs("zona,importe,referencia\nZ,4,r1\nA,7,r2\nZ,1,\nA,no-num,r3\n",
           group_file);
     assert(fclose(group_file) == 0);
@@ -140,6 +142,9 @@ int main(void) {
         "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":7") != NULL);
     assert(strstr(buffer,
         "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2") != NULL);
+    /* Z's last row has an empty final field; it counts as one invalid value. */
+    assert(strstr(buffer,
+        "\"nombre\":\"referencia_conteo\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":1") != NULL);
     assert(strstr(buffer, "\"limite_grupos\":10") != NULL);
     remove(group_output);
     grouped_options.max_groups = 1;

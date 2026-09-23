@@ -148,6 +148,7 @@ static MilenaStatus stream_split(char *record, char delimiter, char **fields,
         bool quoted = *read == '"';
         if (quoted) read++;
         bool closed = false;
+        bool delimiter_found = false;
         while (*read) {
             char ch = *read++;
             if (quoted) {
@@ -164,6 +165,7 @@ static MilenaStatus stream_split(char *record, char delimiter, char **fields,
                 }
             } else if (ch == delimiter) {
                 *write++ = '\0';
+                delimiter_found = true;
                 break;
             } else {
                 if (closed && ch != ' ' && ch != '\t') {
@@ -179,11 +181,11 @@ static MilenaStatus stream_split(char *record, char delimiter, char **fields,
                              "Campo CSV con comillas sin cerrar");
             return MILENA_ERR_PARSE;
         }
-        if (read[-1] != delimiter && *read == '\0') {
+        if (!delimiter_found) {
             *write = '\0';
             break;
         }
-        if (*read == '\0' && read[-1] == delimiter) {
+        if (*read == '\0') {
             if (count >= field_capacity) {
                 milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                                  "El CSV supera el máximo de 4096 columnas");
