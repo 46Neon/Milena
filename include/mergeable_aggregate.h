@@ -3,11 +3,13 @@
 
 #include "common.h"
 
-#define MILENA_AGGREGATE_WIRE_VERSION 2u
-#define MILENA_AGGREGATE_WIRE_SIZE 68u
+#define MILENA_AGGREGATE_WIRE_VERSION 3u
+#define MILENA_AGGREGATE_WIRE_SIZE 84u
 
 typedef struct {
-    uint64_t count;
+    uint64_t count; /* valid observations */
+    uint64_t null_count;
+    uint64_t invalid_count;
     double sum;
     /* Neumaier correction retained across spill serialization and merges. */
     double sum_compensation;
@@ -18,7 +20,9 @@ typedef struct {
 } MilenaAggregateState;
 
 typedef struct {
-    uint64_t count;
+    uint64_t count; /* valid observations */
+    uint64_t null_count;
+    uint64_t invalid_count;
     double sum;
     double mean;
     double variance_population;
@@ -34,6 +38,10 @@ typedef struct {
 void milena_aggregate_state_init(MilenaAggregateState *state);
 MilenaStatus milena_aggregate_state_add(MilenaAggregateState *state,
                                         double value, MilenaError *error);
+MilenaStatus milena_aggregate_state_add_null(MilenaAggregateState *state,
+                                             MilenaError *error);
+MilenaStatus milena_aggregate_state_add_invalid(MilenaAggregateState *state,
+                                                MilenaError *error);
 MilenaStatus milena_aggregate_state_merge(MilenaAggregateState *target,
                                           const MilenaAggregateState *other,
                                           MilenaError *error);

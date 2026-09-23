@@ -41,14 +41,26 @@ static double get_double(const unsigned char *in) {
     memcpy(&value, &bits, sizeof(value));
     return value;
 }
+static bool state_total_count(const MilenaAggregateState *state, uint64_t *total) {
+    if (!state || !total || state->null_count > UINT64_MAX - state->count)
+        return false;
+    uint64_t partial = state->count + state->null_count;
+    if (state->invalid_count > UINT64_MAX - partial) return false;
+    *total = partial + state->invalid_count;
+    return true;
+}
+
 static bool state_is_valid(const MilenaAggregateState *state) {
-    if (!state || !isfinite(state->sum) || !isfinite(state->sum_compensation) ||
+    uint64_t total = 0;
+    if (!state || !state_total_count(state, &total) ||
+        !isfinite(state->sum) || !isfinite(state->sum_compensation) ||
         !isfinite(state->sum + state->sum_compensation) || !isfinite(state->mean) ||
-        !isfinite(state->m2) || !isfinite(state->min) || !isfinite(state->max)) return false;
-    if (state->count == 0) return state->sum == 0.0 && state->sum_compensation == 0.0 &&
-                                  state->mean == 0.0 && state->m2 == 0.0 &&
-                                  state->min == 0.0 && state->max == 0.0;
-    return state->min <= state->max && state->m2 >= 0.0;
+        !isfinite(state->m2) || !isfinite(state->min) || !isfinite(state->max))
+        return false;
+    if (state->count == 0) return state->sum == 0.0 &&
+        state->sum_compensation == 0.0 && state->mean == 0.0 &&
+        state->m2 == 0.0 && state->min == 0.0 && state->max == 0.0;
+    return total >= state->count && state->min <= state->max && state->m2 >= 0.0;
 }
 
 /* Neumaier summation retains low-order bits even when a later value is larger
@@ -80,7 +92,8 @@ MilenaStatus milena_aggregate_state_add(MilenaAggregateState *state,
         aggregate_error(error, MILENA_ERR_ARGUMENT, "Estado o valor inválido para agregar");
         return MILENA_ERR_ARGUMENT;
     }
-    if (state->count == UINT64_MAX) {
+    uint64_t total_count = 0;
+    if (!state_total_count(state, &total_count) || total_count == UINT64_MAX) {
         aggregate_error(error, MILENA_ERR_OVERFLOW, "Se agotó el contador de agregación");
         return MILENA_ERR_OVERFLOW;
     }
@@ -102,6 +115,35 @@ MilenaStatus milena_aggregate_state_add(MilenaAggregateState *state,
     return MILENA_OK;
 }
 
+static MilenaStatus aggregate_state_add_missing(MilenaAggregateState *state,
+                                                bool invalid,
+                                                MilenaError *error) {
+    uint64_t total = 0;
+    if (!state || !state_is_valid(state)) {
+        aggregate_error(error, MILENA_ERR_ARGUMENT, "Estado inválido para contar valor ausente");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (!state_total_count(state, &total) || total == UINT64_MAX ||
+        (invalid ? state->invalid_count : state->null_count) == UINT64_MAX) {
+        aggregate_error(error, MILENA_ERR_OVERFLOW, "Se agotó el contador de valores ausentes");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (invalid) state->invalid_count++;
+    else state->null_count++;
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}
+
+MilenaStatus milena_aggregate_state_add_null(MilenaAggregateState *state,
+                                             MilenaError *error) {
+    return aggregate_state_add_missing(state, false, error);
+}
+
+MilenaStatus milena_aggregate_state_add_invalid(MilenaAggregateState *state,
+                                                MilenaError *error) {
+    return aggregate_state_add_missing(state, true, error);
+}
+
 MilenaStatus milena_aggregate_state_merge(MilenaAggregateState *target,
                                           const MilenaAggregateState *other,
                                           MilenaError *error) {
@@ -109,13 +151,34 @@ MilenaStatus milena_aggregate_state_merge(MilenaAggregateState *target,
         aggregate_error(error, MILENA_ERR_ARGUMENT, "Estados inválidos para combinar");
         return MILENA_ERR_ARGUMENT;
     }
-    if (other->count == 0) { if (error) milena_error_clear(error); return MILENA_OK; }
-    if (target->count == 0) { *target = *other; if (error) milena_error_clear(error); return MILENA_OK; }
-    if (other->count > UINT64_MAX - target->count) {
-        aggregate_error(error, MILENA_ERR_OVERFLOW, "Desbordamiento del contador al combinar");
+    if (other->count > UINT64_MAX - target->count ||
+        other->null_count > UINT64_MAX - target->null_count ||
+        other->invalid_count > UINT64_MAX - target->invalid_count) {
+        aggregate_error(error, MILENA_ERR_OVERFLOW, "Desbordamiento de contadores al combinar");
         return MILENA_ERR_OVERFLOW;
     }
     uint64_t count = target->count + other->count;
+    uint64_t null_count = target->null_count + other->null_count;
+    uint64_t invalid_count = target->invalid_count + other->invalid_count;
+    if (null_count > UINT64_MAX - count ||
+        invalid_count > UINT64_MAX - count - null_count) {
+        aggregate_error(error, MILENA_ERR_OVERFLOW, "Desbordamiento del total de observaciones al combinar");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (other->count == 0) {
+        target->null_count = null_count;
+        target->invalid_count = invalid_count;
+        if (error) milena_error_clear(error);
+        return MILENA_OK;
+    }
+    if (target->count == 0) {
+        MilenaAggregateState merged = *other;
+        merged.null_count = null_count;
+        merged.invalid_count = invalid_count;
+        *target = merged;
+        if (error) milena_error_clear(error);
+        return MILENA_OK;
+    }
     double delta = other->mean - target->mean;
     double ratio = (double)other->count / (double)count;
     double mean = target->mean + delta * ratio;
@@ -129,6 +192,8 @@ MilenaStatus milena_aggregate_state_merge(MilenaAggregateState *target,
         return MILENA_ERR_OVERFLOW;
     }
     merged.count = count;
+    merged.null_count = null_count;
+    merged.invalid_count = invalid_count;
     merged.mean = mean;
     merged.m2 = m2;
     merged.min = fmin(target->min, other->min);
@@ -147,6 +212,8 @@ MilenaStatus milena_aggregate_state_finalize(const MilenaAggregateState *state,
     }
     memset(result, 0, sizeof(*result));
     result->count = state->count;
+    result->null_count = state->null_count;
+    result->invalid_count = state->invalid_count;
     result->has_values = state->count > 0;
     if (state->count == 0) { if (error) milena_error_clear(error); return MILENA_OK; }
     result->sum = state->sum + state->sum_compensation; result->mean = state->mean;
@@ -182,11 +249,14 @@ MilenaStatus milena_aggregate_state_encode(const MilenaAggregateState *state,
         return MILENA_ERR_UNSUPPORTED;
     }
     memcpy(buffer, MAGIC, 4); put_u32(buffer + 4, MILENA_AGGREGATE_WIRE_VERSION);
-    put_u64(buffer + 8, state->count); put_double(buffer + 16, state->sum);
-    put_double(buffer + 24, state->sum_compensation);
-    put_double(buffer + 32, state->mean); put_double(buffer + 40, state->m2);
-    put_double(buffer + 48, state->min); put_double(buffer + 56, state->max);
-    put_u32(buffer + 64, checksum(buffer, 64)); *written = MILENA_AGGREGATE_WIRE_SIZE;
+    put_u64(buffer + 8, state->count);
+    put_u64(buffer + 16, state->null_count);
+    put_u64(buffer + 24, state->invalid_count);
+    put_double(buffer + 32, state->sum);
+    put_double(buffer + 40, state->sum_compensation);
+    put_double(buffer + 48, state->mean); put_double(buffer + 56, state->m2);
+    put_double(buffer + 64, state->min); put_double(buffer + 72, state->max);
+    put_u32(buffer + 80, checksum(buffer, 80)); *written = MILENA_AGGREGATE_WIRE_SIZE;
     if (error) milena_error_clear(error);
     return MILENA_OK;
 }
@@ -207,15 +277,15 @@ MilenaStatus milena_aggregate_state_decode(const unsigned char *buffer,
         aggregate_error(error, MILENA_ERR_PARSE, "Magic o versión de agregado inválidos");
         return MILENA_ERR_PARSE;
     }
-    if (get_u32(buffer + 64) != checksum(buffer, 64)) {
+    if (get_u32(buffer + 80) != checksum(buffer, 80)) {
         aggregate_error(error, MILENA_ERR_DATA, "Checksum del agregado no coincide");
         return MILENA_ERR_DATA;
     }
     MilenaAggregateState decoded = {
-        get_u64(buffer + 8), get_double(buffer + 16),
-        get_double(buffer + 24), get_double(buffer + 32),
-        get_double(buffer + 40), get_double(buffer + 48),
-        get_double(buffer + 56)
+        get_u64(buffer + 8), get_u64(buffer + 16), get_u64(buffer + 24),
+        get_double(buffer + 32), get_double(buffer + 40),
+        get_double(buffer + 48), get_double(buffer + 56),
+        get_double(buffer + 64), get_double(buffer + 72)
     };
     if (!state_is_valid(&decoded)) {
         aggregate_error(error, MILENA_ERR_DATA, "Estado de agregado corrupto o no finito");

@@ -13,7 +13,7 @@ paralelo.
    resultados decodificados fuera de orden, rechazar duplicados/faltantes y
    conservar equivalencia monolítica.
 3. **Spill-to-disk básico** — implementado en esta rama: registros limitados, validación y replay incremental; no equivale a un motor de spill completo.
-4. **Agregaciones externas** — implementados estados globales mergeables, ordenamiento externo numérico y un primer agregador `GROUP BY` spillable con límites de memoria/scratch y salida determinista. En PR #28 el operador tiene cortes canónicos AST/semántica/runtime para tabla materializada y CSV streaming; su fusión externa usa fan-in fijo de dos y sus límites no equivalen a una cota de RSS global.
+4. **Agregaciones externas** — implementados estados globales mergeables, ordenamiento externo numérico y un primer agregador `GROUP BY` spillable con límites de memoria/scratch y salida determinista. En PR #28 el operador tiene cortes canónicos AST/semántica/runtime para tabla materializada y CSV streaming; el wire de agregación v3 conserva contadores separados de valores válidos, nulos e inválidos. El CSV spill emite esos contadores y representa `COUNT` como entero JSON exacto. La fusión externa usa fan-in fijo de dos y sus límites no equivalen a una cota de RSS global.
 5. **Formatos masivos** — Parquet/Arrow, row groups, compresión y pushdown.
 6. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
 7. **Coordinador** — leases, heartbeats, reintentos, checkpoints y cancelación.
@@ -115,9 +115,14 @@ Esta fase incorpora un estado numérico mergeable con conteo, suma compensada
 (Neumaier), media, M2 de Welford/Chan, mínimo y máximo. Puede actualizarse por
 filas, combinarse en orden determinista entre particiones y serializarse con
 versión, IEEE-754 binary64 canónico, endianness little-endian y checksum. La
-versión 2 del formato conserva la corrección de la suma en cada spill/run para
-que las fusiones externas no pierdan bits bajos. La equivalencia con el camino
-sin spill se prueba con la tolerancia documentada. El finalizador expone conteo
+versión 3 del formato conserva la corrección de la suma, junto con contadores
+de observaciones válidas, nulas e inválidas, en cada spill/run para que las
+fusiones externas no pierdan bits bajos ni la procedencia de valores faltantes.
+El estado ocupa 84 bytes; los campos se codifican explícitamente en little-endian
+y el decoder rechaza overflow de contadores, versión desconocida o checksum
+incorrecto. La compatibilidad con wire v2 no está soportada: se rechaza en vez
+de reinterpretar estados antiguos. La equivalencia con el camino sin spill se
+prueba con la tolerancia documentada. El finalizador expone conteo
 exacto, suma compensada, media, varianza/desviación poblacional y muestral,
 mínimo y máximo; para una muestra vacía o un único valor señala cuándo la
 varianza muestral no está definida. Los estados parciales se almacenan como

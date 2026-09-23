@@ -25,15 +25,22 @@ int main(void) {
     for (size_t i = 0; i < 3; i++) assert(milena_aggregate_state_add(&left, values[i], &error) == MILENA_OK);
     for (size_t i = 3; i < 6; i++) assert(milena_aggregate_state_add(&right, values[i], &error) == MILENA_OK);
     for (size_t i = 0; i < 6; i++) assert(milena_aggregate_state_add(&serial, values[i], &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_null(&left, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_invalid(&right, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_null(&serial, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_invalid(&serial, &error) == MILENA_OK);
     assert(milena_aggregate_state_merge(&left, &right, &error) == MILENA_OK);
-    assert(left.count == serial.count && left.sum == serial.sum &&
+    assert(left.count == serial.count && left.null_count == serial.null_count &&
+           left.invalid_count == serial.invalid_count && left.sum == serial.sum &&
            left.sum_compensation == serial.sum_compensation);
     assert(fabs(left.mean - serial.mean) < 1e-12);
     assert(fabs(left.m2 - serial.m2) < 1e-12);
     assert(left.min == 1.0 && left.max == 6.0);
     MilenaAggregateResult finalized;
     assert(milena_aggregate_state_finalize(&left, &finalized, &error) == MILENA_OK);
-    assert(finalized.count == 6 && finalized.has_values && finalized.has_sample_variance);
+    assert(finalized.count == 6 && finalized.null_count == 1 &&
+           finalized.invalid_count == 1 && finalized.has_values &&
+           finalized.has_sample_variance);
     assert(fabs(finalized.variance_population - (35.0 / 12.0)) < 1e-12);
     assert(fabs(finalized.variance_sample - 3.5) < 1e-12);
     assert(fabs(finalized.stddev_sample - sqrt(3.5)) < 1e-12);
@@ -43,7 +50,8 @@ int main(void) {
     assert(finalized.has_values && !finalized.has_sample_variance && finalized.mean == 4.0);
     MilenaAggregateState empty; milena_aggregate_state_init(&empty);
     assert(milena_aggregate_state_finalize(&empty, &finalized, &error) == MILENA_OK);
-    assert(!finalized.has_values && finalized.count == 0);
+    assert(!finalized.has_values && finalized.count == 0 &&
+           finalized.null_count == 0 && finalized.invalid_count == 0);
 
     /* Cancellation-heavy partial states retain their low-order bits through
      * merge and versioned serialization (the exact sum is 2, not 0). */
@@ -57,6 +65,8 @@ int main(void) {
         assert(milena_aggregate_state_add(&cancel_b, cancellation_right[i], &error) == MILENA_OK);
     }
     assert(cancel_a.sum_compensation != 0.0);
+    assert(milena_aggregate_state_add_null(&cancel_a, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_invalid(&cancel_b, &error) == MILENA_OK);
     unsigned char wire[MILENA_AGGREGATE_WIRE_SIZE]; size_t written = 0;
     MilenaAggregateState decoded;
     assert(milena_aggregate_state_encode(&cancel_a, wire, sizeof(wire), &written, &error) == MILENA_OK);
@@ -65,16 +75,30 @@ int main(void) {
            decoded.sum_compensation == cancel_a.sum_compensation);
     assert(milena_aggregate_state_merge(&decoded, &cancel_b, &error) == MILENA_OK);
     assert(milena_aggregate_state_finalize(&decoded, &finalized, &error) == MILENA_OK);
-    assert(finalized.count == 4 && finalized.sum == 2.0);
+    assert(finalized.count == 4 && finalized.sum == 2.0 &&
+           finalized.null_count == 1 && finalized.invalid_count == 1);
 
     assert(milena_aggregate_state_encode(&left, wire, sizeof(wire), &written, &error) == MILENA_OK);
     assert(written == sizeof(wire));
+    assert(wire[4] == 3 && wire[5] == 0 && wire[6] == 0 && wire[7] == 0);
+    assert(sizeof(wire) == 84u);
     assert(milena_aggregate_state_decode(wire, written, &decoded, &error) == MILENA_OK);
-    assert(decoded.count == left.count && decoded.sum == left.sum &&
+    assert(decoded.count == left.count && decoded.null_count == left.null_count &&
+           decoded.invalid_count == left.invalid_count && decoded.sum == left.sum &&
            decoded.sum_compensation == left.sum_compensation &&
            decoded.mean == left.mean && decoded.m2 == left.m2);
     wire[20] ^= 1u;
     assert(milena_aggregate_state_decode(wire, written, &decoded, &error) == MILENA_ERR_DATA);
+
+    MilenaAggregateState overflow_count;
+    milena_aggregate_state_init(&overflow_count);
+    overflow_count.null_count = UINT64_MAX;
+    assert(milena_aggregate_state_add_null(&overflow_count, &error) == MILENA_ERR_OVERFLOW);
+    MilenaAggregateState overflow_other;
+    milena_aggregate_state_init(&overflow_other);
+    overflow_other.null_count = 1;
+    assert(milena_aggregate_state_merge(&overflow_count, &overflow_other, &error) == MILENA_ERR_OVERFLOW);
+    assert(overflow_count.null_count == UINT64_MAX);
 
     const char *path = "milena-aggregate-spill.bin";
     (void)remove(path);

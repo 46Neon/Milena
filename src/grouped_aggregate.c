@@ -263,9 +263,9 @@ MilenaStatus milena_grouped_aggregate_add(
     return MILENA_OK;
 }
 
-MilenaStatus milena_grouped_aggregate_add_null(
+static MilenaStatus grouped_aggregate_add_missing(
     MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
-    MilenaError *error) {
+    bool invalid, MilenaError *error) {
     if (!grouped || !grouped->groups || grouped->finalized ||
         (!key && key_length != 0) || key_length > grouped->max_key_bytes) {
         group_error(error, MILENA_ERR_ARGUMENT,
@@ -280,25 +280,53 @@ MilenaStatus milena_grouped_aggregate_add_null(
     const unsigned char *bytes = key;
     bool found = false;
     size_t slot = find_group(grouped, bytes, key_length, &found);
-    if (found) { if (error) milena_error_clear(error); return MILENA_OK; }
+    if (found) {
+        MilenaAggregateState *state =
+            &grouped->groups[grouped->table[slot] - 1u].aggregate;
+        return invalid ? milena_aggregate_state_add_invalid(state, error) :
+                         milena_aggregate_state_add_null(state, error);
+    }
     if (grouped->group_count == grouped->group_capacity) {
         MilenaStatus status = flush_groups(grouped, error);
         if (status != MILENA_OK) return status;
         slot = find_group(grouped, bytes, key_length, &found);
-        if (found) return MILENA_OK;
+        if (found) {
+            MilenaAggregateState *state =
+                &grouped->groups[grouped->table[slot] - 1u].aggregate;
+            return invalid ? milena_aggregate_state_add_invalid(state, error) :
+                             milena_aggregate_state_add_null(state, error);
+        }
     }
     if (slot >= grouped->table_capacity) {
         group_error(error, MILENA_ERR_INTERNAL, "Índice hash agrupado agotado");
         return MILENA_ERR_INTERNAL;
     }
     size_t index = grouped->group_count;
-    milena_aggregate_state_init(&grouped->groups[index].aggregate);
+    MilenaAggregateState initial;
+    milena_aggregate_state_init(&initial);
+    MilenaStatus status = invalid ?
+        milena_aggregate_state_add_invalid(&initial, error) :
+        milena_aggregate_state_add_null(&initial, error);
+    if (status != MILENA_OK) return status;
     grouped->groups[index].key_length = key_length;
+    grouped->groups[index].aggregate = initial;
     if (key_length) memcpy(entry_key(grouped, index), bytes, key_length);
     grouped->table[slot] = index + 1u;
     grouped->group_count++;
     if (error) milena_error_clear(error);
     return MILENA_OK;
+}
+
+MilenaStatus milena_grouped_aggregate_add_null(
+    MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
+    MilenaError *error) {
+    return grouped_aggregate_add_missing(grouped, key, key_length, false, error);
+}
+
+MilenaStatus milena_grouped_aggregate_add_invalid(
+    MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
+    MilenaError *error) {
+    return grouped_aggregate_add_missing(grouped, key, key_length, true, error);
 }
 
 static size_t record_length(const unsigned char *record) {

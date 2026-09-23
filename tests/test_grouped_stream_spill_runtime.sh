@@ -42,19 +42,45 @@ p=pathlib.Path(sys.argv[1])
 a=json.loads((p/'memory.json').read_text())
 b=json.loads((p/'spill.json').read_text())
 def result(doc):
-    return {r['clave']: r['metricas'][0]['valor'] for r in doc['resultados']}
+    return {r['clave']: r['metricas'][0] for r in doc['resultados']}
 ma, sb=result(a), result(b)
 assert set(ma)==set(sb), (len(ma),len(sb))
-for k,v in ma.items():
-    w=sb[k]
+for k,memory_metric in ma.items():
+    spill_metric=sb[k]
+    v,w=memory_metric['valor'],spill_metric['valor']
     assert (v is None and w is None) or (v is not None and w is not None and math.isclose(v,w,rel_tol=1e-10,abs_tol=1e-10)), (k,v,w)
-assert sb['New, York\nMetro']==3.75
-assert sb['A'] is None
+    assert memory_metric['valores_validos']==spill_metric['valores_validos']
+    assert memory_metric['valores_nulos']==spill_metric['valores_nulos']
+    assert memory_metric['valores_invalidos']==spill_metric['valores_invalidos']
+assert sb['New, York\nMetro']['valor']==3.75
+assert sb['A']['valor'] is None
+assert sb['A']['valores_nulos']==1 and sb['A']['valores_invalidos']==1
 assert [r['clave'] for r in b['resultados']]==sorted(sb, key=lambda x:x.encode())
 assert b['grupos']==len(sb)
 assert b['limite_salida_bytes']==1048576
 assert not (p/'scratch.bin').exists()
 PY
+# COUNT remains an exact integer in the report and counts non-empty values,
+# including text that would be invalid for a numeric metric.
+cat > "$TMP_DIR/count.milena" <<EOF_M
+.analisis conteo_exacto {
+  variable grupo texto
+  variable valor texto
+  datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  agrupar por "grupo" #spill("$TMP_DIR/count.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { conteo de "valor"; }
+  guardar resultado en "count.json"
+}
+EOF_M
+(cd "$TMP_DIR" && "$MILENA_BIN" run count.milena)
+python3 - "$TMP_DIR/count.json" <<'PY'
+import json,sys
+results={r['clave']:r['metricas'][0] for r in json.load(open(sys.argv[1]))['resultados']}
+assert results['New, York\nMetro']['valor']==2
+assert results['A']['valor']==1
+assert results['A']['valores_nulos']==1
+assert type(results['A']['valor']) is int
+PY
+[ ! -e "$TMP_DIR/count.bin" ]
 # Successful publication atomically replaces an existing destination.
 printf 'old-report' > "$TMP_DIR/spill.json"
 (cd "$TMP_DIR" && "$MILENA_BIN" run spill.milena)

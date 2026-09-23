@@ -10,7 +10,7 @@ La única ruta de producto seguirá siendo `lexer → parser → AST tipado → 
 
 La sintaxis del adaptador tabular admite `#spill("ruta-nueva", memoria_bytes, cuota_spill_bytes, max_key_bytes, max_grupos[, 0, max_runs])` dentro de `.agrupar dataset { ... }`. Los límites numéricos son enteros tipados en el AST: memoria 4 KiB–512 MiB, cuota 1 B–4 GiB, clave 2 B–1 MiB, grupos 1–1,000,000 y runs 1–65,536 (default 4096); la ruta scratch queda limitada a 220 bytes. En el sexto parámetro solo se admite `0` (sin cuota de reporte JSON para esta salida `MilenaTable`); un límite no nulo se rechaza en semántica porque el adaptador no produce un reporte JSON. La política es opt-in; sin ella sigue el camino histórico de `milena_table_group_by`. Una solicitud explícita que no esté soportada falla y nunca vuelve silenciosamente al backend en memoria.
 
-El adaptador usa una clave STRING (una clave únicamente) y una métrica; `conteo` acepta cualquier columna y las otras cuatro métricas requieren FLOAT64. La clave nula no colisiona con texto vacío; la clave vacía observada sí es válida. Valores métricos nulos conservan grupos y producen null (o conteo cero); la entrada numérica que el cargador clasifica inválida sigue la semántica de null canónica. La salida es una `MilenaTable` materializada con tope de grupos y sale en orden lexicográfico binario; el backend histórico conserva orden de primera aparición. La suma/media con reducer mergeable puede diferir por redondeo del backend anterior; la equivalencia numérica se comprueba con tolerancia, no bit a bit.
+El adaptador usa una clave STRING (una clave únicamente) y una métrica; `conteo` acepta cualquier columna y las otras cuatro métricas requieren FLOAT64. La clave nula no colisiona con texto vacío; la clave vacía observada sí es válida. El estado mergeable distingue y serializa observaciones válidas, nulas e inválidas; el JSON de CSV spill ahora expone `valores_validos`, `valores_nulos` y `valores_invalidos`, separando celdas vacías de texto no numérico. La salida es una `MilenaTable` materializada con tope de grupos y sale en orden lexicográfico binario; el backend histórico conserva orden de primera aparición. La suma/media con reducer mergeable puede diferir por redondeo del backend anterior; la equivalencia numérica se comprueba con tolerancia, no bit a bit.
 
 Límites todavía abiertos del adaptador tabular: su input `Dataset` y la tabla previa ya residen en RAM, y la salida también se materializa. Scratch es una ruta provista por el programa y se crea exclusivamente para no sobrescribir un archivo existente; todavía no se garantizan nombres aleatorios privados ni writers concurrentes sobre una misma ruta. El fan-in es fijo de dos vías. La política AST incluye límites de filas/tiempo para CSV streaming y un máximo configurable de runs para ambas rutas.
 
@@ -51,7 +51,8 @@ staging hermano. La publicación sustituye el destino atómicamente en POSIX y
 con `MoveFileEx` en Windows, solo cuando lectura, límites, reducción, escritura
 y cierre finalizaron bien. En error se elimina staging, runs y scratch. La
 prueba E2E compara el valor del corte spill con el agrupamiento de referencia
-en memoria mediante tolerancia.
+en memoria mediante tolerancia y compara los contadores de filas válidas,
+nulas e inválidas por grupo.
 
 El contrato de memoria distingue el búfer de registro CSV (capacidad limitada
 por `max_record_bytes`), la copia acotada de cabecera, `max_columns` punteros,
@@ -78,7 +79,7 @@ concurrencia de writers sobre la misma ruta. No se ha medido RSS global ni se pr
 
 ## Formato persistente
 
-Cada corrida tendrá una cabecera explícita con magic, versión, endianess, identificador de ejecución, esquema/operaciones de métricas, número de filas y registros. Cada registro tendrá longitud de clave y valores enteros/floating de ancho fijo con encoding definido, nunca `fwrite` de structs C con padding o ABI dependiente. Bloques y cabecera tendrán checksums para detectar truncamiento/corrupción; checksum no significa autenticidad criptográfica. Rechazar versiones, tamaños, métricas, checksum o datos numéricos inválidos antes de combinar.
+El formato objetivo para corridas tipadas requiere una cabecera explícita con magic, versión, endianess, identificador de ejecución y esquema/operaciones de métricas. El estado de agregado actual ya tiene wire v3 determinista little-endian: contador de válidos, contador de nulos, contador de inválidos, seis campos binary64 y checksum; el tamaño es 84 bytes. No contiene todavía un esquema tipado de clave/métricas ni soporte de claves compuestas o métricas múltiples. Cada registro futuro debe usar longitudes y valores de ancho fijo definidos, nunca `fwrite` de structs C con padding o ABI dependiente. Checksums detectan corrupción, no autenticidad criptográfica.
 
 ## Recursos y fallos
 
