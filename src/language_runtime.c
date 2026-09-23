@@ -3,7 +3,7 @@
 #include "array.h"
 #include "dataset.h"
 #include "stream.h"
-#include "query_plan.h"
+#include "language_grouped_spill.h"
 #include "analysis.h"
 #include "schema.h"
 #include "table.h"
@@ -1410,39 +1410,94 @@ static bool runtime_stream_operation(ASTStreamOperation ast_operation,
     }
 }
 
-static MilenaStatus run_stream_dataset_with_options(
-                                       const MilenaStreamExecutionPlan *plan,
+static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
                                        const char *input_path,
                                        const char *output_path,
                                        const MilenaStreamOptions *options,
                                        FILE *output,
                                        MilenaError *error) {
-    if (!plan || !plan->source || !plan->summary || !input_path ||
-        !output_path || !options || options->chunk_rows == 0)
+    if (!analysis || !input_path || !output_path || !options ||
+        options->chunk_rows == 0)
         return MILENA_ERR_ARGUMENT;
-    const ASTNode *summary_block = plan->summary;
-    const ASTNode *group_block = plan->group;
-    const ASTNode *group_key = plan->group_key;
-    bool grouped = plan->physical_operator == MILENA_PHYSICAL_CSV_STREAM_GROUPED;
-    if ((!grouped && plan->physical_operator != MILENA_PHYSICAL_CSV_STREAM_SUMMARY) ||
-        grouped != (group_block != NULL) || (grouped && !group_key) ||
-        plan->logical_operator_count != 3 ||
-        plan->logical_operators[0] != MILENA_LOGICAL_CSV_SCAN ||
-        plan->logical_operators[2] != MILENA_LOGICAL_JSON_REPORT) {
-        runtime_error(error, MILENA_ERR_INTERNAL,
-                      "El plan físico del flujo no coincide con su contrato lógico");
-        return MILENA_ERR_INTERNAL;
+    const ASTNode *summary_block = NULL;
+    const ASTNode *group_block = NULL;
+    const ASTNode *group_key = NULL;
+    const ASTNode *group_summary = NULL;
+    const ASTNode *spill_policy = NULL;
+    bool has_top_summary = false;
+    for (size_t i = 0; i < analysis->child_count; i++) {
+        const ASTNode *node = analysis->children[i];
+        if (!node) continue;
+        if (node->type == AST_BLOQUE_RESUMIR) {
+            has_top_summary = true;
+            summary_block = node;
+        } else if (node->type == AST_BLOQUE_AGRUPAR) {
+            if (group_block) {
+                runtime_error(error, MILENA_ERR_PARSE,
+                              "El flujo admite una sola agrupación por operación");
+                return MILENA_ERR_PARSE;
+            }
+            group_block = node;
+        } else if (node->type != AST_LLAMADA_CARGAR &&
+                   node->type != AST_DECLARACION_VARIABLE &&
+                   node->type != AST_DECLARACION_ENTRADA &&
+                   node->type != AST_DECLARACION_SALIDA &&
+                   node->type != AST_BLOQUE_EXPORTAR) {
+            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                          "El modo flujo solo admite resumen o agrupación sin materializar el dataset");
+            return MILENA_ERR_UNSUPPORTED;
+        }
     }
-    if (grouped && plan->logical_operators[1] != MILENA_LOGICAL_GROUP_AGGREGATE) {
-        runtime_error(error, MILENA_ERR_INTERNAL,
-                      "El operador agrupado no coincide con el plan lógico");
-        return MILENA_ERR_INTERNAL;
+    if (group_block) {
+        if (has_top_summary) {
+            runtime_error(error, MILENA_ERR_PARSE,
+                          "El flujo agrupado no puede mezclar resumen global y agrupación");
+            return MILENA_ERR_PARSE;
+        }
+        for (size_t i = 0; i < group_block->child_count; i++) {
+            const ASTNode *child = group_block->children[i];
+            if (!child) continue;
+            if (child->type == AST_AGRUPACION_POR) {
+                if (group_key) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La agrupación de flujo solo admite una clave");
+                    return MILENA_ERR_PARSE;
+                }
+                group_key = child;
+            } else if (child->type == AST_BLOQUE_RESUMIR) {
+                if (group_summary) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La agrupación de flujo solo admite un bloque resumir");
+                    return MILENA_ERR_PARSE;
+                }
+                group_summary = child;
+            } else if (child->type == AST_AGRUPACION_SPILL) {
+                if (spill_policy) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La agrupación de flujo solo admite una política #spill");
+                    return MILENA_ERR_PARSE;
+                }
+                spill_policy = child;
+            } else {
+                runtime_error(error, MILENA_ERR_PARSE,
+                              "La agrupación de flujo contiene un nodo no compatible");
+                return MILENA_ERR_PARSE;
+            }
+        }
+        if (!group_key || !group_key->value || !group_summary) {
+            runtime_error(error, MILENA_ERR_PARSE,
+                          "La agrupación de flujo requiere clave y métricas");
+            return MILENA_ERR_PARSE;
+        }
+        summary_block = group_summary;
     }
-    if (!grouped && plan->logical_operators[1] != MILENA_LOGICAL_GLOBAL_AGGREGATE) {
-        runtime_error(error, MILENA_ERR_INTERNAL,
-                      "El resumen global no coincide con el plan lógico");
-        return MILENA_ERR_INTERNAL;
+    if (!summary_block || summary_block->child_count == 0 ||
+        summary_block->child_count > 64) {
+        runtime_error(error, MILENA_ERR_PARSE,
+                      "El flujo necesita entre 1 y 64 métricas en resumir");
+        return MILENA_ERR_PARSE;
     }
+
     MilenaStreamMetric metrics[64];
     char columns[64][128];
     char operations[64][32];
@@ -1528,11 +1583,32 @@ static MilenaStatus run_stream_dataset_with_options(
         return MILENA_ERR_PARSE;
     }
     MilenaStreamReport report = {0};
-    MilenaStatus status = grouped
-        ? milena_stream_csv_grouped_with_options(input_path, output_path,
-              group_key->value, metrics, metric_count, options, &report, error)
-        : milena_stream_csv_summary_with_options(input_path, output_path,
-              metrics, metric_count, options, &report, error);
+    MilenaStatus status;
+    if (group_block && spill_policy) {
+        if (metric_count != 1) {
+            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                          "#spill de flujo admite exactamente una métrica");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+        MilenaStreamSpillPolicy policy = {
+            spill_policy->value,
+            spill_policy->group_memory_budget_bytes,
+            spill_policy->group_spill_quota_bytes,
+            spill_policy->group_max_key_bytes,
+            spill_policy->group_max_output_groups,
+            spill_policy->group_max_output_bytes,
+            spill_policy->group_max_runs
+        };
+        status = milena_stream_csv_grouped_spill_with_options(
+            input_path, output_path, group_key->value, &metrics[0], options,
+            &policy, &report, error);
+    } else if (group_block) {
+        status = milena_stream_csv_grouped_with_options(input_path, output_path,
+            group_key->value, metrics, metric_count, options, &report, error);
+    } else {
+        status = milena_stream_csv_summary_with_options(input_path, output_path,
+            metrics, metric_count, options, &report, error);
+    }
     if (status == MILENA_OK && output) {
         fprintf(output, "Programa de flujo ejecutado: %s\n", input_path);
         fprintf(output, "Filas: %zu | Válidas: %zu | Malformadas: %zu | Lote: %zu | Registro máximo observado: %zu bytes | Tiempo medido: %.3f ms\n",
@@ -1592,19 +1668,6 @@ MilenaStatus milena_run_dataset_program(const char *source,
         return MILENA_ERR_PARSE;
     }
 
-    MilenaStreamExecutionPlan stream_plan = {0};
-    bool streaming = load->type_name && strcmp(load->type_name, "flujo") == 0;
-    if (streaming) {
-        MilenaStatus plan_status = milena_stream_execution_plan_build(
-            analysis, &stream_plan, error);
-        if (plan_status != MILENA_OK) {
-            ast_destroy(program);
-            parser_release(&parser);
-            return plan_status;
-        }
-        load = stream_plan.source;
-    }
-
     char input[2048];
     MilenaStatus status = dataset_runtime_path(load->value, script_filename, false,
                                                input, sizeof(input), error);
@@ -1614,9 +1677,10 @@ MilenaStatus milena_run_dataset_program(const char *source,
         return status;
     }
 
-    if (streaming) {
+    if (load->type_name && strcmp(load->type_name, "flujo") == 0) {
         char output_path[2048];
-        const ASTNode *export_node = stream_plan.sink;
+        const ASTNode *export_node = dataset_runtime_find_child(analysis,
+                                                                  AST_BLOQUE_EXPORTAR);
         const char *requested_output = export_node && export_node->value
             ? export_node->value : "reporte_flujo.json";
         status = dataset_runtime_path(requested_output, script_filename, true,
@@ -1639,7 +1703,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 options.max_rows = load->stream_row_limit;
             if (load->stream_time_limit_ms > 0.0)
                 options.max_elapsed_milliseconds = load->stream_time_limit_ms;
-            status = run_stream_dataset_with_options(&stream_plan, input, output_path,
+            status = run_stream_dataset_with_options(analysis, input, output_path,
                                                      &options, output, error);
         }
         ast_destroy(program);
@@ -1784,11 +1848,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 }
             } else if (block->type == AST_BLOQUE_AGRUPAR) {
                 const ASTNode *group_key = NULL;
+                const ASTNode *spill_policy = NULL;
                 const ASTNode *summaries[16];
                 size_t summary_count = 0;
                 for (size_t j = 0; j < block->child_count; j++) {
                     if (block->children[j]->type == AST_AGRUPACION_POR) {
                         group_key = block->children[j];
+                    } else if (block->children[j]->type == AST_AGRUPACION_SPILL) {
+                        spill_policy = block->children[j];
                     } else if (block->children[j]->type == AST_RESUMEN_METRICA &&
                                summary_count < 16) {
                         summaries[summary_count++] = block->children[j];
@@ -1831,10 +1898,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     const char *key_names[1] = {group_key->value};
                     MilenaTable grouped = {0};
                     milena_table_init(&grouped);
-                    status = milena_table_group_by(&grouped, &canonical_table,
-                                                   key_names, 1,
-                                                   specifications, summary_count,
-                                                   error);
+                    if (spill_policy) {
+                        status = milena_language_group_by_spill(&grouped,
+                            &canonical_table, group_key->value,
+                            &specifications[0], spill_policy, error);
+                    } else {
+                        status = milena_table_group_by(&grouped, &canonical_table,
+                            key_names, 1, specifications, summary_count, error);
+                    }
                     if (status == MILENA_OK) {
                         milena_table_swap(&canonical_table, &grouped);
                         for (size_t j = 0; j < summary_count; j++) {

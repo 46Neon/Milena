@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "grouped_aggregate.h"
 
 void parser_init(Parser *parser, Lexer *lexer) {
     parser->lexer = lexer;
@@ -53,6 +54,19 @@ static bool parser_add_child(Parser *parser, ASTNode *parent, ASTNode *child,
     ast_destroy(child);
     parser_error(parser, message);
     return false;
+}
+
+static bool parser_spill_size(Parser *parser, size_t minimum, size_t maximum,
+                              size_t *value, const char *message) {
+    if (!parser_expect(parser, TOKEN_NUMERO, message)) return false;
+    double number = parser->previous.number_value;
+    if (!isfinite(number) || number < (double)minimum ||
+        number > (double)maximum || floor(number) != number) {
+        parser_error(parser, message);
+        return false;
+    }
+    *value = (size_t)number;
+    return true;
 }
 
 static ASTNode *parse_array_declaration(Parser *parser) {
@@ -585,6 +599,67 @@ static ASTNode *parse_stream_summary(Parser *parser) {
     return summary;
 }
 
+static ASTNode *parse_spill_policy_node(Parser *parser) {
+    parser_advance(parser); /* consume # */
+    if (!parser_is_identifier(parser) || strcmp(parser->current.lexeme, "spill") != 0) {
+        parser_error(parser, "Se esperaba #spill");
+        return NULL;
+    }
+    parser_advance(parser);
+    ASTNode *policy = NULL;
+    size_t memory_bytes = 0, quota_bytes = 0, max_key_bytes = 0, max_groups = 0;
+    size_t max_output_bytes = 1073741824u;
+    size_t max_runs = MILENA_GROUPED_DEFAULT_MAX_RUNS;
+    bool output_limit_explicit = false;
+    bool ok = parser_expect(parser, TOKEN_PAR_IZQ,
+                            "Se esperaba '(' después de #spill");
+    if (ok && parser_expect(parser, TOKEN_CADENA,
+                            "Se esperaba ruta scratch entre comillas")) {
+        policy = ast_create_leaf(AST_AGRUPACION_SPILL, parser->previous.lexeme);
+        ok = policy != NULL;
+        if (!ok) parser_error(parser, "Sin memoria para política spill AST");
+    } else ok = false;
+    if (ok) ok = parser_expect(parser, TOKEN_COMA,
+        "Se esperaba coma antes del presupuesto de memoria");
+    if (ok) ok = parser_spill_size(parser, 4096u, 536870912u, &memory_bytes,
+        "Memoria spill debe ser entero entre 4096 y 536870912 bytes");
+    if (ok) ok = parser_expect(parser, TOKEN_COMA,
+        "Se esperaba coma antes de la cuota spill");
+    if (ok) ok = parser_spill_size(parser, 1u, 4294967296u, &quota_bytes,
+        "Cuota spill debe ser entero entre 1 y 4294967296 bytes");
+    if (ok) ok = parser_expect(parser, TOKEN_COMA,
+        "Se esperaba coma antes del límite de clave");
+    if (ok) ok = parser_spill_size(parser, 2u, 1048576u, &max_key_bytes,
+        "Límite de clave debe ser entero entre 2 y 1048576 bytes");
+    if (ok) ok = parser_expect(parser, TOKEN_COMA,
+        "Se esperaba coma antes del límite de grupos");
+    if (ok) ok = parser_spill_size(parser, 1u, 1000000u, &max_groups,
+        "Límite de salida debe ser entero entre 1 y 1000000 grupos");
+    if (ok && parser_match(parser, TOKEN_COMA)) {
+        parser_advance(parser);
+        output_limit_explicit = true;
+        ok = parser_spill_size(parser, 0u, 1073741824u, &max_output_bytes,
+            "Límite de bytes de salida debe estar entre 0 y 1073741824");
+        output_limit_explicit = ok && max_output_bytes != 0;
+    }
+    if (ok && parser_match(parser, TOKEN_COMA)) {
+        parser_advance(parser);
+        ok = parser_spill_size(parser, 1u, MILENA_GROUPED_HARD_MAX_RUNS,
+            &max_runs, "Máximo de runs debe estar entre 1 y 65536");
+    }
+    if (ok) ok = parser_expect(parser, TOKEN_PAR_DER,
+                               "Se esperaba ')' después de la política spill");
+    if (!ok) { ast_destroy(policy); return NULL; }
+    policy->group_memory_budget_bytes = memory_bytes;
+    policy->group_spill_quota_bytes = quota_bytes;
+    policy->group_max_key_bytes = max_key_bytes;
+    policy->group_max_output_groups = max_groups;
+    policy->group_max_output_bytes = max_output_bytes;
+    policy->group_max_runs = max_runs;
+    policy->group_output_limit_explicit = output_limit_explicit;
+    return policy;
+}
+
 static ASTNode *parse_stream_group(Parser *parser) {
     parser_advance(parser); /* consume 'agrupar' */
     if (!parser_expect(parser, TOKEN_KW_POR,
@@ -609,6 +684,15 @@ static ASTNode *parse_stream_group(Parser *parser) {
                           "Sin memoria para la clave de agrupación")) {
         ast_destroy(group);
         return NULL;
+    }
+    if (parser_match(parser, TOKEN_NUMERAL)) {
+        ASTNode *policy = parse_spill_policy_node(parser);
+        if (!policy) { ast_destroy(group); return NULL; }
+        if (!parser_add_child(parser, group, policy,
+                              "Sin memoria para política spill de flujo")) {
+            ast_destroy(group);
+            return NULL;
+        }
     }
     ASTNode *summary = parse_stream_summary(parser);
     if (!summary) {
@@ -1003,6 +1087,72 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                     parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de por");
                                 }
                             }
+                        } else if (parser_is_identifier(parser) &&
+                                   strcmp(parser->current.lexeme, "spill") == 0) {
+                            parser_advance(parser);
+                            ASTNode *policy = NULL;
+                            size_t memory_bytes = 0, quota_bytes = 0;
+                            size_t max_key_bytes = 0, max_groups = 0;
+                            size_t max_output_bytes = 1073741824u;
+                            size_t max_runs = MILENA_GROUPED_DEFAULT_MAX_RUNS;
+                            bool output_limit_explicit = false;
+                            bool policy_ok = parser_expect(parser, TOKEN_PAR_IZQ,
+                                "Se esperaba '(' después de #spill");
+                            if (policy_ok && parser_expect(parser, TOKEN_CADENA,
+                                "Se esperaba ruta scratch entre comillas")) {
+                                policy = ast_create_leaf(AST_AGRUPACION_SPILL,
+                                                         parser->previous.lexeme);
+                                policy_ok = policy != NULL;
+                                if (!policy_ok) parser_error(parser,
+                                    "Sin memoria para política spill AST");
+                            } else policy_ok = false;
+                            if (policy_ok) policy_ok = parser_expect(parser,
+                                TOKEN_COMA, "Se esperaba coma antes del presupuesto de memoria");
+                            if (policy_ok) policy_ok = parser_spill_size(parser,
+                                4096u, 536870912u, &memory_bytes,
+                                "Memoria spill debe ser entero entre 4096 y 536870912 bytes");
+                            if (policy_ok) policy_ok = parser_expect(parser,
+                                TOKEN_COMA, "Se esperaba coma antes de la cuota spill");
+                            if (policy_ok) policy_ok = parser_spill_size(parser,
+                                1u, 4294967296u, &quota_bytes,
+                                "Cuota spill debe ser entero entre 1 y 4294967296 bytes");
+                            if (policy_ok) policy_ok = parser_expect(parser,
+                                TOKEN_COMA, "Se esperaba coma antes del límite de clave");
+                            if (policy_ok) policy_ok = parser_spill_size(parser,
+                                2u, 1048576u, &max_key_bytes,
+                                "Límite de clave debe ser entero entre 2 y 1048576 bytes");
+                            if (policy_ok) policy_ok = parser_expect(parser,
+                                TOKEN_COMA, "Se esperaba coma antes del límite de grupos");
+                            if (policy_ok) policy_ok = parser_spill_size(parser,
+                                1u, 1000000u, &max_groups,
+                                "Límite de salida debe ser entero entre 1 y 1000000 grupos");
+                            if (policy_ok && parser_match(parser, TOKEN_COMA)) {
+                                parser_advance(parser);
+                                output_limit_explicit = true;
+                                policy_ok = parser_spill_size(parser, 0u, 1073741824u,
+                                    &max_output_bytes,
+                                    "Límite de bytes de salida debe estar entre 0 y 1073741824");
+                                output_limit_explicit = policy_ok && max_output_bytes != 0;
+                            }
+                            if (policy_ok && parser_match(parser, TOKEN_COMA)) {
+                                parser_advance(parser);
+                                policy_ok = parser_spill_size(parser, 1u,
+                                    MILENA_GROUPED_HARD_MAX_RUNS, &max_runs,
+                                    "Máximo de runs debe estar entre 1 y 65536");
+                            }
+                            if (policy_ok) policy_ok = parser_expect(parser,
+                                TOKEN_PAR_DER, "Se esperaba ')' después de la política spill");
+                            if (policy_ok && policy) {
+                                policy->group_memory_budget_bytes = memory_bytes;
+                                policy->group_spill_quota_bytes = quota_bytes;
+                                policy->group_max_key_bytes = max_key_bytes;
+                                policy->group_max_output_groups = max_groups;
+                                policy->group_max_output_bytes = max_output_bytes;
+                                policy->group_max_runs = max_runs;
+                                policy->group_output_limit_explicit = output_limit_explicit;
+                                if (!parser_add_child(parser, agrupar, policy,
+                                    "Sin memoria para política spill de agrupación")) break;
+                            } else ast_destroy(policy);
                         } else if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
                                    parser_match(parser, TOKEN_FUNCION_MEDIA) ||
                                    parser_match(parser, TOKEN_FUNCION_MINIMO) ||

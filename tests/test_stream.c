@@ -1,6 +1,25 @@
 #include "stream.h"
+#include "grouped_aggregate.h"
 
 #include <assert.h>
+
+#define CHECK_OK(expr) do { \
+    MilenaStatus check_status = (expr); \
+    if (check_status != MILENA_OK) { \
+        fprintf(stderr, "unexpected status %s at %s:%d: %s\n", \
+                milena_status_name(check_status), __FILE__, __LINE__, grouped_error.message); \
+        assert(check_status == MILENA_OK); \
+    } \
+} while (0)
+
+static MilenaStatus capture_spill_target(const MilenaGroupedAggregateResult *result,
+                                         void *context, MilenaError *error) {
+    (void)error;
+    double *sum = context;
+    if (result->key_length == 6 && memcmp(result->key, "target", 6) == 0)
+        *sum = result->aggregate.sum;
+    return MILENA_OK;
+}
 
 static void write_fixture(const char *path) {
     FILE *file = fopen(path, "wb");
@@ -154,12 +173,12 @@ int main(void) {
     const char *zeta = strstr(buffer, "\"clave\":\"Z\"");
     assert(alpha != NULL && zeta != NULL && alpha < zeta);
     assert(strstr(buffer,
-        "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":7") != NULL);
+        "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_nulos\":0,\"valores_invalidos\":1,\"valor\":7") != NULL);
     assert(strstr(buffer,
-        "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2") != NULL);
-    /* Z's last row has an empty final field; it counts as one invalid value. */
+        "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":2") != NULL);
+    /* Z's last row has an empty final field; it counts as one null value. */
     assert(strstr(buffer,
-        "\"nombre\":\"referencia_conteo\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":1") != NULL);
+        "\"nombre\":\"referencia_conteo\",\"valores_validos\":1,\"valores_nulos\":1,\"valores_invalidos\":0,\"valor\":1") != NULL);
     assert(strstr(buffer, "\"limite_grupos\":10") != NULL);
     remove(group_output);
     grouped_options.max_groups = 1;
@@ -181,6 +200,65 @@ int main(void) {
     assert(fopen(group_output, "rb") == NULL);
     remove(group_input);
     remove(group_output);
+
+    /* The no-spill stream accumulator uses compensated summation. Compare it
+     * with the mergeable grouped-spill path when cancellation values are
+     * deliberately split across many map flushes and external merge passes. */
+    const char *cancel_input = "tests/.stream_cancel_fixture.csv";
+    const char *cancel_output = "tests/.stream_cancel_report.json";
+    const double cancel_values[] = {1e16, 1.0, 1.0, -1e16,
+                                    1e16, 1.0, 1.0, -1e16,
+                                    1e16, 1.0, 1.0, -1e16};
+    FILE *cancel_file = fopen(cancel_input, "wb");
+    assert(cancel_file != NULL);
+    fputs("zona,importe\n", cancel_file);
+    for (size_t i = 0; i < sizeof(cancel_values) / sizeof(cancel_values[0]); ++i)
+        fprintf(cancel_file, "target,%.17g\n", cancel_values[i]);
+    assert(fclose(cancel_file) == 0);
+    MilenaStreamMetric cancel_metric = {"importe", "cancel_suma", MILENA_STREAM_SUM};
+    MilenaStreamOptions cancel_options = milena_stream_options_default();
+    cancel_options.max_groups = 4;
+    MilenaStreamReport cancel_report = {0};
+    assert(milena_stream_csv_grouped_with_options(cancel_input, cancel_output,
+        "zona", &cancel_metric, 1, &cancel_options, &cancel_report,
+        &grouped_error) == MILENA_OK);
+    json = fopen(cancel_output, "rb");
+    assert(json != NULL);
+    memset(buffer, 0, sizeof(buffer));
+    assert(fread(buffer, 1, sizeof(buffer) - 1, json) > 0);
+    assert(fclose(json) == 0);
+    char *sum_field = strstr(buffer, "\"valor\":");
+    assert(sum_field != NULL);
+    double no_spill_sum = strtod(sum_field + strlen("\"valor\":"), NULL);
+    assert(no_spill_sum == 6.0);
+
+    const char *spill_path = "tests/.stream_cancel_spill";
+    (void)remove(spill_path);
+    MilenaGroupedAggregate spilled;
+    CHECK_OK(milena_grouped_aggregate_open(spill_path, 2048, 32,
+        4u * 1024u * 1024u, &spilled, &grouped_error));
+    for (size_t i = 0; i < sizeof(cancel_values) / sizeof(cancel_values[0]); ++i) {
+        CHECK_OK(milena_grouped_aggregate_add(&spilled, "target", 6,
+                                               cancel_values[i], &grouped_error));
+        for (size_t j = 0; j <= spilled.group_capacity; ++j) {
+            char filler[16];
+            (void)snprintf(filler, sizeof(filler), "f%03zu", i * (spilled.group_capacity + 1u) + j);
+            CHECK_OK(milena_grouped_aggregate_add(&spilled, filler,
+                strlen(filler), 0.0, &grouped_error));
+        }
+    }
+    double spill_sum = NAN;
+    size_t spill_groups = 0;
+    CHECK_OK(milena_grouped_aggregate_finalize(&spilled, capture_spill_target,
+        &spill_sum, &spill_groups, &grouped_error));
+    assert(spill_groups == 1u + (sizeof(cancel_values) / sizeof(cancel_values[0])) *
+                           (spilled.group_capacity + 1u));
+    assert(isfinite(spill_sum));
+    assert(fabs(spill_sum - no_spill_sum) <= 1e-12);
+    CHECK_OK(milena_grouped_aggregate_close(&spilled, &grouped_error));
+    assert(remove(spill_path) == 0);
+    remove(cancel_input);
+    remove(cancel_output);
 
     puts("stream tests passed");
     return 0;

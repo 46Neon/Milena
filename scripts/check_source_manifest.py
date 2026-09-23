@@ -8,11 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CATEGORIES = {
     "producto": {
         "analysis.c", "array.c", "canonical_compiler.c", "common.c", "dataset.c", "entrypoints.c", "finance.c",
-        "language_runtime.c", "logger.c", "main.c", "metrics.c", "schema.c",
-        "script.c", "interpreter.c", "partition_executor.c", "partition_plan.c", "partition_reduce.c", "process_executor.c", "sst_advanced.c", "sst_contingency.c", "sst_correlation.c",
+        "language_runtime.c", "language_grouped_spill.c", "logger.c", "main.c", "metrics.c", "schema.c",
+        "script.c", "interpreter.c", "partition_executor.c", "partition_plan.c", "partition_reduce.c", "partition_protocol.c", "partition_protocol_reduce.c", "process_executor.c", "spill_store.c", "mergeable_aggregate.c", "grouped_aggregate.c", "external_merge.c", "external_sort.c", "sst_advanced.c", "sst_contingency.c", "sst_correlation.c",
         "sst_dates.c", "sst_histogram.c", "sst_inference.c", "sst_model.c",
         "sst_normality.c", "sst_rates.c", "sst_report.c",
-        "sst_report_advanced.c", "sst_stats.c", "stream.c", "table.c", "query_plan.c",
+        "sst_report_advanced.c", "sst_stats.c", "stream.c", "table.c",
     },
     "lenguaje": {
         "ast.c", "language_semantic.c", "lexer.c", "parser.c", "symbol_table.c",
