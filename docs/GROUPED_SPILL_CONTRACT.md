@@ -1,25 +1,34 @@
-# Spill local de agrupaciones en flujo
+# Contrato para spill-to-disk de agrupaciones en flujo
 
-**Estado:** primera ejecución integrada y disponible mediante la API tipada C de `stream.c`; la sintaxis AST/runtime aún no expone política de spill. El flujo sigue siendo `lexer → parser → AST tipado → semántica → runtime → stream.c`; esta primera entrega solo amplía el backend agrupado y no incorpora parser, CLI, runtime ni comando alternativo.
+**Estado:** diseño acordado; no implementado. El backend actual `milena_stream_csv_grouped_with_options` guarda grupos en memoria y falla explícitamente al alcanzar `max_groups` o el presupuesto de estado. No existen `src/spill.c` ni `src/spill_store.c`. Este documento no anuncia capacidad disponible.
 
-## Comportamiento implementado
+## Límite arquitectónico
 
-`MilenaStreamOptions.spill_enabled` habilita spill únicamente en `milena_stream_csv_grouped_with_options`. Se conserva `false` por omisión, así que el contrato anterior de fallar al superar `max_groups` no cambia. Al encontrar una clave nueva con el lote residente lleno, el backend ordena ese lote por clave decodificada, lo serializa en una corrida local `tmpfile()`, libera claves/acumuladores/tabla hash, y continúa leyendo el CSV secuencialmente. Al finalizar, escribe el lote restante y fusiona las corridas ordenadas, combinando claves duplicadas entre corridas. El merge mantiene un cursor acotado por archivo y escanea los cursores para elegir la siguiente clave; emite el mismo orden bytewise determinista que la ruta en memoria.
+La única ruta de producto seguirá siendo `lexer → parser → AST tipado → semántica → runtime → stream.c`. La sintaxis humana expresará las políticas de spill en el AST; el runtime validará los límites antes de ejecutar y pasará opciones tipadas al backend. El spill no tendrá parser, CLI, runtime ni comando externo propios. El manifiesto de fuentes debe clasificar cada módulo nuevo como producto; `Makefile` debe incorporarlo a las fuentes oficiales. El verificador existente debe fallar ante fuentes C presentes pero no clasificadas: no se permite resolver diferencias excluyendo archivos o agregando módulos inexistentes.
 
-Cada corrida tiene magic, versión y número de métricas en una cabecera validada con FNV-1a de 32 bits. Los registros codifican longitud y clave, seis doubles, recuento válido e inválidos por métrica, con endianess little-endian explícita; cada registro lleva FNV-1a de 64 bits. El checksum es detección de daños, no autenticación. Se comprueba todo el contenido y los checksums en una primera pasada antes de abrir/sobrescribir el destino; la segunda pasada emite el JSON. Las reducciones combinan sumas compensadas y estadísticas Welford por corrida en orden fijo; diferencias flotantes pequeñas frente a una sola pasada son posibles.
+## Semántica y determinismo
 
-La activación y límites son campos tipados de `MilenaStreamOptions`, no texto ni opciones parseadas del AST en esta entrega:
+- Procesar el CSV con el lector actual, que reconoce registros entrecomillados y saltos de línea internos; no particionar por offsets arbitrarios que puedan cortar registros.
+- Al alcanzar el umbral residente, ordenar el lote de grupos por los bytes decodificados de la clave y escribir una corrida temporal tipada. Las métricas válidas/inválidas, el contador, los acumuladores de suma/media/varianza y las estadísticas min/max deben conservar semántica equivalente al camino sin spill.
+- Fusionar las corridas con una cola de prioridad acotada, con un orden fijo por clave y ordinal de corrida. El orden reduce flotantes debe ser determinista para los mismos datos, opciones y versión del formato. La prueba de equivalencia compara valores numéricos con tolerancia documentada; no promete identidad bit a bit frente al orden de acumulación de una sola pasada.
+- Emitir grupos en orden lexicográfico de bytes, idéntico al contrato actual. No crear un grupo para claves no observadas; la clave vacía sí es válida.
 
-- `spill_enabled`: false por defecto.
-- `max_spill_bytes`: 64 MiB por defecto, incluye cabeceras y checksums; tope duro 1 GiB.
-- `max_spill_records`: 1.000.000 registros temporales por defecto; tope duro 10.000.000.
-- `max_spill_files`: 64 corridas abiertas por defecto; tope duro 256.
-- Un valor cero en cada límite selecciona su default. Las opciones solo habilitan spill cuando `spill_enabled` es true.
+## Formato persistente
 
-`MilenaStreamReport` devuelve `spilled`, `spill_runs`, `spill_bytes` y `spill_records`; el reporte JSON incluye `spill`, `corridas_spill` y `bytes_spill`. Si cualquier tope se excede o falla la lectura/escritura/checksum, la llamada devuelve error; no cambia silenciosamente a memoria sin límite. Los temporales provienen de `tmpfile()` y se cierran en todas las rutas de salida para que la biblioteca elimine sus recursos locales.
+Cada corrida tendrá una cabecera explícita con magic, versión, endianess, identificador de ejecución, esquema/operaciones de métricas, número de filas y registros. Cada registro tendrá longitud de clave y valores enteros/floating de ancho fijo con encoding definido, nunca `fwrite` de structs C con padding o ABI dependiente. Bloques y cabecera tendrán checksums para detectar truncamiento/corrupción; checksum no significa autenticidad criptográfica. Rechazar versiones, tamaños, métricas, checksum o datos numéricos inválidos antes de combinar.
 
-## Límites actuales y próximos pasos
+## Recursos y fallos
 
-La prueba fuerza spill con un conjunto pequeño, genera varias corridas con claves duplicadas entre ellas, compara agregados/recuentos contra el camino sin spill, comprueba la marca de reporte y valida un fallo cerrado por bytes temporales. La API pública permite activar spill desde callers C que formen opciones tipadas. El AST/runtime no expone aún estos límites, y el formato actual no es una interfaz persistente entre ejecuciones: se usa únicamente dentro de la misma invocación.
+Todos los límites tendrán defaults conservadores, validación y topes duros: memoria residente, tamaño máximo de clave/registro, número de corridas/archivos abiertos, bytes temporales totales, filas/tiempo y grupos totales. Cualquier suma/multiplicación de tamaños debe comprobar overflow. La falta de espacio, límite excedido, error de lectura/escritura, cancelación o corrupción devuelve error explícito; nunca cae silenciosamente a agregación ilimitada en RAM.
 
-Esta fase no implementa una cola de prioridad (la selección de cursor es lineal en cantidad de corridas), publicación atómica del reporte ante fallas físicas durante la segunda pasada, recuperación tras reinicio, ni autenticación de datos temporales. No agrega red, clúster, cloud, Spark/Flink, Arrow/Parquet, ni procesamiento distribuido. El guard de arquitectura y `make check-grouped-spill` mantienen visible el límite de esta integración.
+Crear temporales exclusivos con nombres impredecibles y permisos privados en un directorio permitido; registrar cada recurso para limpieza en cualquier camino de salida. No truncar ni reemplazar el destino final hasta completar la fusión y validar el reporte. Publicar mediante archivo temporal de salida y renombrado atómico cuando el sistema de archivos lo permita. Ningún error debe dejar corridas o un reporte parcial como resultado válido.
+
+## Puerta de aceptación
+
+1. Pruebas unitarias del formato: round-trip, versión no admitida, checksum corrupto, truncamiento, longitudes desbordadas y limpieza.
+2. Pruebas del backend con spill forzado por umbral pequeño: una corrida y varias; claves duplicadas entre corridas; claves vacías; valores inválidos; todas las operaciones admitidas; límite de bytes/runs y fallos de E/S. Verificar que los temporales se eliminan en éxito y error.
+3. E2E desde `.analisis` que compare el JSON de spill con el camino en memoria para orden, recuentos y valores dentro de tolerancia; demostrar que el runtime entrega la configuración AST tipada.
+4. Guardas de arquitectura, manifiesto y Makefile; sanitizers; suite completa y CI del head final. Documentar limits/defaults reales y benchmark reproducible con medición de pico RAM/bytes temporales.
+5. Mantener explícito que este contrato es local: no introduce red, clúster, cloud, Spark, Flink, Arrow ni Parquet.
+
+Hasta superar toda esta puerta, la afirmación correcta sigue siendo: «la agrupación en flujo tiene estado acotado en memoria y falla al exceder sus límites; spill-to-disk está pendiente».
