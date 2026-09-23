@@ -679,9 +679,7 @@ MilenaStatus milena_stream_csv_grouped_with_options(
     MilenaStreamOptions defaults = milena_stream_options_default();
     const MilenaStreamOptions *options = requested ? requested : &defaults;
     size_t group_limit = options->max_groups ? options->max_groups : defaults.max_groups;
-    if (!input_path || !output_path || !group_keys ||
-        group_key_count == 0u || group_key_count > 2u ||
-        (group_key_count == 2u && policy && policy->max_key_bytes < 21u) ||
+    if (!input_path || !output_path || !group_column || !group_column[0] ||
         !metrics || metric_count == 0 || metric_count > STREAM_MAX_METRICS ||
         options->chunk_rows == 0 ||
         options->max_record_bytes < STREAM_INITIAL_RECORD ||
