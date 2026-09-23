@@ -13,7 +13,7 @@ paralelo.
    resultados decodificados fuera de orden, rechazar duplicados/faltantes y
    conservar equivalencia monolítica.
 3. **Spill-to-disk básico** — implementado en esta rama: registros limitados, validación y replay incremental; no equivale a un motor de spill completo.
-4. **Agregación externa y merge de runs** — siguiente fase pendiente; combinar estados mergeables usando replay sin materializar todos los datos en RAM.
+4. **Agregaciones externas** — implementados estados globales mergeables, ordenamiento externo numérico y un primer agregador `GROUP BY` spillable con límites de memoria/scratch y salida determinista; sigue pendiente optimizar la reducción externa agrupada y conectarla al planner/lenguaje.
 5. **Formatos masivos** — Parquet/Arrow, row groups, compresión y pushdown.
 6. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
 7. **Coordinador** — leases, heartbeats, reintentos, checkpoints y cancelación.
@@ -41,11 +41,12 @@ cambiar el frontend del lenguaje.
 ## Alcance honesto
 
 PR #27 deja la base local: planner, particiones, workers, presupuestos,
-cancelación, reducción e IPC POSIX. PR #28 añade interoperabilidad del resultado
-y un almacén spill append-only con replay secuencial validado. No existe todavía
-procesamiento entre máquinas, Parquet/Arrow, shuffle distribuido, agregación
-externa general ni un SLO medido de latencia. Cada una requiere implementación,
-pruebas y medición propias.
+cancelación, reducción e IPC POSIX. PR #28 añade interoperabilidad del resultado,
+almacén spill append-only con replay validado, runs externos numéricos y un
+agregador agrupado incremental con presupuesto explícito de memoria y cuota de
+scratch. No existe todavía procesamiento entre máquinas, Parquet/Arrow, shuffle
+distribuido, integración `.milena` de estas operaciones ni un SLO medido de
+latencia. Cada una requiere implementación, pruebas y medición propias.
 
 ## Reducción implementada
 
@@ -104,7 +105,7 @@ la RAM queda acotada por el fan-in. La etapa de ordenamiento crea runs desde un 
 limitado por `run_capacity` y planifica pasadas hasta el fan-in final. Aplica
 cuotas por archivo y una cuota agregada de scratch durante la creación, las
 pasadas y la salida final. Aún no es un sort de tablas con claves o estabilidad
-configurable ni incluye `GROUP BY` spillable.
+configurable.
 
 ## Estados de agregación mergeables
 
@@ -117,6 +118,29 @@ mínimo y máximo; para una muestra vacía o un único valor señala cuándo la
 varianza muestral no está definida. Los estados parciales se almacenan como
 registros del spill y se reproducen de uno en uno sin materializar los runs.
 
-El contrato es un bloque de agregación global (no `GROUP BY` ilimitado). La
-agregación agrupada requerirá claves, particionado/hash y posterior merge
-externo; no se declara implementada en esta fase.
+El estado global anterior puede combinar workers para un único agregado; no
+resuelve por sí mismo una cardinalidad ilimitada de claves.
+
+## Primer agregado agrupado con spill
+
+`grouped_aggregate.c` añade una API canónica de producto para claves opacas de
+bytes y un valor binary64 por fila. El mapa residente tiene capacidad calculada
+desde un presupuesto de memoria explícito que incluye slots, almacenamiento de
+claves, índice hash y buffers temporales internos acotados; al llenarse, serializa estados mergeables al spill
+append-only existente y reinicia el mapa. El spill tiene cuota de bytes total,
+límite de tamaño por clave/registro y checksum heredado del almacén. El caller debe proporcionar una ruta scratch
+nueva (se rechaza una ruta existente); escritores concurrentes sobre una misma
+ruta no están soportados. Se valida cada fila numérica con las mismas reglas finitas del agregado global. Al
+finalizar, se recorre el spill de forma acotada, se combinan entradas duplicadas
+y se emite cada grupo en orden lexicográfico binario estable a través de un
+callback; no se materializa el resultado completo en RAM.
+
+La primera versión prioriza límites explícitos y simplicidad verificable: para
+cada grupo de salida vuelve a recorrer el spill, por lo que su costo de CPU/IO
+puede crecer aproximadamente como O(grupos × registros). No es aún una fusión
+externa eficiente de runs de claves, hash partitioning, agregación paralela ni
+un operador visible en sintaxis `.milena`; no debe usarse como una promesa de
+rendimiento industrial. Las pruebas fuerzan derrames con un mapa pequeño y
+comprueban reducción repetida, orden de salida, grupo con clave vacía y rechazo
+de una configuración de memoria insuficiente.
+
