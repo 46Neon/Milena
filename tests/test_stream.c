@@ -3,6 +3,10 @@
 
 #include <assert.h>
 
+static void test_spill_contract(void);
+static void test_grouped_spill(void);
+static void test_grouped_limits(void);
+
 static void write_fixture(const char *path) {
     FILE *file = fopen(path, "wb");
     assert(file != NULL);
