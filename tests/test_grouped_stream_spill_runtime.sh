@@ -67,7 +67,7 @@ cat > "$TMP_DIR/count.milena" <<EOF_M
   variable grupo texto
   variable valor texto
   datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo" #spill("$TMP_DIR/count.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { conteo de "valor"; }
+  agrupar por "grupo" #spill("$TMP_DIR/count.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { contar de "valor"; }
   guardar resultado en "count.json"
 }
 EOF_M
