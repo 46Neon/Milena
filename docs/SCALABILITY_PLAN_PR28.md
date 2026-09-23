@@ -126,36 +126,36 @@ resuelve por sí mismo una cardinalidad ilimitada de claves.
 
 ## Primer agregado agrupado con spill
 
-`grouped_aggregate.c` añade una API C de producto, todavía no integrada al
-lenguaje canónico, para claves opacas de
-bytes y un valor binary64 por fila. El mapa residente tiene capacidad calculada
-desde un presupuesto de memoria explícito que incluye slots, almacenamiento de
-claves, índice hash y buffers temporales internos acotados; al llenarse, serializa estados mergeables al spill
-append-only existente y reinicia el mapa. El spill tiene cuota de bytes total,
-límite de tamaño por clave/registro y checksum heredado del almacén. El caller debe proporcionar una ruta scratch
-nueva (se rechaza una ruta existente); escritores concurrentes sobre una misma
-ruta no están soportados. Se valida cada fila numérica con las mismas reglas finitas del agregado global. Al finalizar, lee el spill una sola vez y forma runs ordenados por clave con un
-lote dimensionado desde el presupuesto de memoria. Después hace pasadas de
-fusión externa de dos vías: las claves iguales se combinan con los estados
-mergeables durante la fusión, y la salida final se emite en orden lexicográfico
-binario estable a través de un callback sin materializar todos los grupos en
-RAM. El costo esperado pasa a O(R log R) I/O/CPU para R registros serializados,
-frente al escaneo repetido O(G × R) anterior; la memoria del mapa, lote y
-buffers de lectura/fusión queda acotada por el presupuesto del reducer.
+`grouped_aggregate.c` implementa una API C spillable de producto para claves
+opacas y estados mergeables, con mapa residente bajo presupuesto, cuota de spill,
+runs externos ordenados y merge de dos vías. Sobre esa API hay ahora dos cortes
+canónicos en el PR #28: `.agrupar dataset { ... #spill(...) ... }` y agrupación
+de CSV streaming vía `stream.c`, ambos con AST tipado, validación semántica y
+runtime común. Sin `#spill` se conserva la agrupación histórica en memoria.
 
-El spill de entrada mantiene su cuota configurada y los runs temporales se
-limitan en conjunto a dos veces esa cuota (además del spill de entrada); una
-falta de espacio o cuota falla explícitamente, y se eliminan los temporales
-creados por la operación fallida cuando es posible. Si un flush del mapa se
-interrumpe después de persistir un prefijo, el handle queda en estado terminal
-y rechaza add/finalize posteriores, evitando reanexar ese prefijo y duplicar
-conteos; la prueba de cuota verifica que el número de registros persistidos no
-cambia tras los reintentos rechazados. El scratch debe ser nuevo,
-los escritores concurrentes sobre una misma ruta no están soportados, y esta
-fusión local no equivale a hash partitioning distribuido ni a una promesa de
-rendimiento industrial. Las pruebas cubren derrames, múltiples pasadas para
-120 claves distintas, reducción repetida, orden determinista, clave vacía,
-fallo de cuota y rechazo de una configuración de memoria insuficiente. Una primera sección vertical ya conecta el `.agrupar dataset` existente al reducer mediante `lexer → parser → AST` tipado (`#spill("ruta", memoria_bytes, cuota_bytes, max_key_bytes, max_grupos)`), semántica y runtime comunes; sin opción explícita se conserva `milena_table_group_by`. El adaptador soporta una clave STRING y una métrica por ejecución (`conteo` en cualquier columna; otras métricas en FLOAT64), nulos, orden determinista lexicográfico, cuotas AST y limpieza de spill/runs. Las pruebas ejecutan `milena run`, comparan con el backend en memoria, cubren múltiples métricas en el modo compatible, nulos/entradas numéricas inválidas y fallos por cuotas. No hay fallback implícito.
+La ruta tabular limita spill a una clave STRING y una métrica (conteo de
+cualquier columna; otras métricas FLOAT64) y materializa entrada y resultado.
+La ruta CSV streaming consume registros completos por el lector existente, sin
+crear Dataset/MilenaTable, y emite el JSON por callback a un staging file;
+también restringe la operación a una clave textual y una métrica. Nulos y
+valores métricos inválidos conservan la clave/grupo y no contribuyen al valor;
+la salida se ordena lexicográficamente y la equivalencia flotante se valida con
+tolerancia. Los tipos/métricas no soportados y multi-métrica con spill se
+rechazan; no hay fallback silencioso a RAM.
 
-No está terminado: los tipos no admitidos y multi-métrica fallan con política spill; input y resultado siguen materializados en memoria, y la agrupación de modo streaming no usa todavía el spill. Los paths scratch son dados por el usuario y se rechazan si ya existen, pero aún no son nombres impredecibles exclusivos con permisos privados, ni se soportan escritores concurrentes. El fan-in es fijo, faltan límites AST de filas/tiempo/runs, faltan guardas/benchmarks/SLOs end-to-end y la CI del head resultante debe verificarse. Esto es un corte vertical local, no una capacidad completa de Big Data/distribución.
+Las políticas AST fijan memoria del reducer, cuota de spill, tamaño de clave,
+grupos, filas, tiempo y máximo de runs ordenadas (default 4096; máximo 65,536).
+El merge es de dos vías y abre como máximo tres runs a la vez. Los runs externos
+usan hasta dos cuotas adicionales sobre el spill de entrada. Las rutas scratch
+se crean exclusivamente para evitar sobrescritura, pero las proporciona el
+programa; no hay aún nombres privados aleatorios ni writers concurrentes sobre
+la misma ruta. Los presupuestos excluyen el RSS total del proceso, buffers de
+stdio/libc, staging y, en el corte tabular, las tablas materializadas.
+
+Pendiente: mejorar aislamiento y concurrencia de scratch; conectar sort/group y
+pushdown al planner; diseñar joins con límites explícitos; ampliar benchmarks y
+SLOs reproducibles; evaluar Arrow/Parquet; y construir una capa coordinador/
+workers remotos con autenticación, leases, heartbeats, retries, checkpoints y
+durabilidad. Estos cortes locales no constituyen un clúster distribuido ni
+validación de rendimiento industrial o de Termux/aarch64.
 

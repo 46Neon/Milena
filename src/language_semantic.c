@@ -1,4 +1,5 @@
 #include "language_semantic.h"
+#include "grouped_aggregate.h"
 #include <string.h>
 
 static bool known_sst_command(const char *name) {
@@ -203,7 +204,9 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                         policy->group_max_key_bytes > 1048576u ||
                         policy->group_max_output_groups == 0 ||
                         policy->group_max_output_groups > 1000000u ||
-                        policy->group_max_output_bytes > 1073741824u)
+                        policy->group_max_output_bytes > 1073741824u ||
+                        policy->group_max_runs == 0 ||
+                        policy->group_max_runs > MILENA_GROUPED_HARD_MAX_RUNS)
                         return semantic_error(policy, error,
                             "Política #spill de flujo fuera de los límites duros de recursos");
                 }
@@ -241,7 +244,9 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                  node->group_max_key_bytes > 1048576u ||
                  node->group_max_output_groups == 0 ||
                  node->group_max_output_groups > 1000000u ||
-                 node->group_max_output_bytes > 1073741824u))
+                 node->group_max_output_bytes > 1073741824u ||
+                 node->group_max_runs == 0 ||
+                 node->group_max_runs > MILENA_GROUPED_HARD_MAX_RUNS))
                 return semantic_error(node, error,
                     "Política #spill fuera de sus límites duros de recursos");
             if (node->type == AST_RESUMEN_METRICA &&
