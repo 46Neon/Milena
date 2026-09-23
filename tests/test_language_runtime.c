@@ -296,7 +296,8 @@ static int run_human_stream_pipeline(void) {
           error.message);
     char text[4096];
     CHECK(read_file(output, text, sizeof(text)), "flujo humano: no se creó el JSON");
-    CHECK(strstr(text, "\"modo\":\"flujo\"") != NULL &&
+    bool human_stream_ok =
+          strstr(text, "\"modo\":\"flujo\"") != NULL &&
           strstr(text, "importe_suma") != NULL &&
           strstr(text, "importe_media") != NULL &&
           strstr(text, "importe_minimo") != NULL &&
@@ -316,8 +317,9 @@ static int run_human_stream_pipeline(void) {
           strstr(text, "\"bytes_entrada\":") != NULL &&
           strstr(text, "\"tamano_lote\":2") != NULL &&
           strstr(text, "\"limite_registro_bytes\":1048576") != NULL &&
-          strstr(text, "\"limite_columnas\":8") != NULL,
-          "flujo humano: sintaxis o límites no llegaron al runtime");
+          strstr(text, "\"limite_columnas\":8") != NULL;
+    if (!human_stream_ok) fprintf(stderr, "FLUJO_HUMANO_REPORTE=[%s]\n", text);
+    CHECK(human_stream_ok, "flujo humano: sintaxis o métricas no llegaron al runtime");
     remove(csv); remove(output);
     return 0;
 }
