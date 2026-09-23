@@ -126,7 +126,7 @@ const char *ast_type_name(ASTNodeType type) {
         "DECLARACION_ENTRADA", "DECLARACION_SALIDA",
         "BLOQUE_SELECCIONAR", "COMANDO_COLUMNAS",
         "BLOQUE_UNIR", "COMANDO_DERECHA", "COMANDO_CLAVE",
-        "COMANDO_SST"
+        "COMANDO_SST", "STREAM_FILTER"
     };
     if ((unsigned)type >= (unsigned)AST_NODE_TYPE_COUNT) return "DESCONOCIDO";
     return names[type];

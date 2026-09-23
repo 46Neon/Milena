@@ -21,7 +21,7 @@ cat > "$TMP_DIR/memory.milena" <<'MILENA'
   variable grupo texto
   variable valor numerica
   datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo" resumir { suma de "valor"; }
+  agrupar por "grupo" resumir { suma de "valor"; media de "valor"; contar de "valor"; }
   guardar resultado en "memory.json"
 }
 MILENA
@@ -30,7 +30,7 @@ cat > "$TMP_DIR/spill.milena" <<EOF_M
   variable grupo texto
   variable valor numerica
   datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo" #spill("$TMP_DIR/scratch.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { suma de "valor"; }
+  agrupar por "grupo" #spill("$TMP_DIR/scratch.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { suma de "valor"; media de "valor"; contar de "valor"; }
   guardar resultado en "spill.json"
 }
 EOF_M
@@ -42,19 +42,24 @@ p=pathlib.Path(sys.argv[1])
 a=json.loads((p/'memory.json').read_text())
 b=json.loads((p/'spill.json').read_text())
 def result(doc):
-    return {r['clave']: r['metricas'][0] for r in doc['resultados']}
+    return {r['clave']: {m['operacion']: m for m in r['metricas']} for r in doc['resultados']}
 ma, sb=result(a), result(b)
 assert set(ma)==set(sb), (len(ma),len(sb))
-for k,memory_metric in ma.items():
-    spill_metric=sb[k]
-    v,w=memory_metric['valor'],spill_metric['valor']
-    assert (v is None and w is None) or (v is not None and w is not None and math.isclose(v,w,rel_tol=1e-10,abs_tol=1e-10)), (k,v,w)
-    assert memory_metric['valores_validos']==spill_metric['valores_validos']
-    assert memory_metric['valores_nulos']==spill_metric['valores_nulos']
-    assert memory_metric['valores_invalidos']==spill_metric['valores_invalidos']
-assert sb['New, York\nMetro']['valor']==3.75
-assert sb['A']['valor'] is None
-assert sb['A']['valores_nulos']==1 and sb['A']['valores_invalidos']==1
+for k, memory_metrics in ma.items():
+    spill_metrics=sb[k]
+    assert list(memory_metrics)==list(spill_metrics)==['suma','media','conteo'], (k,memory_metrics,spill_metrics)
+    for operation, memory_metric in memory_metrics.items():
+        spill_metric=spill_metrics[operation]
+        v,w=memory_metric['valor'],spill_metric['valor']
+        assert (v is None and w is None) or (v is not None and w is not None and math.isclose(v,w,rel_tol=1e-10,abs_tol=1e-10)), (k,operation,v,w)
+        assert memory_metric['valores_validos']==spill_metric['valores_validos']
+        assert memory_metric['valores_nulos']==spill_metric['valores_nulos']
+        assert memory_metric['valores_invalidos']==spill_metric['valores_invalidos']
+assert sb['New, York\nMetro']['suma']['valor']==3.75
+assert sb['A']['suma']['valor'] is None
+assert sb['A']['suma']['valores_nulos']==1 and sb['A']['suma']['valores_invalidos']==1
+assert sb['A']['media']['valores_nulos']==1 and sb['A']['media']['valores_invalidos']==1
+assert sb['A']['conteo']['valor']==1 and sb['A']['conteo']['valores_nulos']==1
 assert [r['clave'] for r in b['resultados']]==sorted(sb, key=lambda x:x.encode())
 assert b['grupos']==len(sb)
 assert b['limite_salida_bytes']==1048576
@@ -67,7 +72,7 @@ cat > "$TMP_DIR/count.milena" <<EOF_M
   variable grupo texto
   variable valor texto
   datos desde "rows.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
-  agrupar por "grupo" #spill("$TMP_DIR/count.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { conteo de "valor"; }
+  agrupar por "grupo" #spill("$TMP_DIR/count.bin", 4096, 1048576, 128, 100, 1048576, 4096) resumir { contar de "valor"; }
   guardar resultado en "count.json"
 }
 EOF_M
@@ -86,7 +91,10 @@ printf 'old-report' > "$TMP_DIR/spill.json"
 (cd "$TMP_DIR" && "$MILENA_BIN" run spill.milena)
 python3 - "$TMP_DIR/spill.json" <<'PY'
 import json,sys
-assert json.load(open(sys.argv[1]))['modo']=='flujo_agrupado_spill'
+report=json.load(open(sys.argv[1]))
+assert report['modo']=='flujo_agrupado_spill'
+assert report['bytes_spill'] >= 0 and report['registros_spill'] >= 0
+assert report['runs_spill'] >= 0
 PY
 [ ! -e "$TMP_DIR/scratch.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'spill.json.part.*' | grep -q .
@@ -174,7 +182,124 @@ EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run time-limit.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/time-limit.json" ] && [ ! -e "$TMP_DIR/time-limit.bin" ]
 ! find "$TMP_DIR" -maxdepth 1 -name 'time-limit.json.part.*' | grep -q .
-# Explicit typed rejection for unsupported key/metric types and multi-metric spill.
+# Canonical `.analisis` composite TEXT keys route through the same streaming
+# spill backend, including quoting, empty values, metrics, ordering and cleanup.
+python3 - "$TMP_DIR" <<'PYCOMP'
+import csv, pathlib, sys
+p=pathlib.Path(sys.argv[1])
+with (p/'composite.csv').open('w', newline='') as f:
+    w=csv.writer(f)
+    w.writerow(['region','segmento','valor'])
+    w.writerows([
+        ['north','alpha','1'], ['north','alpha','2'], ['north','alpha','6'],
+        ['north','comma,colon:pipe|','3'], ['north','quote"segment','4'],
+        ['north','','5'],
+    ])
+    for i in range(600):
+        w.writerow(['shared', f'key-{i:04d}', str(i + 1)])
+PYCOMP
+cat > "$TMP_DIR/composite.milena" <<EOF_M
+.analisis claves_compuestas {
+  variable region texto
+  variable segmento texto
+  variable valor numerica
+  datos desde "composite.csv" con grupos de 1000 con filas hasta 2000 con tiempo hasta 30000 ms
+  agrupar por "region", "segmento" #spill("$TMP_DIR/composite-scratch.bin", 4096, 1048576, 128, 1000, 1048576, 4096) resumir { suma de "valor"; contar de "valor"; }
+  guardar resultado en "composite.json"
+}
+EOF_M
+(cd "$TMP_DIR" && "$MILENA_BIN" run composite.milena)
+cp "$TMP_DIR/composite.milena" "$TMP_DIR/composite-repeat.milena"
+sed -i 's/composite-scratch.bin/composite-repeat-scratch.bin/; s/composite.json/composite-repeat.json/' "$TMP_DIR/composite-repeat.milena"
+(cd "$TMP_DIR" && "$MILENA_BIN" run composite-repeat.milena)
+python3 - "$TMP_DIR/composite.json" "$TMP_DIR/composite-repeat.json" <<'PYCOMP'
+import json,sys
+report=json.load(open(sys.argv[1]))
+repeat=json.load(open(sys.argv[2]))
+assert report['resultados']==repeat['resultados']
+assert report['columnas_grupo']==repeat['columnas_grupo']
+assert report['modo']=='flujo_agrupado_spill'
+assert report['columnas_grupo']==[
+    {'nombre':'region','tipo':'texto'}, {'nombre':'segmento','tipo':'texto'}]
+rows=report['resultados']
+assert len(rows)==604, len(rows)
+def identity(row):
+    keys=row['claves']
+    assert len(keys)==2
+    assert all(k['tipo']=='texto' and k['valido'] is True for k in keys)
+    return tuple(k['valor'] for k in keys)
+values={identity(r):r for r in rows}
+assert len(values)==len(rows)
+assert values[('north','alpha')]['metricas'][0]['valor']==9
+assert values[('north','alpha')]['metricas'][1]['valor']==3
+assert values[('north','comma,colon:pipe|')]['metricas'][0]['valor']==3
+assert values[('north','quote"segment')]['metricas'][0]['valor']==4
+assert values[('north','')]['metricas'][0]['valor']==5
+assert values[('shared','key-0000')]['metricas'][0]['valor']==1
+assert values[('shared','key-0599')]['metricas'][0]['valor']==600
+assert all([m['operacion'] for m in r['metricas']]==['suma','conteo'] for r in rows)
+assert report['grupos']==604
+assert report['limite_grupos']==1000
+assert report['bytes_spill']>0 and report['registros_spill']>0 and report['runs_spill']>0, report
+PYCOMP
+[ ! -e "$TMP_DIR/composite-scratch.bin" ] && [ ! -e "$TMP_DIR/composite-repeat-scratch.bin" ]
+! find "$TMP_DIR" -maxdepth 1 -name 'composite*.json.part.*' | grep -q .
+
+# Negative composite requests fail in parse/semantics before input or scratch I/O.
+for case in third nonspill wrongtype unknown duplicate; do
+  case "$case" in
+    third) keys='"region", "segmento", "otra"'; decls='variable region texto
+  variable segmento texto
+  variable otra texto
+  variable valor numerica'; spill='#spill("'$TMP_DIR'/third.bin", 4096, 1048576, 128, 10)';;
+    nonspill) keys='"region", "segmento"'; decls='variable region texto
+  variable segmento texto
+  variable valor numerica'; spill='';;
+    wrongtype) keys='"region", "segmento"'; decls='variable region texto
+  variable segmento numerica
+  variable valor numerica'; spill='#spill("'$TMP_DIR'/wrongtype.bin", 4096, 1048576, 128, 10)';;
+    unknown) keys='"region", "missing"'; decls='variable region texto
+  variable valor numerica'; spill='#spill("'$TMP_DIR'/unknown.bin", 4096, 1048576, 128, 10)';;
+    duplicate) keys='"region", "region"'; decls='variable region texto
+  variable valor numerica'; spill='#spill("'$TMP_DIR'/duplicate.bin", 4096, 1048576, 128, 10)';;
+  esac
+  output="$case.json"
+  scratch="$TMP_DIR/$case.bin"
+  printf '.analisis invalido {
+  %b
+  datos desde "missing-composite-input.csv" con filas hasta 10 con tiempo hasta 1000 ms
+  agrupar por %s %s resumir { suma de "valor"; }
+  guardar resultado en "%s"
+}
+' "$decls" "$keys" "$spill" "$output" > "$TMP_DIR/$case.milena"
+  if (cd "$TMP_DIR" && "$MILENA_BIN" run "$case.milena"); then
+    echo "Invalid composite-key case unexpectedly passed: $case" >&2
+    exit 1
+  fi
+  [ ! -e "$TMP_DIR/$output" ] && [ ! -e "$scratch" ]
+  ! find "$TMP_DIR" -maxdepth 1 -name "$output.part.*" | grep -q .
+done
+
+# A declared pair whose second column is absent from the CSV fails during the
+# shared reader and removes its exclusive scratch/staging without publishing.
+printf 'region,valor
+north,1
+' > "$TMP_DIR/composite-missing-column.csv"
+cat > "$TMP_DIR/composite-missing-column.milena" <<EOF_M
+.analisis clave_compuesta_sin_columna {
+  variable region texto
+  variable segmento texto
+  variable valor numerica
+  datos desde "composite-missing-column.csv" con filas hasta 10 con tiempo hasta 1000 ms
+  agrupar por "region", "segmento" #spill("$TMP_DIR/composite-missing-column.bin", 4096, 1048576, 128, 10) resumir { suma de "valor"; }
+  guardar resultado en "composite-missing-column.json"
+}
+EOF_M
+if (cd "$TMP_DIR" && "$MILENA_BIN" run composite-missing-column.milena); then exit 1; fi
+[ ! -e "$TMP_DIR/composite-missing-column.json" ] && [ ! -e "$TMP_DIR/composite-missing-column.bin" ]
+! find "$TMP_DIR" -maxdepth 1 -name 'composite-missing-column.json.part.*' | grep -q .
+
+# Explicit typed rejection for unsupported key/metric types.
 cat > "$TMP_DIR/invalid-type.milena" <<EOF_M
 .analisis clave_invalida {
   variable grupo categorica
@@ -197,14 +322,124 @@ cat > "$TMP_DIR/invalid-metric.milena" <<EOF_M
 EOF_M
 if (cd "$TMP_DIR" && "$MILENA_BIN" run invalid-metric.milena); then exit 1; fi
 [ ! -e "$TMP_DIR/invalid-metric.json" ] && [ ! -e "$TMP_DIR/invalid-metric.bin" ]
-cat > "$TMP_DIR/multi.milena" <<EOF_M
-.analisis multi_metrica {
+# Multiple metrics still honor the atomic report-byte quota.
+printf 'old-multi-report' > "$TMP_DIR/multi-limit.json"
+cat > "$TMP_DIR/multi-limit.milena" <<EOF_M
+.analisis multi_metrica_limite {
   variable grupo texto
   variable valor numerica
-  datos desde "rows.csv"
-  agrupar por "grupo" #spill("$TMP_DIR/multi.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; media de "valor"; }
-  guardar resultado en "multi.json"
+  datos desde "rows.csv" con filas hasta 1000 con tiempo hasta 30000 ms
+  agrupar por "grupo" #spill("$TMP_DIR/multi-limit.bin", 4096, 1048576, 128, 100, 1024) resumir { suma de "valor"; media de "valor"; contar de "valor"; }
+  guardar resultado en "multi-limit.json"
 }
 EOF_M
-if (cd "$TMP_DIR" && "$MILENA_BIN" run multi.milena); then exit 1; fi
-[ ! -e "$TMP_DIR/multi.json" ] && [ ! -e "$TMP_DIR/multi.bin" ]
+if (cd "$TMP_DIR" && "$MILENA_BIN" run multi-limit.milena); then exit 1; fi
+[ "$(cat "$TMP_DIR/multi-limit.json")" = 'old-multi-report' ]
+[ ! -e "$TMP_DIR/multi-limit.bin" ]
+! find "$TMP_DIR" -maxdepth 1 -name 'multi-limit.json.part.*' | grep -q .
+# Canonical `milena run` filtering is evaluated by the CSV stream backend before
+# both in-memory and spill grouping, without materializing selected rows.
+python3 - "$TMP_DIR" <<'PY'
+import csv,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+with (p/'filter.csv').open('w',newline='') as f:
+    w=csv.writer(f)
+    w.writerow(['grupo','region','valor'])
+    w.writerow(['New, York\nMetro','keep','1.5'])
+    w.writerow(['New, York\nMetro','keep','2.25'])
+    w.writerow(['A','skip','100'])
+    w.writerow(['A','keep','1'])
+PY
+cat > "$TMP_DIR/filter-memory.milena" <<'MILENA'
+.analisis filtro_en_memoria {
+  variable grupo texto
+  variable region texto
+  variable valor numerica
+  datos desde "filter.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  filtrar "region" == "keep";
+  agrupar por "grupo" resumir { suma de "valor"; }
+  guardar resultado en "filter-memory.json"
+}
+MILENA
+cat > "$TMP_DIR/filter-spill.milena" <<EOF_M
+.analisis filtro_con_spill {
+  variable grupo texto
+  variable region texto
+  variable valor numerica
+  datos desde "filter.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  filtrar "region" == "keep";
+  agrupar por "grupo" #spill("$TMP_DIR/filter-scratch.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
+  guardar resultado en "filter-spill.json"
+}
+EOF_M
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-memory.milena)
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-spill.milena)
+python3 - "$TMP_DIR" <<'PY'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+a=json.load(open(p/'filter-memory.json'))
+b=json.load(open(p/'filter-spill.json'))
+def values(doc):
+    return {r['clave']:r['metricas'][0]['valor'] for r in doc['resultados']}
+assert values(a)==values(b)=={'A':1,'New, York\nMetro':3.75}, (values(a),values(b))
+assert b['runs_spill'] >= 0 and b['bytes_spill'] >= 0
+PY
+[ ! -e "$TMP_DIR/filter-scratch.bin" ]
+# An empty match set still produces a valid empty grouped report through spill.
+sed 's/== "keep"/== "missing"/' "$TMP_DIR/filter-spill.milena" > "$TMP_DIR/filter-empty.milena"
+sed -i 's/filter-spill.json/filter-empty.json/' "$TMP_DIR/filter-empty.milena"
+sed -i 's/filter-scratch.bin/filter-empty-scratch.bin/' "$TMP_DIR/filter-empty.milena"
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-empty.milena)
+python3 - "$TMP_DIR/filter-empty.json" <<'PY'
+import json,sys
+doc=json.load(open(sys.argv[1]))
+assert doc['resultados']==[] and doc['grupos']==0
+PY
+[ ! -e "$TMP_DIR/filter-empty-scratch.bin" ]
+# Typed numeric `>` predicates reject null/malformed fields by non-match and
+# produce the same grouped result in the bounded-memory and spill backends.
+cat > "$TMP_DIR/filter-numeric.csv" <<'CSV'
+grupo,importe,valor
+A,10,1
+A,10.01,2
+B,12,4
+B,,100
+B,no-numerico,100
+A,nan,100
+A,10,3
+A,12x,100
+CSV
+cat > "$TMP_DIR/filter-numeric-memory.milena" <<'MILENA'
+.analisis filtro_numerico_en_memoria {
+  variable grupo texto
+  variable importe numerica
+  variable valor numerica
+  datos desde "filter-numeric.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  filtrar "importe" > 10;
+  agrupar por "grupo" resumir { suma de "valor"; }
+  guardar resultado en "filter-numeric-memory.json"
+}
+MILENA
+cat > "$TMP_DIR/filter-numeric-spill.milena" <<EOF_M
+.analisis filtro_numerico_con_spill {
+  variable grupo texto
+  variable importe numerica
+  variable valor numerica
+  datos desde "filter-numeric.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  filtrar "importe" > 10;
+  agrupar por "grupo" #spill("$TMP_DIR/filter-numeric-scratch.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
+  guardar resultado en "filter-numeric-spill.json"
+}
+EOF_M
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-numeric-memory.milena)
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-numeric-spill.milena)
+python3 - "$TMP_DIR" <<'PY'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+a=json.load(open(p/'filter-numeric-memory.json'))
+b=json.load(open(p/'filter-numeric-spill.json'))
+def values(doc):
+    return {r['clave']:r['metricas'][0]['valor'] for r in doc['resultados']}
+assert values(a)==values(b)=={'A':2,'B':4}, (values(a),values(b))
+PY
+[ ! -e "$TMP_DIR/filter-numeric-scratch.bin" ]

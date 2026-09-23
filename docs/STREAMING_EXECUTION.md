@@ -56,12 +56,15 @@ es 4096 filas.
 
 ## Contrato arquitectónico
 
-`stream.c` es un backend interno del runtime canónico. No tiene un ejecutable,
+`stream.c` es un backend interno del runtime canónico y delega la apertura y
+lectura de registros CSV a la interfaz interna `MilenaSourceReader`; hoy solo
+está implementado el adaptador de archivos CSV locales. No tiene un ejecutable,
 parser, lector de scripts ni ruta CLI propios: la única ruta de producto es
-`lexer → parser → AST → semántica → milena_run_dataset_program → stream.c`.
+`lexer → parser → AST → semántica → milena_run_dataset_program → stream.c → source_reader.c`.
 La sintaxis humana conserva en el AST la operación, columna, tamaño de lote y
-límites de registro, columnas, grupos, filas y tiempo; `stream.c` recibe
-únicamente ese contrato tipado. Las pruebas directas del backend son pruebas unitarias, no una
+límites de registro, columnas, grupos, filas y tiempo; el backend recibe
+únicamente ese contrato tipado. Esta interfaz no anuncia compatibilidad remota,
+cloud, Arrow ni Parquet. Las pruebas directas del backend son pruebas unitarias, no una
 segunda interfaz de usuario. SST, finanzas y análisis siguen siendo comandos
 AST del mismo runtime (`AST_COMANDO_SST`, tablas y `finance.c`); el manifiesto
 mantiene fuera del producto los módulos experimentales de VM/IR/GC.
@@ -74,7 +77,7 @@ mantiene fuera del producto los módulos experimentales de VM/IR/GC.
 - Mantiene acumuladores de suma compensada, media, mínimo, máximo, conteo y
   varianza/desviación estándar en una pasada.
 - También admite agrupación tipada en el mismo AST/runtime, tanto el mapa
-  acotado en memoria como el corte spill de una clave de texto y una métrica.
+  acotado en memoria como el corte spill de una o dos claves de texto y métricas tipadas.
   El modo spill emite en orden bytewise desde el callback y mantiene el
   presupuesto del reductor separado del registro CSV.
 - Rechaza columnas inexistentes, demasiadas columnas (máximo 4096), registros
@@ -110,18 +113,20 @@ memoria del reductor (4 KiB–512 MiB), cuota del spill append-only (1 byte–4
 GiB), tamaño máximo de clave (2 bytes–1 MiB) y grupos de salida (1–1.000.000).
 Para esta forma de streaming también son obligatorios los límites AST de filas
 y tiempo (`con filas hasta ...` y `con tiempo hasta ... ms`); todos se validan
-antes de ejecutar. La clave debe declararse `texto`; `suma`, `media`, `minimo`
-y `maximo` requieren una columna declarada `numerica` (valores CSV finitos
-interpretados como FLOAT64). `contar` admite cualquier tipo declarado. Se
-rechazan varias claves, varias métricas, claves categóricas/compuestas y las
-operaciones no soportadas por el adaptador spill. Cada registro completo —con
+antes de ejecutar. Con `#spill`, una o dos claves deben declararse `texto`; dos claves sin spill,
+una tercera clave, claves repetidas/desconocidas y tipos no TEXT se rechazan
+antes de abrir la fuente. `suma`, `media`, `minimo` y `maximo` requieren una
+columna declarada `numerica` (valores CSV finitos interpretados como FLOAT64).
+`contar` admite cualquier tipo declarado. Se admiten métricas múltiples; las
+operaciones no soportadas por el adaptador spill se rechazan. Cada registro completo —con
 comillas, comas y saltos de línea entrecomillados— pasa por el mismo parser CSV
 acotado ya usado por el streaming; no existe un segundo parser.
 
-El reporte se escribe por callback del reductor, en orden lexicográfico estable,
-una clave a la vez; no se materializa el conjunto de grupos. El máximo de bytes
-de clave incluye el byte de etiqueta interna usado para distinguir claves
-textuales. `filas_malformadas` informa globalmente celdas vacías/numéricamente
+El reporte se escribe por callback del reductor, en orden estable de la clave
+codificada completa, una clave a la vez; no se materializa el conjunto de grupos.
+La forma de una clave conserva `clave`; dos claves emiten `columnas_grupo` y un
+array `claves` con nombre/tipo/valor/validez en cada resultado. El máximo de
+bytes de clave incluye el codec y el framing grupo/métrica. `filas_malformadas` informa globalmente celdas vacías/numéricamente
 inválidas; en esta versión de spill no se emite un contador de inválidos por
 clave. Se publica mediante
 un archivo hermano temporal solo después de terminar parsing, reducción y
@@ -146,8 +151,9 @@ la cuota del scratch. No se midió RSS global, así que no se afirma ese límite
 
 Las operaciones `Dataset`/`MilenaTable` y el agrupador histórico permanecen en
 memoria; esta nueva ruta aplica únicamente al agrupamiento tipado de CSV en
-streaming. Multi-métrica con spill, más de una clave, joins, ordenamiento de
-filas, Parquet/Arrow y ejecución distribuida siguen fuera de este corte.
+streaming. Claves compuestas numéricas, `.agrupar dataset` compuesto, joins,
+ordenamiento de filas, Parquet/Arrow y ejecución distribuida siguen fuera de
+este corte.
 
 No admite mediana, percentiles, joins, limpieza que necesite observar todo el
 conjunto ni transformaciones materializadas. Tampoco ofrece procesamiento

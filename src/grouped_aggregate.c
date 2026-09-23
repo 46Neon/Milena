@@ -339,6 +339,77 @@ static int grouped_record_compare(const void *left, const void *right) {
     return key_compare(a + 4, a_length, b + 4, b_length);
 }
 
+typedef struct {
+    unsigned char *records;
+    size_t stride;
+    size_t capacity;
+    size_t count;
+    size_t max_key_bytes;
+} GroupRunBatch;
+
+/* A sorted run must contain at most one partial state per key. Map flushes can
+ * serialize the same key in later chunks; qsort alone only orders those partials.
+ * Coalescing here lets the bounded pairwise merge preserve that invariant and
+ * prevents duplicate composite (group, metric) callbacks at finalization. */
+static MilenaStatus coalesce_group_batch(GroupRunBatch *batch,
+                                         MilenaError *error) {
+    if (!batch || !batch->records || batch->stride < GROUP_RECORD_FIXED) {
+        group_error(error, MILENA_ERR_ARGUMENT,
+                    "Lote inválido para combinar claves agrupadas");
+        return MILENA_ERR_ARGUMENT;
+    }
+    size_t unique_count = 0;
+    for (size_t i = 0; i < batch->count; ++i) {
+        unsigned char *source = batch->records + i * batch->stride;
+        size_t source_length = record_length(source);
+        if (source_length > batch->stride) {
+            group_error(error, MILENA_ERR_DATA,
+                        "Registro de lote agrupado fuera de límites");
+            return MILENA_ERR_DATA;
+        }
+        if (unique_count == 0) {
+            if (i != 0)
+                memmove(batch->records, source, source_length);
+            unique_count = 1;
+            continue;
+        }
+        unsigned char *previous = batch->records +
+            (unique_count - 1u) * batch->stride;
+        int order = grouped_record_compare(previous, source);
+        if (order > 0) {
+            group_error(error, MILENA_ERR_INTERNAL,
+                        "Lote agrupado dejó de estar ordenado");
+            return MILENA_ERR_INTERNAL;
+        }
+        if (order == 0) {
+            size_t key_length = read_u32(previous);
+            MilenaAggregateState merged, incoming;
+            MilenaStatus status = milena_aggregate_state_decode(
+                previous + 4u + key_length, MILENA_AGGREGATE_WIRE_SIZE,
+                &merged, error);
+            if (status == MILENA_OK)
+                status = milena_aggregate_state_decode(
+                    source + 4u + key_length, MILENA_AGGREGATE_WIRE_SIZE,
+                    &incoming, error);
+            if (status == MILENA_OK)
+                status = milena_aggregate_state_merge(&merged, &incoming, error);
+            size_t written = 0;
+            if (status == MILENA_OK)
+                status = milena_aggregate_state_encode(&merged,
+                    previous + 4u + key_length, MILENA_AGGREGATE_WIRE_SIZE,
+                    &written, error);
+            if (status != MILENA_OK) return status;
+            continue;
+        }
+        if (unique_count != i)
+            memmove(batch->records + unique_count * batch->stride,
+                    source, source_length);
+        unique_count++;
+    }
+    batch->count = unique_count;
+    return MILENA_OK;
+}
+
 static bool path_exists(const char *path) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;
@@ -372,14 +443,6 @@ static void remove_run_set(const char *base, size_t pass, size_t count) {
         if (path) { (void)remove(path); free(path); }
     }
 }
-
-typedef struct {
-    unsigned char *records;
-    size_t stride;
-    size_t capacity;
-    size_t count;
-    size_t max_key_bytes;
-} GroupRunBatch;
 
 static MilenaStatus write_group_run(const char *path, const GroupRunBatch *batch,
                                     size_t quota, size_t *bytes_written,
@@ -573,6 +636,8 @@ MilenaStatus milena_grouped_aggregate_finalize(
                 break;
             }
             qsort(batch.records, batch.count, batch.stride, grouped_record_compare);
+            status = coalesce_group_batch(&batch, error);
+            if (status != MILENA_OK) break;
             char *path = sorted_run_path(grouped->spill_path, 0, run_count);
             if (!path) { group_error(error, MILENA_ERR_MEMORY, "No se pudo crear la ruta de run agrupado"); status = MILENA_ERR_MEMORY; break; }
             size_t remaining = temporary_limit - run_bytes;
@@ -588,6 +653,7 @@ MilenaStatus milena_grouped_aggregate_finalize(
                 break;
             }
             run_count++;
+            grouped->sorted_runs = run_count;
             batch.count = 0;
         }
         memcpy(batch.records + batch.count * batch.stride, source_record, length);
@@ -603,26 +669,44 @@ MilenaStatus milena_grouped_aggregate_finalize(
                         "Se excedió el máximo configurado de runs agrupados");
             status = MILENA_ERR_OVERFLOW;
         }
-        if (status == MILENA_OK)
+        if (status == MILENA_OK) {
             qsort(batch.records, batch.count, batch.stride, grouped_record_compare);
-        char *path = sorted_run_path(grouped->spill_path, 0, run_count);
-        if (!path) { group_error(error, MILENA_ERR_MEMORY, "No se pudo crear la ruta de run agrupado"); status = MILENA_ERR_MEMORY; }
-        else {
-            size_t remaining = temporary_limit - run_bytes;
-            size_t quota = grouped->spill.quota_bytes < remaining ? grouped->spill.quota_bytes : remaining;
-            size_t written = 0;
-            status = write_group_run(path, &batch, quota, &written, error);
-            free(path);
-            if (status == MILENA_OK && (written > remaining || run_count == SIZE_MAX ||
-                !milena_size_add(run_bytes, written, &run_bytes))) {
-                group_error(error, MILENA_ERR_OVERFLOW, "Cuota temporal de runs agrupados agotada");
-                status = MILENA_ERR_OVERFLOW;
+            status = coalesce_group_batch(&batch, error);
+        }
+        if (status == MILENA_OK) {
+            char *path = sorted_run_path(grouped->spill_path, 0, run_count);
+            if (!path) {
+                group_error(error, MILENA_ERR_MEMORY,
+                            "No se pudo crear la ruta de run agrupado");
+                status = MILENA_ERR_MEMORY;
+            } else {
+                size_t remaining = temporary_limit - run_bytes;
+                size_t quota = grouped->spill.quota_bytes < remaining ?
+                    grouped->spill.quota_bytes : remaining;
+                size_t written = 0;
+                status = write_group_run(path, &batch, quota, &written, error);
+                free(path);
+                if (status == MILENA_OK && (written > remaining ||
+                    run_count == SIZE_MAX ||
+                    !milena_size_add(run_bytes, written, &run_bytes))) {
+                    group_error(error, MILENA_ERR_OVERFLOW,
+                                "Cuota temporal de runs agrupados agotada");
+                    status = MILENA_ERR_OVERFLOW;
+                }
+                if (status == MILENA_OK) {
+                    run_count++;
+                    grouped->sorted_runs = run_count;
+                }
             }
-            if (status == MILENA_OK) run_count++;
         }
     }
     free(batch_memory);
-    if (status != MILENA_OK) { remove_run_set(grouped->spill_path, 0, run_count); return status; }
+    if (status != MILENA_OK) {
+        if (error && error->code == MILENA_OK)
+            group_error(error, status, "Error sin detalle al leer spill y crear runs ordenados");
+        remove_run_set(grouped->spill_path, 0, run_count);
+        return status;
+    }
     if (run_count == 0) { if (error) milena_error_clear(error); return MILENA_OK; }
 
     size_t pass = 0;
@@ -679,7 +763,12 @@ MilenaStatus milena_grouped_aggregate_finalize(
         run_bytes = next_bytes;
         pass++;
     }
-    if (status != MILENA_OK) { remove_run_set(grouped->spill_path, pass, run_count); return status; }
+    if (status != MILENA_OK) {
+        if (error && error->code == MILENA_OK)
+            group_error(error, status, "Error sin detalle al fusionar runs agrupados");
+        remove_run_set(grouped->spill_path, pass, run_count);
+        return status;
+    }
 
     char *final_path = sorted_run_path(grouped->spill_path, pass, 0);
     if (!final_path) {
@@ -715,12 +804,19 @@ MilenaStatus milena_grouped_aggregate_finalize(
         if (emitted == SIZE_MAX) { group_error(error, MILENA_ERR_OVERFLOW, "Cantidad de grupos emitidos desbordada"); status = MILENA_ERR_OVERFLOW; break; }
         emitted++;
     }
-    if (final_reader.file) { MilenaStatus close_status = milena_spill_reader_close(&final_reader, error); if (status == MILENA_OK) status = close_status; }
+    if (final_reader.file) {
+        /* Cleanup must not erase a read/decode/visitor diagnostic. */
+        MilenaStatus close_status = milena_spill_reader_close(&final_reader,
+            status == MILENA_OK ? error : NULL);
+        if (status == MILENA_OK) status = close_status;
+    }
     free(record);
     free(final_path);
     remove_run_set(grouped->spill_path, pass, 1u);
     if (groups_emitted) *groups_emitted = emitted;
     if (status == MILENA_OK && error) milena_error_clear(error);
+    else if (status != MILENA_OK && error && error->code == MILENA_OK)
+        group_error(error, status, "Error sin detalle al emitir resultados ordenados");
     return status;
 }
 

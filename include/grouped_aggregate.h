@@ -33,6 +33,8 @@ typedef struct {
     size_t group_capacity;
     size_t group_count;
     size_t table_capacity;
+    /* Number of initial sorted runs actually materialized by finalization. */
+    size_t sorted_runs;
     MilenaGroupedAggregateEntry *groups;
     unsigned char *key_arena;
     size_t *table;

@@ -3,6 +3,8 @@
 
 #include "common.h"
 
+#define MILENA_STREAM_MAX_METRICS 64u
+
 
 /*
  * Bounded-memory execution for large CSV inputs. The stream path keeps only
@@ -18,6 +20,12 @@ typedef enum {
     MILENA_STREAM_STDDEV
 } MilenaStreamOperation;
 
+typedef enum {
+    MILENA_STREAM_FILTER_NONE = 0,
+    MILENA_STREAM_FILTER_TEXT_EQUAL,
+    MILENA_STREAM_FILTER_NUMERIC_GREATER
+} MilenaStreamFilterKind;
+
 typedef struct {
     size_t chunk_rows;
     size_t max_record_bytes;
@@ -27,6 +35,11 @@ typedef struct {
     double max_elapsed_milliseconds;
     /* Hard-capped per-operation group budget; 0 selects the default. */
     size_t max_groups;
+    /* Optional canonical typed predicate; string/value pointers are borrowed. */
+    const char *filter_column;
+    const char *filter_value;
+    MilenaStreamFilterKind filter_kind;
+    double filter_number;
 } MilenaStreamOptions;
 
 typedef struct {
@@ -34,6 +47,15 @@ typedef struct {
     const char *name;
     MilenaStreamOperation operation;
 } MilenaStreamMetric;
+
+typedef enum {
+    MILENA_STREAM_GROUP_KEY_TEXT = 1
+} MilenaStreamGroupKeyType;
+
+typedef struct {
+    const char *name;
+    MilenaStreamGroupKeyType type;
+} MilenaStreamGroupKeyDescriptor;
 
 typedef struct {
     const char *scratch_path;
@@ -66,6 +88,11 @@ typedef struct {
     size_t bytes_read;
     size_t groups;
     size_t max_groups;
+    /* Source grouped-reducer spill, excluding temporary external-sort runs. */
+    size_t spill_bytes;
+    size_t spill_records;
+    /* Initial sorted runs actually written by the reducer; 0 for no spill. */
+    size_t spill_runs;
 } MilenaStreamReport;
 
 /*
@@ -103,13 +130,31 @@ MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
                                        MilenaError *error);
 
 /* CSV -> bounded parser -> spillable reducer -> callback-written JSON report.
- * Reducer memory is a separate budget, additional to record/header/column
- * buffers and one callback key; this does not claim a process-wide RSS cap. */
+ * The backend accepts one or two typed group-key descriptors; this phase
+ * supports TEXT for both components. Reducer memory is a separate budget,
+ * additional to record/header/column buffers and one callback key; this does
+ * not claim a process-wide RSS cap. Pair reports use `claves` objects, while
+ * the single-key schema remains `clave`. */
+MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options(
+                                       const char *input_path,
+                                       const char *output_path,
+                                       const MilenaStreamGroupKeyDescriptor *group_keys,
+                                       size_t group_key_count,
+                                       const MilenaStreamMetric *metrics,
+                                       size_t metric_count,
+                                       const MilenaStreamOptions *options,
+                                       const MilenaStreamSpillPolicy *policy,
+                                       MilenaStreamReport *report,
+                                       MilenaError *error);
+
+/* Compatibility adapter for the canonical language caller, which currently
+ * supplies exactly one group key. */
 MilenaStatus milena_stream_csv_grouped_spill_with_options(
                                        const char *input_path,
                                        const char *output_path,
                                        const char *group_column,
-                                       const MilenaStreamMetric *metric,
+                                       const MilenaStreamMetric *metrics,
+                                       size_t metric_count,
                                        const MilenaStreamOptions *options,
                                        const MilenaStreamSpillPolicy *policy,
                                        MilenaStreamReport *report,
