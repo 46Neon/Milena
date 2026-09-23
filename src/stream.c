@@ -376,6 +376,12 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
             status = MILENA_ERR_OVERFLOW;
             break;
         }
+        if (rows_read == SIZE_MAX) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "El contador de filas del flujo se desbordó");
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
         rows_read++;
         if (record_length > observed_record_bytes) observed_record_bytes = record_length;
         size_t field_count = 0;
@@ -517,6 +523,7 @@ MilenaStatus milena_stream_csv_summary(const char *input_path,
 typedef struct {
     char *key;
     StreamAccumulator *accumulators;
+    size_t *null_values;
     size_t *invalid_values;
 } StreamGroup;
 
@@ -544,6 +551,7 @@ static void stream_groups_release(StreamGroup *groups, size_t count) {
     for (size_t i = 0; i < count; i++) {
         free(groups[i].key);
         free(groups[i].accumulators);
+        free(groups[i].null_values);
         free(groups[i].invalid_values);
     }
     free(groups);
@@ -600,10 +608,13 @@ static bool stream_group_emit(FILE *output, const char *group_column,
             if (fputs(",\"nombre\":", output) == EOF) return false;
             milena_json_write_string(output, name);
             if (fprintf(output,
-                ",\"valores_validos\":%zu,\"valores_invalidos\":%zu,\"valor\":",
-                groups[g].accumulators[i].count,
+                ",\"valores_validos\":%zu,\"valores_nulos\":%zu,\"valores_invalidos\":%zu,\"valor\":",
+                groups[g].accumulators[i].count, groups[g].null_values[i],
                 groups[g].invalid_values[i]) < 0) return false;
-            if (isnan(value)) {
+            if (metrics[i].operation == MILENA_STREAM_COUNT) {
+                if (fprintf(output, "%zu", groups[g].accumulators[i].count) < 0)
+                    return false;
+            } else if (isnan(value)) {
                 if (fputs("null", output) == EOF) return false;
             } else if (fprintf(output, "%.17g", value) < 0) return false;
             if (fputc('}', output) == EOF) return false;
@@ -768,6 +779,12 @@ MilenaStatus milena_stream_csv_grouped_with_options(
             status = MILENA_ERR_OVERFLOW;
             break;
         }
+        if (rows_read == SIZE_MAX) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "El contador de filas agrupadas se desbordó");
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
         rows_read++;
         if (record_length > observed_record_bytes) observed_record_bytes = record_length;
         size_t field_count = 0;
@@ -791,12 +808,19 @@ MilenaStatus milena_stream_csv_grouped_with_options(
         if (group_index_found == group_count) {
             size_t key_length = strlen(fields[group_index]);
             size_t accumulator_bytes = metric_count * sizeof(StreamAccumulator);
-            size_t invalid_bytes = metric_count * sizeof(size_t);
+            size_t counter_bytes = metric_count * sizeof(size_t);
+            if (counter_bytes > SIZE_MAX / 2u) {
+                milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                                 "Presupuesto de contadores agrupados desbordado");
+                status = MILENA_ERR_OVERFLOW;
+                break;
+            }
+            size_t missing_bytes = counter_bytes * 2u;
             if (key_length > STREAM_MAX_GROUP_KEY_BYTES ||
-                accumulator_bytes > SIZE_MAX - invalid_bytes ||
-                key_length + 1 > SIZE_MAX - accumulator_bytes - invalid_bytes ||
+                accumulator_bytes > SIZE_MAX - missing_bytes ||
+                key_length + 1 > SIZE_MAX - accumulator_bytes - missing_bytes ||
                 group_state_bytes > STREAM_GROUP_STATE_BUDGET -
-                    (key_length + 1 + accumulator_bytes + invalid_bytes)) {
+                    (key_length + 1 + accumulator_bytes + missing_bytes)) {
                 milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                                  "La agrupación alcanzó el presupuesto de estado acotado");
                 status = MILENA_ERR_OVERFLOW;
@@ -812,15 +836,19 @@ MilenaStatus milena_stream_csv_grouped_with_options(
             group->key = milena_strdup(fields[group_index]);
             group->accumulators = (StreamAccumulator *)calloc(
                 metric_count, sizeof(*group->accumulators));
+            group->null_values = (size_t *)calloc(
+                metric_count, sizeof(*group->null_values));
             group->invalid_values = (size_t *)calloc(
                 metric_count, sizeof(*group->invalid_values));
-            if (!group->key || !group->accumulators || !group->invalid_values) {
-                free(group->key); free(group->accumulators); free(group->invalid_values);
+            if (!group->key || !group->accumulators || !group->null_values ||
+                !group->invalid_values) {
+                free(group->key); free(group->accumulators);
+                free(group->null_values); free(group->invalid_values);
                 memset(group, 0, sizeof(*group));
                 status = MILENA_ERR_MEMORY;
                 break;
             }
-            group_state_bytes += key_length + 1 + accumulator_bytes + invalid_bytes;
+            group_state_bytes += key_length + 1 + accumulator_bytes + missing_bytes;
             group_index_found = group_count++;
             group_slots[slot] = group_index_found + 1;
         }
@@ -830,17 +858,32 @@ MilenaStatus milena_stream_csv_grouped_with_options(
         for (size_t i = 0; i < metric_count; i++) {
             const char *field = fields[metric_indexes[i]];
             double value = 1.0;
+            bool is_null = !stream_field_nonempty(field);
             bool valid = metrics[i].operation == MILENA_STREAM_COUNT
-                ? stream_field_nonempty(field)
-                : stream_parse_number(field, &value);
+                ? !is_null : stream_parse_number(field, &value);
             if (!valid) {
-                group->invalid_values[i]++;
+                size_t *counter = is_null ? &group->null_values[i] :
+                                            &group->invalid_values[i];
+                if (*counter == SIZE_MAX) {
+                    milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                                     "El contador de valores ausentes agrupados se desbordó");
+                    status = MILENA_ERR_OVERFLOW;
+                    break;
+                }
+                (*counter)++;
                 row_malformed = true;
                 continue;
+            }
+            if (group->accumulators[i].count == SIZE_MAX) {
+                milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                                 "El contador de métricas agrupadas se desbordó");
+                status = MILENA_ERR_OVERFLOW;
+                break;
             }
             stream_accumulate(&group->accumulators[i], value);
             row_valid = true;
         }
+        if (status != MILENA_OK) break;
         if (row_valid) rows_valid++;
         if (row_malformed) malformed++;
     }
@@ -998,19 +1041,27 @@ static MilenaStatus stream_spill_emit_group(
         default: break;
         }
     }
-    char valid_text[32], value_text[64];
+    char valid_text[32], null_text[32], invalid_text[32], value_text[64];
     int valid_chars = snprintf(valid_text, sizeof(valid_text), "%llu",
                                (unsigned long long)valid);
-    int value_chars = isnan(value) ? 4 :
-        snprintf(value_text, sizeof(value_text), "%.17g", value);
+    int null_chars = snprintf(null_text, sizeof(null_text), "%llu",
+                              (unsigned long long)result->aggregate.null_count);
+    int invalid_chars = snprintf(invalid_text, sizeof(invalid_text), "%llu",
+                                 (unsigned long long)result->aggregate.invalid_count);
+    bool exact_count = emitter->metric->operation == MILENA_STREAM_COUNT;
+    int value_chars = exact_count ? valid_chars : (isnan(value) ? 4 :
+        snprintf(value_text, sizeof(value_text), "%.17g", value));
     if (valid_chars < 0 || (size_t)valid_chars >= sizeof(valid_text) ||
+        null_chars < 0 || (size_t)null_chars >= sizeof(null_text) ||
+        invalid_chars < 0 || (size_t)invalid_chars >= sizeof(invalid_text) ||
         value_chars < 0 || (!isnan(value) && (size_t)value_chars >= sizeof(value_text))) {
         free(key);
         milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
                          "No se pudo dimensionar el resultado spill");
         return MILENA_ERR_OVERFLOW;
     }
-    if (isnan(value)) memcpy(value_text, "null", 5u);
+    if (exact_count) memcpy(value_text, valid_text, (size_t)valid_chars + 1u);
+    else if (isnan(value)) memcpy(value_text, "null", 5u);
 
     size_t encoded = 0, part = 0;
 #define ADD_SPILL_LITERAL(literal) \
@@ -1029,6 +1080,10 @@ static MilenaStatus stream_spill_emit_group(
         !stream_spill_size_add(&encoded, part)) goto size_error;
     ADD_SPILL_LITERAL(",\"valores_validos\":");
     if (!stream_spill_size_add(&encoded, (size_t)valid_chars)) goto size_error;
+    ADD_SPILL_LITERAL(",\"valores_nulos\":");
+    if (!stream_spill_size_add(&encoded, (size_t)null_chars)) goto size_error;
+    ADD_SPILL_LITERAL(",\"valores_invalidos\":");
+    if (!stream_spill_size_add(&encoded, (size_t)invalid_chars)) goto size_error;
     ADD_SPILL_LITERAL(",\"valor\":");
     if (!stream_spill_size_add(&encoded, (size_t)value_chars)) goto size_error;
     ADD_SPILL_LITERAL("}]}");
@@ -1056,7 +1111,8 @@ static MilenaStatus stream_spill_emit_group(
     milena_json_write_string(output, operation);
     if (fputs(",\"nombre\":", output) == EOF) goto write_error;
     milena_json_write_string(output, name);
-    if (fprintf(output, ",\"valores_validos\":%s,\"valor\":%s}]}", valid_text, value_text) < 0)
+    if (fprintf(output, ",\"valores_validos\":%s,\"valores_nulos\":%s,\"valores_invalidos\":%s,\"valor\":%s}]}",
+                valid_text, null_text, invalid_text, value_text) < 0)
         goto write_error;
     if (ferror(output)) goto write_error;
     free(key);
@@ -1238,6 +1294,12 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
             resource_limit_reached = true;
             status = MILENA_ERR_OVERFLOW; break;
         }
+        if (rows_read == SIZE_MAX) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "El contador de filas spill se desbordó");
+            status = MILENA_ERR_OVERFLOW;
+            break;
+        }
         rows_read++;
         if (record_length > observed_record_bytes)
             observed_record_bytes = record_length;
@@ -1261,16 +1323,20 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         key[0] = 1u;
         if (key_length) memcpy(key + 1u, fields[group_index], key_length);
         const char *raw = fields[metric_index];
+        bool is_null = !stream_field_nonempty(raw);
         bool valid = false;
         double value = 1.0;
         if (metric->operation == MILENA_STREAM_COUNT) {
-            valid = stream_field_nonempty(raw);
+            valid = !is_null;
         } else {
             valid = stream_parse_number(raw, &value);
         }
         if (!valid) {
-            status = milena_grouped_aggregate_add_null(&reducer, key,
-                                                        key_length + 1u, error);
+            status = is_null ?
+                milena_grouped_aggregate_add_null(&reducer, key,
+                                                  key_length + 1u, error) :
+                milena_grouped_aggregate_add_invalid(&reducer, key,
+                                                     key_length + 1u, error);
             malformed++;
         } else {
             if (metric->operation == MILENA_STREAM_COUNT) value = 1.0;

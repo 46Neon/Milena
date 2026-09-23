@@ -13,12 +13,12 @@ paralelo.
    resultados decodificados fuera de orden, rechazar duplicados/faltantes y
    conservar equivalencia monolítica.
 3. **Spill-to-disk básico** — implementado en esta rama: registros limitados, validación y replay incremental; no equivale a un motor de spill completo.
-4. **Agregaciones externas** — implementados estados globales mergeables, ordenamiento externo numérico y un primer agregador `GROUP BY` spillable con límites de memoria/scratch y salida determinista; sigue pendiente optimizar la reducción externa agrupada y conectarla al planner/lenguaje.
+4. **Agregaciones externas** — implementados estados globales mergeables, ordenamiento externo numérico y un primer agregador `GROUP BY` spillable con límites de memoria/scratch y salida determinista. En PR #28 el operador tiene cortes canónicos AST/semántica/runtime para tabla materializada y CSV streaming; el wire de agregación v3 conserva contadores separados de valores válidos, nulos e inválidos. El CSV spill emite esos contadores y representa `COUNT` como entero JSON exacto. La fusión externa usa fan-in fijo de dos y sus límites no equivalen a una cota de RSS global.
 5. **Formatos masivos** — Parquet/Arrow, row groups, compresión y pushdown.
 6. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
 7. **Coordinador** — leases, heartbeats, reintentos, checkpoints y cancelación.
 8. **Transporte** — adaptar el mismo protocolo a IPC y red autenticada.
-9. **SLO medidos** — benchmarks reproducibles con p50/p95/p99, memoria, shuffle y fallos.
+9. **SLO medidos** — el PR añade benchmark determinista comparando streaming en memoria y spill por valor/tiempo de pared, además de un smoke de CI; p50/p95/p99, RSS, memoria real, scratch observado, shuffle y fallos siguen pendientes de mediciones instrumentadas.
 
 Una fase no se considera terminada solo porque compile: necesita contrato,
 prueba de integración, caso de error y comparación con el resultado local.
@@ -40,13 +40,15 @@ cambiar el frontend del lenguaje.
 
 ## Alcance honesto
 
-PR #27 deja la base local: planner, particiones, workers, presupuestos,
-cancelación, reducción e IPC POSIX. PR #28 añade interoperabilidad del resultado,
-almacén spill append-only con replay validado, runs externos numéricos y un
-agregador agrupado incremental con presupuesto explícito de memoria y cuota de
-scratch. No existe todavía procesamiento entre máquinas, Parquet/Arrow, shuffle
-distribuido, integración `.milena` de estas operaciones ni un SLO medido de
-latencia. Cada una requiere implementación, pruebas y medición propias.
+PR #27 deja la base local: plan físico genérico por rangos contiguos de bytes,
+particiones, workers, presupuestos, cancelación, reducción e IPC POSIX. PR #28
+añade interoperabilidad del resultado, almacén spill append-only con replay
+validado, runs externos numéricos y agrupación incremental con presupuesto
+explícito, integrada a la ruta AST/semántica/runtime tanto para tablas como para
+CSV streaming. No existe procesamiento entre máquinas, Parquet/Arrow, shuffle
+distribuido, ni SLO medido de latencia o RSS global. El plan de rangos por bytes
+no conoce fronteras de registros CSV y no está conectado a group/sort pushdown;
+conectarlo al lector CSV sin un plan que preserve registros sería incorrecto.
 
 ## Reducción implementada
 
@@ -113,9 +115,14 @@ Esta fase incorpora un estado numérico mergeable con conteo, suma compensada
 (Neumaier), media, M2 de Welford/Chan, mínimo y máximo. Puede actualizarse por
 filas, combinarse en orden determinista entre particiones y serializarse con
 versión, IEEE-754 binary64 canónico, endianness little-endian y checksum. La
-versión 2 del formato conserva la corrección de la suma en cada spill/run para
-que las fusiones externas no pierdan bits bajos. La equivalencia con el camino
-sin spill se prueba con la tolerancia documentada. El finalizador expone conteo
+versión 3 del formato conserva la corrección de la suma, junto con contadores
+de observaciones válidas, nulas e inválidas, en cada spill/run para que las
+fusiones externas no pierdan bits bajos ni la procedencia de valores faltantes.
+El estado ocupa 84 bytes; los campos se codifican explícitamente en little-endian
+y el decoder rechaza overflow de contadores, versión desconocida o checksum
+incorrecto. La compatibilidad con wire v2 no está soportada: se rechaza en vez
+de reinterpretar estados antiguos. La equivalencia con el camino sin spill se
+prueba con la tolerancia documentada. El finalizador expone conteo
 exacto, suma compensada, media, varianza/desviación poblacional y muestral,
 mínimo y máximo; para una muestra vacía o un único valor señala cuándo la
 varianza muestral no está definida. Los estados parciales se almacenan como
@@ -152,10 +159,19 @@ programa; no hay aún nombres privados aleatorios ni writers concurrentes sobre
 la misma ruta. Los presupuestos excluyen el RSS total del proceso, buffers de
 stdio/libc, staging y, en el corte tabular, las tablas materializadas.
 
-Pendiente: mejorar aislamiento y concurrencia de scratch; conectar sort/group y
-pushdown al planner; diseñar joins con límites explícitos; ampliar benchmarks y
-SLOs reproducibles; evaluar Arrow/Parquet; y construir una capa coordinador/
-workers remotos con autenticación, leases, heartbeats, retries, checkpoints y
-durabilidad. Estos cortes locales no constituyen un clúster distribuido ni
-validación de rendimiento industrial o de Termux/aarch64.
+Pendiente: el scratch nombrado por el programa ya se crea exclusivamente y se
+limpia en los caminos validados, pero todavía no ofrece nombres privados
+impredecibles ni coordinación de writers concurrentes. El plan físico disponible
+solo describe rangos por bytes; para hacer pushdown de group/sort falta un plan
+semántico conectado al lector/runtime que preserve los límites de registros y
+el orden requerido. La auditoría del join canónico actual (`milena_table_join`)
+confirma que materializa índices, vectores de pares y salida sin un presupuesto
+AST configurable; acotarlo exige un contrato tipado de filas/memoria/scratch y
+una estrategia de salida que preserve la semántica de join, no solo un cap
+externo en el backend. El benchmark reproducible de spill añadido valida
+resultados y tiempos de pared y corre como smoke de `make test`; aún faltan
+mediciones instrumentadas de RSS/scratch y campañas repetidas para definir SLOs.
+Arrow/Parquet y una capa coordinador/workers remotos siguen como fases futuras,
+fuera de la evidencia implementada. Estos cortes locales no constituyen un
+clúster distribuido ni validación de rendimiento industrial o de Termux/aarch64.
 
