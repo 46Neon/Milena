@@ -80,8 +80,8 @@ int main(void) {
 
     assert(milena_aggregate_state_encode(&left, wire, sizeof(wire), &written, &error) == MILENA_OK);
     assert(written == sizeof(wire));
-    assert(wire[4] == 3 && wire[5] == 0 && wire[6] == 0 && wire[7] == 0);
-    assert(sizeof(wire) == 84u);
+    assert(wire[4] == 4 && wire[5] == 0 && wire[6] == 0 && wire[7] == 0);
+    assert(sizeof(wire) == 96u);
     assert(milena_aggregate_state_decode(wire, written, &decoded, &error) == MILENA_OK);
     assert(decoded.count == left.count && decoded.null_count == left.null_count &&
            decoded.invalid_count == left.invalid_count && decoded.sum == left.sum &&
@@ -99,6 +99,38 @@ int main(void) {
     overflow_other.null_count = 1;
     assert(milena_aggregate_state_merge(&overflow_count, &overflow_other, &error) == MILENA_ERR_OVERFLOW);
     assert(overflow_count.null_count == UINT64_MAX);
+
+    /* INT64 sums are exact beyond binary64's 2^53 precision and survive
+     * typed serialization/merge; overflow and mixed input kinds fail closed. */
+    MilenaAggregateState int_left, int_right, int_decoded;
+    milena_aggregate_state_init(&int_left);
+    milena_aggregate_state_init(&int_right);
+    const int64_t beyond_f64 = INT64_C(9007199254740993);
+    assert(milena_aggregate_state_add_int64(&int_left, beyond_f64, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_null(&int_left, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_int64(&int_right, 1, &error) == MILENA_OK);
+    assert(milena_aggregate_state_encode(&int_left, wire, sizeof(wire), &written, &error) == MILENA_OK);
+    assert(milena_aggregate_state_decode(wire, written, &int_decoded, &error) == MILENA_OK);
+    assert(int_decoded.value_kind == MILENA_AGGREGATE_VALUE_INT64 &&
+           int_decoded.integer_sum == beyond_f64);
+    assert(milena_aggregate_state_merge(&int_decoded, &int_right, &error) == MILENA_OK);
+    assert(milena_aggregate_state_finalize(&int_decoded, &finalized, &error) == MILENA_OK);
+    assert(finalized.has_integer_sum && finalized.integer_sum == INT64_C(9007199254740994) &&
+           finalized.count == 2 && finalized.null_count == 1);
+    MilenaAggregateState int_overflow;
+    milena_aggregate_state_init(&int_overflow);
+    assert(milena_aggregate_state_add_int64(&int_overflow, INT64_MAX, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_int64(&int_overflow, 1, &error) == MILENA_ERR_OVERFLOW);
+    assert(int_overflow.integer_sum == INT64_MAX && int_overflow.count == 1);
+    milena_aggregate_state_init(&int_overflow);
+    assert(milena_aggregate_state_add_int64(&int_overflow, INT64_MIN, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add_int64(&int_overflow, -1, &error) == MILENA_ERR_OVERFLOW);
+    MilenaAggregateState float_mixed;
+    milena_aggregate_state_init(&float_mixed);
+    assert(milena_aggregate_state_add_int64(&float_mixed, 1, &error) == MILENA_OK);
+    assert(milena_aggregate_state_add(&float_mixed, 1.0, &error) == MILENA_ERR_TYPE);
+    assert(float_mixed.value_kind == MILENA_AGGREGATE_VALUE_INT64 &&
+           float_mixed.integer_sum == 1);
 
     const char *path = "milena-aggregate-spill.bin";
     (void)remove(path);

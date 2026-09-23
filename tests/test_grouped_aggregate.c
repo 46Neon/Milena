@@ -14,8 +14,8 @@
 } while (0)
 
 typedef struct {
-    char keys[8][16];
-    MilenaAggregateResult results[8];
+    char keys[256][32];
+    MilenaAggregateResult results[256];
     size_t count;
 } Capture;
 
@@ -42,7 +42,7 @@ static MilenaStatus capture_result(const MilenaGroupedAggregateResult *result,
                                    void *context, MilenaError *error) {
     Capture *capture = context;
     (void)error;
-    assert(capture->count < 8);
+    assert(capture->count < 256);
     assert(result->key_length < sizeof(capture->keys[0]));
     memcpy(capture->keys[capture->count], result->key, result->key_length);
     capture->keys[capture->count][result->key_length] = '\0';
@@ -92,6 +92,44 @@ int main(void) {
     assert(milena_grouped_aggregate_add(&grouped, "x", 1, 1.0, &error) == MILENA_ERR_ARGUMENT);
     CHECK_OK(milena_grouped_aggregate_close(&grouped, &error));
     assert(remove(path) == 0);
+
+    /* Exact typed INT64 states merge across spill runs; all-null groups keep
+     * their explicit counters and empty value state. */
+    CHECK_OK(milena_grouped_aggregate_open(path, 2048, 64, 1024u * 1024u,
+                                            &grouped, &error));
+    CHECK_OK(milena_grouped_aggregate_add_int64(&grouped, "large", 5,
+        INT64_C(9007199254740993), &error));
+    CHECK_OK(milena_grouped_aggregate_add_int64(&grouped, "large", 5, 1, &error));
+    CHECK_OK(milena_grouped_aggregate_add_null(&grouped, "empty", 5, &error));
+    for (size_t i = 0; i < 12; ++i) {
+        char key[16];
+        (void)snprintf(key, sizeof(key), "i%02zu", i);
+        CHECK_OK(milena_grouped_aggregate_add_int64(&grouped, key, strlen(key),
+                                                     (int64_t)i, &error));
+    }
+    CHECK_OK(milena_grouped_aggregate_add_int64(&grouped, "large", 5, 1, &error));
+    Capture integer_capture = {0};
+    CHECK_OK(milena_grouped_aggregate_finalize(&grouped, capture_result,
+        &integer_capture, &emitted, &error));
+    assert(emitted == 14 && integer_capture.count == 14);
+    bool found_large = false, found_empty = false;
+    for (size_t i = 0; i < integer_capture.count; ++i) {
+        if (strcmp(integer_capture.keys[i], "large") == 0) {
+            found_large = true;
+            assert(integer_capture.results[i].has_integer_sum &&
+                   integer_capture.results[i].integer_sum == INT64_C(9007199254740995));
+        }
+        if (strcmp(integer_capture.keys[i], "empty") == 0) {
+            found_empty = true;
+            assert(integer_capture.results[i].count == 0 &&
+                   integer_capture.results[i].null_count == 1 &&
+                   !integer_capture.results[i].has_values);
+        }
+    }
+    assert(found_large && found_empty);
+    CHECK_OK(milena_grouped_aggregate_close(&grouped, &error));
+    assert(remove(path) == 0);
+
     FILE *stale = fopen(path, "wb");
     assert(stale != NULL);
     assert(fclose(stale) == 0);

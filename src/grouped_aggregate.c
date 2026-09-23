@@ -219,9 +219,10 @@ MilenaStatus milena_grouped_aggregate_open(
         MILENA_GROUPED_DEFAULT_MAX_RUNS, grouped, error);
 }
 
-MilenaStatus milena_grouped_aggregate_add(
+static MilenaStatus grouped_aggregate_add_value(
     MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
-    double value, MilenaError *error) {
+    double float_value, int64_t integer_value, bool is_integer,
+    MilenaError *error) {
     if (!grouped || !grouped->groups || grouped->finalized ||
         (!key && key_length != 0) || key_length > grouped->max_key_bytes) {
         group_error(error, MILENA_ERR_ARGUMENT, "Clave o estado inválido para agregar fila agrupada");
@@ -236,9 +237,10 @@ MilenaStatus milena_grouped_aggregate_add(
     bool found = false;
     size_t slot = find_group(grouped, bytes, key_length, &found);
     if (found) {
-        MilenaStatus status = milena_aggregate_state_add(
-            &grouped->groups[grouped->table[slot] - 1u].aggregate, value, error);
-        return status;
+        MilenaAggregateState *state =
+            &grouped->groups[grouped->table[slot] - 1u].aggregate;
+        return is_integer ? milena_aggregate_state_add_int64(
+            state, integer_value, error) : milena_aggregate_state_add(state, float_value, error);
     }
     if (grouped->group_count == grouped->group_capacity) {
         MilenaStatus status = flush_groups(grouped, error);
@@ -252,7 +254,9 @@ MilenaStatus milena_grouped_aggregate_add(
     size_t index = grouped->group_count;
     MilenaAggregateState initial;
     milena_aggregate_state_init(&initial);
-    MilenaStatus status = milena_aggregate_state_add(&initial, value, error);
+    MilenaStatus status = is_integer ?
+        milena_aggregate_state_add_int64(&initial, integer_value, error) :
+        milena_aggregate_state_add(&initial, float_value, error);
     if (status != MILENA_OK) return status;
     grouped->groups[index].key_length = key_length;
     grouped->groups[index].aggregate = initial;
@@ -261,6 +265,20 @@ MilenaStatus milena_grouped_aggregate_add(
     grouped->group_count++;
     if (error) milena_error_clear(error);
     return MILENA_OK;
+}
+
+MilenaStatus milena_grouped_aggregate_add(
+    MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
+    double value, MilenaError *error) {
+    return grouped_aggregate_add_value(grouped, key, key_length, value, 0,
+                                       false, error);
+}
+
+MilenaStatus milena_grouped_aggregate_add_int64(
+    MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
+    int64_t value, MilenaError *error) {
+    return grouped_aggregate_add_value(grouped, key, key_length, 0.0, value,
+                                       true, error);
 }
 
 static MilenaStatus grouped_aggregate_add_missing(

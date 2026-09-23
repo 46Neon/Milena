@@ -10,8 +10,9 @@ typedef struct {
     char **keys;
     bool *key_validity;
     double *values;
-    uint64_t *counts;
+    int64_t *counts;
     bool *value_validity;
+    bool integer_sum_output;
     size_t count;
     size_t capacity;
     size_t max_groups;
@@ -33,7 +34,7 @@ static MilenaStatus rows_reserve(GroupSpillRows *rows, size_t needed,
     if (capacity < rows->capacity || capacity < needed) capacity = needed;
     if (capacity > SIZE_MAX / sizeof(char *) ||
         capacity > SIZE_MAX / sizeof(double) ||
-        capacity > SIZE_MAX / sizeof(uint64_t) ||
+        capacity > SIZE_MAX / sizeof(int64_t) ||
         capacity > SIZE_MAX / sizeof(bool)) {
         GROUP_SPILL_ERR(error, MILENA_ERR_OVERFLOW,
                         "La tabla de salida spill excede el espacio direccionable");
@@ -48,7 +49,7 @@ static MilenaStatus rows_reserve(GroupSpillRows *rows, size_t needed,
     RESERVE(keys, char *);
     RESERVE(key_validity, bool);
     RESERVE(values, double);
-    RESERVE(counts, uint64_t);
+    RESERVE(counts, int64_t);
     RESERVE(value_validity, bool);
 #undef RESERVE
     rows->capacity = capacity;
@@ -97,10 +98,22 @@ static MilenaStatus capture_group(const MilenaGroupedAggregateResult *result,
                                 "Conteo agrupado excede INT64_MAX");
                 return MILENA_ERR_OVERFLOW;
             }
-            rows->counts[at] = result->aggregate.count;
+            rows->counts[at] = (int64_t)result->aggregate.count;
             rows->values[at] = 0.0;
             break;
-        case MILENA_AGG_SUM: rows->values[at] = result->aggregate.sum; break;
+        case MILENA_AGG_SUM:
+            if (rows->integer_sum_output) {
+                if (result->aggregate.has_values &&
+                    !result->aggregate.has_integer_sum) {
+                    free(rows->keys[at]); rows->keys[at] = NULL;
+                    GROUP_SPILL_ERR(error, MILENA_ERR_DATA,
+                        "Estado de suma INT64 sin acumulador entero exacto");
+                    return MILENA_ERR_DATA;
+                }
+                rows->counts[at] = result->aggregate.has_values ?
+                    result->aggregate.integer_sum : 0;
+            } else rows->values[at] = result->aggregate.sum;
+            break;
         case MILENA_AGG_MEAN: rows->values[at] = result->aggregate.mean; break;
         case MILENA_AGG_MIN: rows->values[at] = result->aggregate.min; break;
         case MILENA_AGG_MAX: rows->values[at] = result->aggregate.max; break;
@@ -121,6 +134,15 @@ static bool numeric_f64(const MilenaTable *table, size_t column, size_t row,
         !raw) return false;
     *value = *(const double *)raw;
     return isfinite(*value);
+}
+
+static bool numeric_i64(const MilenaTable *table, size_t column, size_t row,
+                        int64_t *value, MilenaError *error) {
+    const void *raw = NULL;
+    if (!value || milena_table_get_array_value(table, column, row, &raw, error) != MILENA_OK ||
+        !raw) return false;
+    *value = *(const int64_t *)raw;
+    return true;
 }
 
 MilenaStatus milena_language_group_by_spill(
@@ -154,12 +176,16 @@ MilenaStatus milena_language_group_by_spill(
     }
     const MilenaTableColumn *key_column = &source->columns[key_index];
     const MilenaTableColumn *value_column = &source->columns[value_index];
+    bool integer_sum_output = specification->operation == MILENA_AGG_SUM &&
+        value_column->type == MILENA_COLUMN_ARRAY &&
+        value_column->values.dtype == MILENA_DTYPE_INT64;
     if (key_column->type != MILENA_COLUMN_STRING ||
         (specification->operation != MILENA_AGG_COUNT &&
          (value_column->type != MILENA_COLUMN_ARRAY ||
-          value_column->values.dtype != MILENA_DTYPE_FLOAT64))) {
+          (value_column->values.dtype != MILENA_DTYPE_FLOAT64 &&
+           !integer_sum_output)))) {
         GROUP_SPILL_ERR(error, MILENA_ERR_UNSUPPORTED,
-            "#spill admite clave texto y una métrica FLOAT64; conteo admite cualquier columna");
+            "#spill admite clave texto y suma FLOAT64/INT64; otras métricas numéricas requieren FLOAT64; conteo admite cualquier columna");
         return MILENA_ERR_UNSUPPORTED;
     }
     MilenaGroupedAggregate reducer = {0};
@@ -194,6 +220,17 @@ MilenaStatus milena_language_group_by_spill(
         if (milena_table_is_null(source, (size_t)value_index, row)) {
             status = milena_grouped_aggregate_add_null(&reducer, key,
                                                         key_length, error);
+        } else if (integer_sum_output) {
+            int64_t value = 0;
+            if (!numeric_i64(source, (size_t)value_index, row, &value, error)) {
+                if (!error || error->code == MILENA_OK)
+                    GROUP_SPILL_ERR(error, MILENA_ERR_TYPE,
+                                   "No se pudo leer la métrica INT64 de #spill");
+                status = error ? error->code : MILENA_ERR_TYPE;
+            }
+            if (status == MILENA_OK)
+                status = milena_grouped_aggregate_add_int64(&reducer, key,
+                    key_length, value, error);
         } else {
             double value = 1.0;
             if (specification->operation != MILENA_AGG_COUNT &&
@@ -211,6 +248,7 @@ MilenaStatus milena_language_group_by_spill(
     }
     GroupSpillRows rows = {0};
     rows.operation = specification->operation;
+    rows.integer_sum_output = integer_sum_output;
     rows.max_groups = policy->group_max_output_groups;
     if (status == MILENA_OK)
         status = milena_grouped_aggregate_finalize(&reducer, capture_group,
@@ -223,7 +261,8 @@ MilenaStatus milena_language_group_by_spill(
     MilenaArray values = {0};
     if (status == MILENA_OK) {
         size_t shape[] = {rows.count};
-        MilenaDType dtype = specification->operation == MILENA_AGG_COUNT ?
+        MilenaDType dtype = (specification->operation == MILENA_AGG_COUNT ||
+                             rows.integer_sum_output) ?
                             MILENA_DTYPE_INT64 : MILENA_DTYPE_FLOAT64;
         status = milena_array_zeros(&values, dtype, 1, shape, error);
         bool *validity = rows.count ? calloc(rows.count, sizeof(bool)) : NULL;
@@ -238,8 +277,8 @@ MilenaStatus milena_language_group_by_spill(
             void *cell = (unsigned char *)milena_array_data(&values) +
                          i * values.itemsize;
             if (dtype == MILENA_DTYPE_INT64) {
-                int64_t count = (int64_t)rows.counts[i];
-                memcpy(cell, &count, sizeof(count));
+                int64_t exact_value = rows.counts[i];
+                memcpy(cell, &exact_value, sizeof(exact_value));
             } else memcpy(cell, &rows.values[i], sizeof(double));
         }
         if (status == MILENA_OK)

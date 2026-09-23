@@ -3,13 +3,21 @@
 
 #include "common.h"
 
-#define MILENA_AGGREGATE_WIRE_VERSION 3u
-#define MILENA_AGGREGATE_WIRE_SIZE 84u
+#define MILENA_AGGREGATE_WIRE_VERSION 4u
+#define MILENA_AGGREGATE_WIRE_SIZE 96u
+
+typedef enum {
+    MILENA_AGGREGATE_VALUE_NONE = 0,
+    MILENA_AGGREGATE_VALUE_FLOAT64 = 1,
+    MILENA_AGGREGATE_VALUE_INT64 = 2
+} MilenaAggregateValueKind;
 
 typedef struct {
     uint64_t count; /* valid observations */
     uint64_t null_count;
     uint64_t invalid_count;
+    int64_t integer_sum;
+    MilenaAggregateValueKind value_kind;
     double sum;
     /* Neumaier correction retained across spill serialization and merges. */
     double sum_compensation;
@@ -23,6 +31,7 @@ typedef struct {
     uint64_t count; /* valid observations */
     uint64_t null_count;
     uint64_t invalid_count;
+    int64_t integer_sum;
     double sum;
     double mean;
     double variance_population;
@@ -33,11 +42,15 @@ typedef struct {
     double max;
     bool has_values;
     bool has_sample_variance;
+    bool has_integer_sum;
 } MilenaAggregateResult;
 
 void milena_aggregate_state_init(MilenaAggregateState *state);
 MilenaStatus milena_aggregate_state_add(MilenaAggregateState *state,
                                         double value, MilenaError *error);
+MilenaStatus milena_aggregate_state_add_int64(MilenaAggregateState *state,
+                                              int64_t value,
+                                              MilenaError *error);
 MilenaStatus milena_aggregate_state_add_null(MilenaAggregateState *state,
                                              MilenaError *error);
 MilenaStatus milena_aggregate_state_add_invalid(MilenaAggregateState *state,

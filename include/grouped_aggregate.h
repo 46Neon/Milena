@@ -64,6 +64,9 @@ MilenaStatus milena_grouped_aggregate_open_with_max_runs(
 MilenaStatus milena_grouped_aggregate_add(
     MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
     double value, MilenaError *error);
+MilenaStatus milena_grouped_aggregate_add_int64(
+    MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
+    int64_t value, MilenaError *error);
 MilenaStatus milena_grouped_aggregate_add_null(
     MilenaGroupedAggregate *grouped, const void *key, size_t key_length,
     MilenaError *error);

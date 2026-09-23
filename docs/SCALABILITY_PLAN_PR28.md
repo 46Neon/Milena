@@ -115,10 +115,13 @@ Esta fase incorpora un estado numérico mergeable con conteo, suma compensada
 (Neumaier), media, M2 de Welford/Chan, mínimo y máximo. Puede actualizarse por
 filas, combinarse en orden determinista entre particiones y serializarse con
 versión, IEEE-754 binary64 canónico, endianness little-endian y checksum. La
-versión 3 del formato conserva la corrección de la suma, junto con contadores
-de observaciones válidas, nulas e inválidas, en cada spill/run para que las
-fusiones externas no pierdan bits bajos ni la procedencia de valores faltantes.
-El estado ocupa 84 bytes; los campos se codifican explícitamente en little-endian
+versión 4 conserva la corrección de la suma FLOAT64 y añade tipo explícito más
+suma INT64 exacta, junto con contadores de observaciones válidas, nulas e
+inválidas, en cada spill/run para que las fusiones externas no pierdan bits
+bajos ni la procedencia de valores faltantes. SUM INT64 rechaza mezcla de tipos
+y overflow; pruebas incluyen valores mayores que 2^53, extremos con overflow,
+serialización/merge y el adaptador de tabla canónico. El estado ocupa 96 bytes;
+los campos se codifican explícitamente en little-endian
 y el decoder rechaza overflow de contadores, versión desconocida o checksum
 incorrecto. La compatibilidad con wire v2 no está soportada: se rechaza en vez
 de reinterpretar estados antiguos. La equivalencia con el camino sin spill se
@@ -141,7 +144,8 @@ de CSV streaming vía `stream.c`, ambos con AST tipado, validación semántica y
 runtime común. Sin `#spill` se conserva la agrupación histórica en memoria.
 
 La ruta tabular limita spill a una clave STRING y una métrica (conteo de
-cualquier columna; otras métricas FLOAT64) y materializa entrada y resultado.
+cualquier columna; SUM acepta FLOAT64/INT64 con acumulación exacta y detección
+de overflow para INT64; otras métricas FLOAT64) y materializa entrada y resultado.
 La ruta CSV streaming consume registros completos por el lector existente, sin
 crear Dataset/MilenaTable, y emite el JSON por callback a un staging file;
 también restringe la operación a una clave textual y una métrica. Nulos y

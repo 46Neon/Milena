@@ -1,4 +1,5 @@
 #include "language_runtime.h"
+#include "language_grouped_spill.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -366,6 +367,73 @@ static int run_grouped_human_stream_pipeline(void) {
     return 0;
 }
 
+static int run_int64_grouped_spill_adapter(void) {
+    MilenaError error;
+    milena_error_clear(&error);
+    const size_t row_count = 14;
+    const size_t shape[] = {row_count};
+    const char *keys[] = {"A", "A", "k00", "k01", "k02", "k03", "k04",
+                          "k05", "k06", "k07", "k08", "A", "B", "C"};
+    const int64_t values[] = {INT64_C(9007199254740993), 1, 10, 11, 12, 13,
+                              14, 15, 16, 17, 18, 1, INT64_MIN, 0};
+    bool validity[row_count];
+    for (size_t i = 0; i < row_count; ++i) validity[i] = true;
+    validity[row_count - 1] = false;
+    MilenaArray input_values = {0};
+    CHECK(milena_array_from_i64(&input_values, 1, shape, values, &error) == MILENA_OK,
+          error.message);
+    MilenaTable input = {0}, output = {0};
+    milena_table_init(&input);
+    CHECK(milena_table_add_string_column_copy(&input, "group", keys, row_count,
+                                               NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_table_add_column_copy(&input, "value", &input_values,
+                                       validity, &error) == MILENA_OK,
+          error.message);
+    const char *scratch = "test-language-runtime-int64-grouped.spill";
+    ASTNode policy = {0};
+    policy.type = AST_AGRUPACION_SPILL;
+    policy.value = (char *)scratch;
+    policy.group_memory_budget_bytes = 2048;
+    policy.group_spill_quota_bytes = 1024 * 1024;
+    policy.group_max_key_bytes = 128;
+    policy.group_max_output_groups = 32;
+    policy.group_max_runs = 32;
+    MilenaAggregateSpec spec = {"value", MILENA_AGG_SUM, NULL};
+    CHECK(milena_language_group_by_spill(&output, &input, "group", &spec,
+                                          &policy, &error) == MILENA_OK,
+          error.message);
+    CHECK(output.row_count == 12, "spill INT64: cardinalidad de salida inesperada");
+    const MilenaTableColumn *sums = milena_table_column(&output, 1);
+    CHECK(sums != NULL && sums->values.dtype == MILENA_DTYPE_INT64,
+          "spill INT64: suma no conservó el tipo INT64");
+    const int64_t *sum_values = milena_array_const_data(&sums->values);
+    bool saw_large = false, saw_min = false, saw_null_group = false;
+    const MilenaTableColumn *out_keys = milena_table_column(&output, 0);
+    for (size_t i = 0; i < output.row_count; ++i) {
+        const char *key = out_keys->strings[i];
+        if (strcmp(key, "A") == 0) {
+            saw_large = true;
+            CHECK(sum_values[i] == INT64_C(9007199254740995),
+                  "spill INT64: suma perdio precisión por encima de 2^53");
+        } else if (strcmp(key, "B") == 0) {
+            saw_min = true;
+            CHECK(sum_values[i] == INT64_MIN, "spill INT64: INT64_MIN alterado");
+        } else if (strcmp(key, "C") == 0) {
+            saw_null_group = true;
+            CHECK(!sums->validity[i], "spill INT64: grupo nulo se volvió valor válido");
+        }
+    }
+    CHECK(saw_large && saw_min && saw_null_group,
+          "spill INT64: faltó un grupo esperado");
+    CHECK(fopen(scratch, "rb") == NULL,
+          "spill INT64: no se limpió el temporal propiedad de la operación");
+    milena_table_destroy(&output);
+    milena_table_destroy(&input);
+    milena_array_release(&input_values);
+    return 0;
+}
+
 int main(void) {
     CHECK(run_arrays() == 0, "falló la fase de arrays");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
@@ -375,6 +443,8 @@ int main(void) {
     CHECK(run_human_stream_pipeline() == 0, "falló la fase de flujo humano");
     CHECK(run_grouped_human_stream_pipeline() == 0,
           "falló la fase de agrupación de flujo humano");
+    CHECK(run_int64_grouped_spill_adapter() == 0,
+          "falló la fase canónica de spill agrupado INT64");
     puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo agrupado OK");
     return 0;
 }
