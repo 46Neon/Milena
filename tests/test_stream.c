@@ -171,7 +171,7 @@ static void test_grouped_spill(void) {
     char *expected = read_all(memory_output); char *actual = read_all(spill_output);
     /* The only intentional difference is the execution mode marker. */
     char *p = strstr(expected, "\"derramado\":false");
-    assert(p != NULL); memcpy(p + strlen("\"derramado\":"), "true", 4);
+    assert(p != NULL); memcpy(p + strlen("\"derramado\":"), "true,", 5);
     if (strcmp(expected, actual) != 0) { fprintf(stderr, "EXPECTED=[%s]\nACTUAL=[%s]\n", expected, actual); abort(); }
     free(expected); free(actual);
     /* Repeating the same run must produce byte-for-byte deterministic output. */
@@ -179,7 +179,7 @@ static void test_grouped_spill(void) {
         metrics, 2, &spill, NULL, &error) == MILENA_OK);
     actual = read_all(spill_output); expected = read_all(memory_output);
     p = strstr(expected, "\"derramado\":false"); assert(p != NULL);
-    memcpy(p + strlen("\"derramado\":"), "true", 4);
+    memcpy(p + strlen("\"derramado\":"), "true,", 5);
     if (strcmp(expected, actual) != 0) { fprintf(stderr, "EXPECTED=[%s]\nACTUAL=[%s]\n", expected, actual); abort(); } free(expected); free(actual);
     remove(input); remove(memory_output); remove(spill_output);
 }
