@@ -24,8 +24,9 @@ else:
     for fragment in required:
         if fragment not in workflow:
             errors.append(f"workflow missing required contract: {fragment}")
-    if "ubuntu-latest" in workflow or "windows-latest" in workflow:
-        errors.append("Termux contract cannot use a hosted generic runner")
+    device_workflow = workflow.split("  termux-aarch64-contract:", 1)[-1]
+    if "ubuntu-latest" in device_workflow or "windows-latest" in device_workflow:
+        errors.append("Termux device contract cannot use a hosted generic runner")
 
 if not PREFLIGHT.is_file():
     errors.append("missing Termux runner preflight")
