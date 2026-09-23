@@ -15,7 +15,7 @@ paralelo.
 3. **Spill-to-disk básico** — implementado en esta rama: registros limitados, validación y replay incremental; no equivale a un motor de spill completo.
 4. **Agregaciones externas** — implementados estados globales mergeables, ordenamiento externo numérico y un primer agregador `GROUP BY` spillable con límites de memoria/scratch y salida determinista. En PR #28 el operador tiene cortes canónicos AST/semántica/runtime para tabla materializada y CSV streaming. El estado de agregado usa wire v4 little-endian de 96 bytes, con contadores separados de valores válidos/nulos/inválidos y suma `INT64` exacta; el CSV spill representa `COUNT` como entero JSON exacto. La fusión externa usa fan-in fijo de dos y sus límites no equivalen a una cota de RSS global. El contrato de corrida todavía no está ligado a un esquema completo y sigue limitado a una clave de texto y una métrica por operación spill.
 5. **Formatos masivos** — Parquet/Arrow, row groups, compresión y pushdown.
-6. **Planner físico de datos** — hash/range partitioning, joins, skew y costos.
+6. **Planner físico de datos — parcial**: el runtime construye y valida un plan tipado CSV para resumen, agrupación y agrupación spill. El plan actual es una sola lectura secuencial consciente de registros; no parte CSV por rangos ni habilita workers paralelos. Hash/range partitioning de CSV, pushdown paralelo de group/sort, estimación de skew y costos siguen pendientes.
 7. **Coordinador** — leases, heartbeats, reintentos, checkpoints y cancelación.
 8. **Transporte** — adaptar el mismo protocolo a IPC y red autenticada.
 9. **Mediciones observadas (no SLO)** — el workflow determinista valida 1.000.000 de filas y 1.000 grupos con el reducer configurado a 262.144 bytes y repite cada workload tres veces. En el run `35869526200` (`workflow_dispatch`, head `9cc3ca31`, Linux x86_64), el workload de un millón de filas midió medianas de 0,320 s en memoria y 5,841 s con spill. `ru_maxrss` por proceso hijo osciló entre 12.079.104–12.115.968 bytes (memoria) y 12.013.568–12.087.296 bytes (spill); el scratch máximo muestreado cada 10 ms osciló entre 255.654.528 y 255.689.216 bytes. Son tres observaciones de una ejecución/workload, no un SLO ni una cota global de RSS. No se deriva garantía para otras plataformas o cardinalidades.
@@ -45,10 +45,15 @@ particiones, workers, presupuestos, cancelación, reducción e IPC POSIX. PR #28
 añade interoperabilidad del resultado, almacén spill append-only con replay
 validado, runs externos numéricos y agrupación incremental con presupuesto
 explícito, integrada a la ruta AST/semántica/runtime tanto para tablas como para
-CSV streaming. No existe procesamiento entre máquinas, Parquet/Arrow, shuffle
-distribuido, ni SLO medido de latencia o RSS global. El plan de rangos por bytes
-no conoce fronteras de registros CSV y no está conectado a group/sort pushdown;
-conectarlo al lector CSV sin un plan que preserve registros sería incorrecto.
+CSV streaming. La ruta CSV streaming usa una cadena de operadores tipada
+`scan de registros CSV → agregación → orden por clave (si aplica) → JSON sink`;
+el validador exige una sola partición/worker y rechaza planes paralelos. Esta
+integración ejecuta las operaciones canónicas existentes, no es todavía
+pushdown al planner genérico ni ejecución particionada. No existe procesamiento
+entre máquinas, Parquet/Arrow, shuffle distribuido, ni SLO medido de latencia o
+RSS global. El plan genérico de rangos por bytes no conoce fronteras de
+registros CSV y sigue desconectado de group/sort pushdown; conectarlo al lector
+CSV sin un plan que preserve registros sería incorrecto.
 
 ## Reducción implementada
 

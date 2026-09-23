@@ -68,6 +68,49 @@ typedef struct {
     size_t max_groups;
 } MilenaStreamReport;
 
+typedef enum {
+    MILENA_STREAM_PLAN_SCAN_CSV_RECORDS = 0,
+    MILENA_STREAM_PLAN_SUMMARY_AGGREGATE,
+    MILENA_STREAM_PLAN_GROUPED_AGGREGATE,
+    MILENA_STREAM_PLAN_GROUPED_SPILL,
+    MILENA_STREAM_PLAN_ORDER_BY_KEY,
+    MILENA_STREAM_PLAN_JSON_SINK
+} MilenaStreamPlanOperator;
+
+typedef enum {
+    MILENA_STREAM_PLAN_SUMMARY = 0,
+    MILENA_STREAM_PLAN_GROUPED,
+    MILENA_STREAM_PLAN_GROUPED_SPILL_MODE
+} MilenaStreamPlanKind;
+
+#define MILENA_STREAM_PLAN_MAX_OPERATORS 4u
+
+typedef struct {
+    MilenaStreamPlanKind kind;
+    MilenaStreamPlanOperator operators[MILENA_STREAM_PLAN_MAX_OPERATORS];
+    size_t operator_count;
+    size_t partition_count;
+    size_t worker_count;
+    bool csv_record_safe;
+    bool parallel_enabled;
+    const char *reason;
+} MilenaStreamExecutionPlan;
+
+/* Current CSV physical plans are a single record-aware scan. The generic
+ * byte-range planner is deliberately not used for quoted/multiline CSV. */
+MilenaStatus milena_stream_plan_build_csv(bool grouped, bool spill,
+                                          MilenaStreamExecutionPlan *plan,
+                                          MilenaError *error);
+MilenaStatus milena_stream_plan_validate_csv(
+    const MilenaStreamExecutionPlan *plan, MilenaError *error);
+MilenaStatus milena_stream_execute_csv_plan(
+    const MilenaStreamExecutionPlan *plan, const char *input_path,
+    const char *output_path, const char *group_column,
+    const MilenaStreamMetric *metrics, size_t metric_count,
+    const MilenaStreamOptions *options,
+    const MilenaStreamSpillPolicy *spill_policy,
+    MilenaStreamReport *report, MilenaError *error);
+
 /*
  * Summarizes a CSV without materializing it as Dataset or MilenaTable.
  * The output is a JSON report. Memory is O(columns + metrics + max_record).

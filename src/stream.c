@@ -280,6 +280,113 @@ MilenaStreamOptions milena_stream_options_default(void) {
     return options;
 }
 
+MilenaStatus milena_stream_plan_build_csv(bool grouped, bool spill,
+                                          MilenaStreamExecutionPlan *plan,
+                                          MilenaError *error) {
+    if (error) milena_error_clear(error);
+    if (!plan || (spill && !grouped)) {
+        milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
+                         "El plan CSV requiere destino y agrupación para spill");
+        return MILENA_ERR_ARGUMENT;
+    }
+    memset(plan, 0, sizeof(*plan));
+    plan->kind = !grouped ? MILENA_STREAM_PLAN_SUMMARY :
+        (spill ? MILENA_STREAM_PLAN_GROUPED_SPILL_MODE :
+                 MILENA_STREAM_PLAN_GROUPED);
+    plan->operators[plan->operator_count++] =
+        MILENA_STREAM_PLAN_SCAN_CSV_RECORDS;
+    if (!grouped) {
+        plan->operators[plan->operator_count++] =
+            MILENA_STREAM_PLAN_SUMMARY_AGGREGATE;
+    } else {
+        plan->operators[plan->operator_count++] = spill ?
+            MILENA_STREAM_PLAN_GROUPED_SPILL :
+            MILENA_STREAM_PLAN_GROUPED_AGGREGATE;
+        plan->operators[plan->operator_count++] =
+            MILENA_STREAM_PLAN_ORDER_BY_KEY;
+    }
+    plan->operators[plan->operator_count++] = MILENA_STREAM_PLAN_JSON_SINK;
+    plan->partition_count = 1u;
+    plan->worker_count = 1u;
+    plan->csv_record_safe = true;
+    plan->parallel_enabled = false;
+    plan->reason = "CSV se procesa por registros completos; el plan por bytes no se aplica";
+    return milena_stream_plan_validate_csv(plan, error);
+}
+
+MilenaStatus milena_stream_plan_validate_csv(
+    const MilenaStreamExecutionPlan *plan, MilenaError *error) {
+    if (error) milena_error_clear(error);
+    MilenaStreamPlanOperator expected[MILENA_STREAM_PLAN_MAX_OPERATORS];
+    size_t expected_count = 0;
+    if (!plan || plan->kind < MILENA_STREAM_PLAN_SUMMARY ||
+        plan->kind > MILENA_STREAM_PLAN_GROUPED_SPILL_MODE ||
+        plan->partition_count != 1u || plan->worker_count != 1u ||
+        !plan->csv_record_safe || plan->parallel_enabled || !plan->reason ||
+        plan->operator_count > MILENA_STREAM_PLAN_MAX_OPERATORS) {
+        milena_error_set(error, MILENA_ERR_UNSUPPORTED, 0, 0, 0,
+                         "El plan CSV no preserva la ejecución secuencial por registros");
+        return MILENA_ERR_UNSUPPORTED;
+    }
+    expected[expected_count++] = MILENA_STREAM_PLAN_SCAN_CSV_RECORDS;
+    if (plan->kind == MILENA_STREAM_PLAN_SUMMARY) {
+        expected[expected_count++] = MILENA_STREAM_PLAN_SUMMARY_AGGREGATE;
+    } else {
+        expected[expected_count++] =
+            plan->kind == MILENA_STREAM_PLAN_GROUPED_SPILL_MODE ?
+                MILENA_STREAM_PLAN_GROUPED_SPILL :
+                MILENA_STREAM_PLAN_GROUPED_AGGREGATE;
+        expected[expected_count++] = MILENA_STREAM_PLAN_ORDER_BY_KEY;
+    }
+    expected[expected_count++] = MILENA_STREAM_PLAN_JSON_SINK;
+    if (plan->operator_count != expected_count) {
+        milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
+                         "La cadena de operadores del plan CSV es inconsistente");
+        return MILENA_ERR_DATA;
+    }
+    for (size_t i = 0; i < expected_count; ++i) {
+        if (plan->operators[i] != expected[i]) {
+            milena_error_set(error, MILENA_ERR_DATA, 0, 0, 0,
+                             "El orden de operadores del plan CSV es inválido");
+            return MILENA_ERR_DATA;
+        }
+    }
+    return MILENA_OK;
+}
+
+MilenaStatus milena_stream_execute_csv_plan(
+    const MilenaStreamExecutionPlan *plan, const char *input_path,
+    const char *output_path, const char *group_column,
+    const MilenaStreamMetric *metrics, size_t metric_count,
+    const MilenaStreamOptions *options,
+    const MilenaStreamSpillPolicy *spill_policy,
+    MilenaStreamReport *report, MilenaError *error) {
+    MilenaStatus status = milena_stream_plan_validate_csv(plan, error);
+    if (status != MILENA_OK) return status;
+    if (!input_path || !output_path || !metrics || metric_count == 0 ||
+        ((plan->kind == MILENA_STREAM_PLAN_SUMMARY) != (group_column == NULL)) ||
+        ((plan->kind == MILENA_STREAM_PLAN_GROUPED_SPILL_MODE) !=
+         (spill_policy != NULL))) {
+        milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
+                         "Argumentos incompatibles con el plan físico CSV");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (plan->kind == MILENA_STREAM_PLAN_SUMMARY)
+        return milena_stream_csv_summary_with_options(input_path, output_path,
+            metrics, metric_count, options, report, error);
+    if (plan->kind == MILENA_STREAM_PLAN_GROUPED_SPILL_MODE) {
+        if (metric_count != 1u) {
+            milena_error_set(error, MILENA_ERR_UNSUPPORTED, 0, 0, 0,
+                             "El plan de agrupación spill requiere una métrica");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+        return milena_stream_csv_grouped_spill_with_options(input_path,
+            output_path, group_column, metrics, options, spill_policy, report, error);
+    }
+    return milena_stream_csv_grouped_with_options(input_path, output_path,
+        group_column, metrics, metric_count, options, report, error);
+}
+
 MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
                                        const char *output_path,
                                        const MilenaStreamMetric *metrics,

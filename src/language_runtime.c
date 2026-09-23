@@ -1584,13 +1584,15 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
     }
     MilenaStreamReport report = {0};
     MilenaStatus status;
+    MilenaStreamSpillPolicy policy = {0};
+    const MilenaStreamSpillPolicy *policy_ptr = NULL;
     if (group_block && spill_policy) {
         if (metric_count != 1) {
             runtime_error(error, MILENA_ERR_UNSUPPORTED,
                           "#spill de flujo admite exactamente una métrica");
             return MILENA_ERR_UNSUPPORTED;
         }
-        MilenaStreamSpillPolicy policy = {
+        policy = (MilenaStreamSpillPolicy){
             spill_policy->value,
             spill_policy->group_memory_budget_bytes,
             spill_policy->group_spill_quota_bytes,
@@ -1599,16 +1601,15 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
             spill_policy->group_max_output_bytes,
             spill_policy->group_max_runs
         };
-        status = milena_stream_csv_grouped_spill_with_options(
-            input_path, output_path, group_key->value, &metrics[0], options,
-            &policy, &report, error);
-    } else if (group_block) {
-        status = milena_stream_csv_grouped_with_options(input_path, output_path,
-            group_key->value, metrics, metric_count, options, &report, error);
-    } else {
-        status = milena_stream_csv_summary_with_options(input_path, output_path,
-            metrics, metric_count, options, &report, error);
+        policy_ptr = &policy;
     }
+    MilenaStreamExecutionPlan plan;
+    status = milena_stream_plan_build_csv(group_block != NULL,
+                                          spill_policy != NULL, &plan, error);
+    if (status == MILENA_OK)
+        status = milena_stream_execute_csv_plan(&plan, input_path, output_path,
+            group_key ? group_key->value : NULL, metrics, metric_count, options,
+            policy_ptr, &report, error);
     if (status == MILENA_OK && output) {
         fprintf(output, "Programa de flujo ejecutado: %s\n", input_path);
         fprintf(output, "Filas: %zu | Válidas: %zu | Malformadas: %zu | Lote: %zu | Registro máximo observado: %zu bytes | Tiempo medido: %.3f ms\n",
