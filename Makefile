@@ -91,7 +91,7 @@ tests/test_stream: tests/test_stream.c src/stream.c src/spill.c src/common.c
 test-spill: tests/test_spill
 	./tests/test_spill
 
-tests/test_spill: tests/test_spill.c include/spill.h src/spill.c src/common.c
+tests/test_spill: tests/test_spill.c include/spill.h src/spill.c src/stream.c src/common.c
 	$(CC) $(CFLAGS) tests/test_spill.c src/spill.c src/common.c $(LDFLAGS) -o $@
 
 .PHONY: test-finance
