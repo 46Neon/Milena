@@ -1317,12 +1317,12 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
     milena_json_write_string(staged, group_column);
     if (fprintf(staged,
         ",\"filas\":%zu,\"filas_validas\":%zu,\"filas_malformadas\":%zu,"
-        "\"limite_filas\":%zu,\"presupuesto_tiempo_ms\":%.3f,"
+        "\"bytes_entrada\":%zu,\"limite_filas\":%zu,\"presupuesto_tiempo_ms\":%.3f,"
         "\"pico_registro_bytes\":%zu,\"capacidad_buffer_registro_bytes\":%zu,"
         "\"limite_registro_bytes\":%zu,\"limite_columnas\":%zu,"
         "\"memoria_reductor_bytes\":%zu,\"cuota_spill_bytes\":%zu,"
         "\"limite_salida_bytes\":%zu,\"grupos\":", rows_read, rows_valid, malformed,
-        options->max_rows, options->max_elapsed_milliseconds,
+        input_bytes, options->max_rows, options->max_elapsed_milliseconds,
         observed_record_bytes, record_capacity, options->max_record_bytes,
         options->max_columns, policy->memory_budget_bytes,
         policy->spill_quota_bytes, output_byte_limit) < 0) {
