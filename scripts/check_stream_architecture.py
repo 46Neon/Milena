@@ -39,17 +39,20 @@ if "AST_AGRUPACION_POR" not in stream_runtime or "group_key->value" not in strea
     raise SystemExit("grouping key bypasses typed AST execution")
 if "milena_stream_csv_grouped_with_options" not in stream_header:
     raise SystemExit("grouped streaming API is not declared in the canonical contract")
-# Do not let docs imply a spill implementation before a typed backend, source
-# manifest entry, runtime path, and end-to-end evidence actually exist.
+# Spill remains in the canonical stream backend and requires the language AST
+# to transport a private directory plus a finite disk budget.
 if "src/spill.c" in make or "src/spill_store.c" in make:
-    raise SystemExit("planned spill module must be implemented and integrated before entering SOURCES")
-if "no hay spill-to-disk" not in streaming_docs.lower():
-    raise SystemExit("streaming docs must state that grouped spill is not implemented")
-if "no implementa spill-to-disk" not in pr25_docs.lower():
-    raise SystemExit("PR25 status must state that grouped spill is not implemented")
-for marker in ("contrato", "checksum", "límites", "limpieza", "e2e"):
-    if marker not in spill_contract.lower():
-        raise SystemExit(f"grouped spill design contract is incomplete: {marker}")
+    raise SystemExit("grouped spill must stay in the canonical stream backend")
+for marker in ("stream_spill_directory", "stream_spill_disk_limit", "stream_resident_group_limit"):
+    if marker not in ast:
+        raise SystemExit(f"typed spill policy missing from AST: {marker}")
+for marker in ("options.spill_directory", "options.max_spill_bytes"):
+    if marker not in runtime:
+        raise SystemExit(f"typed spill policy missing from runtime plumbing: {marker}")
+if "mkstemp" not in stream or "tmpfile()" in stream:
+    raise SystemExit("grouped spill must use explicit private named runs, not tmpfile")
+if "stream_format.run" not in (ROOT / "tests/test_stream_format.c").read_text():
+    raise SystemExit("version/checksum spill format coverage is missing")
 for marker in ("STREAM_HARD_MAX_GROUPS", "STREAM_GROUP_STATE_BUDGET", "qsort(groups"):
     if marker not in stream:
         raise SystemExit(f"bounded/deterministic grouping guard missing: {marker}")

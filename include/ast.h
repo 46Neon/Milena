@@ -91,6 +91,10 @@ typedef struct ASTNode {
     size_t stream_record_limit;
     size_t stream_column_limit;
     size_t stream_group_limit;
+    size_t stream_resident_group_limit;
+    /* Spill policies are typed AST data, never parsed again at runtime. */
+    char *stream_spill_directory;
+    size_t stream_spill_disk_limit;
     size_t stream_row_limit;
     double stream_time_limit_ms;
     struct ASTNode **children;

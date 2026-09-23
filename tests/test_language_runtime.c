@@ -2,6 +2,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define CHECK(condition, message) \
     do { \
@@ -334,7 +336,8 @@ static int run_grouped_human_stream_pipeline(void) {
         "Norte,5,r1\n"
         "Sur,1,r2\n"
         "Norte,no-num,r3\n"
-        "Sur,4,\n";
+        "Sur,4,\n"
+        "\"Centro\nNorte\",2,r5\n";
     CHECK(write_file(csv, content), "agrupación de flujo: no se pudo crear el CSV");
     const char *source =
         ".analisis ventas_agrupadas {\n"
@@ -355,13 +358,43 @@ static int run_grouped_human_stream_pipeline(void) {
     CHECK(strstr(text, "\"modo\":\"flujo_agrupado\"") != NULL &&
           north != NULL && south != NULL && north < south &&
           strstr(text, "\"limite_grupos\":4") != NULL &&
+          strstr(text, "\"filas\":5") != NULL &&
+          strstr(text, "Centro\\nNorte") != NULL &&
           strstr(text, "\"limite_filas\":10") != NULL &&
           strstr(text, "\"presupuesto_tiempo_ms\":30000.000") != NULL &&
           strstr(text, "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":5") != NULL &&
           strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2") != NULL,
           "agrupación de flujo: AST, orden o semántica de valores inválidos incorrectos");
+    char baseline[8192];
+    strcpy(baseline, text);
+    const char *spill_directory = "test-language-runtime-spill-temp";
+    CHECK(mkdir(spill_directory, 0700) == 0,
+          "spill E2E: no se pudo crear el directorio temporal privado");
+    const char *spill_source =
+        ".analisis ventas_agrupadas_spill {\n"
+        "  datos desde \"test-language-runtime-grouped-stream.csv\" procesar por lotes de 2 filas con grupos de 4 con grupos residentes de 1 con filas hasta 10 con tiempo hasta 30000 ms con temporales en \"test-language-runtime-spill-temp\" con disco hasta 1 MiB\n"
+        "  agrupar por \"zona\" resumir { suma de \"importe\"; contar de \"referencia\"; }\n"
+        "  guardar resultado en \"test-language-runtime-grouped-stream.json\"\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(spill_source,
+        "test-language-runtime-grouped-stream.milena", NULL, &error) == MILENA_OK,
+        error.message);
+    CHECK(read_file(output, text, sizeof(text)),
+          "spill E2E: no se creó el reporte agrupado");
+    const char *base_results = strstr(baseline, "\"resultados\":[");
+    const char *spill_results = strstr(text, "\"resultados\":[");
+    const char *spill_north = strstr(text, "\"clave\":\"Norte\"");
+    const char *spill_south = strstr(text, "\"clave\":\"Sur\"");
+    CHECK(strstr(text, "\"spill\":true") != NULL &&
+          spill_north != NULL && spill_south != NULL && spill_north < spill_south &&
+          base_results != NULL && spill_results != NULL &&
+          strcmp(base_results, spill_results) == 0,
+          "spill E2E: resultados agrupados no equivalen al camino en memoria");
     remove(csv);
     remove(output);
+    CHECK(rmdir(spill_directory) == 0,
+          "spill E2E: quedaron corridas temporales después del éxito");
     return 0;
 }
 

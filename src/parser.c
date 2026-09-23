@@ -662,13 +662,19 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
             load->stream_record_limit = (size_t)(limit * 1024.0 * 1024.0);
         } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "grupos") == 0) {
             parser_advance(parser);
+            bool resident = parser_is_identifier(parser) &&
+                            strcmp(parser->current.lexeme, "residentes") == 0;
+            if (resident) parser_advance(parser);
+            size_t *target = resident ? &load->stream_resident_group_limit :
+                                       &load->stream_group_limit;
+            if (*target != 0) { parser_error(parser, "El límite de grupos no se puede repetir"); goto fail; }
             if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de grupos")) goto fail;
             if (!parser_expect(parser, TOKEN_NUMERO, "El límite de grupos debe ser numérico")) goto fail;
             double groups = parser->previous.number_value;
             if (!isfinite(groups) || groups < 1.0 || groups > 100000.0 || floor(groups) != groups) {
                 parser_error(parser, "El límite de grupos debe ser un entero entre 1 y 100000"); goto fail;
             }
-            load->stream_group_limit = (size_t)groups;
+            *target = (size_t)groups;
         } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "columnas") == 0) {
             parser_advance(parser);
             if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de columnas")) goto fail;
@@ -697,8 +703,33 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
             }
             if (!parser_expect_word(parser, "ms", "Se esperaba la unidad 'ms'")) goto fail;
             load->stream_time_limit_ms = milliseconds;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "temporales") == 0) {
+            parser_advance(parser);
+            if (load->stream_spill_directory) {
+                parser_error(parser, "El directorio temporal de spill no se puede repetir"); goto fail;
+            }
+            if (!parser_expect_word(parser, "en", "Se esperaba 'en' después de temporales")) goto fail;
+            if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba la ruta del directorio temporal entre comillas")) goto fail;
+            if (!parser->previous.lexeme || !parser->previous.lexeme[0] || strlen(parser->previous.lexeme) > 1024u) {
+                parser_error(parser, "La ruta temporal debe tener entre 1 y 1024 bytes"); goto fail;
+            }
+            load->stream_spill_directory = milena_strdup(parser->previous.lexeme);
+            if (!load->stream_spill_directory) { parser_error(parser, "Sin memoria para guardar el directorio temporal"); goto fail; }
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "disco") == 0) {
+            parser_advance(parser);
+            if (load->stream_spill_disk_limit != 0) {
+                parser_error(parser, "El presupuesto de disco no se puede repetir"); goto fail;
+            }
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de disco")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El presupuesto de disco debe ser numérico")) goto fail;
+            double mib = parser->previous.number_value;
+            if (!isfinite(mib) || mib < 1.0 || mib > 1024.0 || floor(mib) != mib) {
+                parser_error(parser, "El presupuesto temporal debe ser un entero de 1 a 1024 MiB"); goto fail;
+            }
+            if (!parser_expect(parser, TOKEN_KW_MIB, "Se esperaba la unidad MiB")) goto fail;
+            load->stream_spill_disk_limit = (size_t)mib * 1024u * 1024u;
         } else {
-            parser_error(parser, "Se esperaba 'registros', 'grupos', 'columnas', 'filas' o 'tiempo' después de 'con'"); goto fail;
+            parser_error(parser, "Se esperaba 'registros', 'grupos', 'columnas', 'filas', 'tiempo', 'temporales' o 'disco' después de 'con'"); goto fail;
         }
     }
     if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);

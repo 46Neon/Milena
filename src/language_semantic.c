@@ -78,7 +78,34 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
         if (argument_status != MILENA_OK) return argument_status;
     }
     switch (node->type) {
+        case AST_BLOQUE_ANALISIS: {
+            const ASTNode *spill_load = NULL;
+            bool has_grouped_stream = false;
+            for (size_t i = 0; i < node->child_count; i++) {
+                const ASTNode *child = node->children[i];
+                if (child && child->type == AST_LLAMADA_CARGAR &&
+                    (child->stream_spill_directory || child->stream_spill_disk_limit))
+                    spill_load = child;
+                if (child && child->type == AST_BLOQUE_AGRUPAR &&
+                    child->type_name && strcmp(child->type_name, "flujo") == 0)
+                    has_grouped_stream = true;
+            }
+            if (spill_load && (!has_grouped_stream ||
+                !spill_load->stream_spill_directory ||
+                spill_load->stream_spill_disk_limit < 1024u * 1024u ||
+                spill_load->stream_spill_disk_limit > 1024u * 1024u * 1024u))
+                return semantic_error(spill_load, error,
+                    "El spill requiere una ruta temporal explícita, un presupuesto de disco entre 1 y 1024 MiB y una agrupación en flujo");
+            break;
+        }
         case AST_LLAMADA_CARGAR:
+            if ((node->stream_spill_directory || node->stream_spill_disk_limit ||
+                 node->stream_resident_group_limit) &&
+                (!node->type_name || strcmp(node->type_name, "flujo") != 0 ||
+                 !node->stream_spill_directory || !node->stream_spill_directory[0] ||
+                 node->stream_spill_disk_limit < 1024u * 1024u ||
+                 node->stream_spill_disk_limit > 1024u * 1024u * 1024u))
+                return semantic_error(node, error, "Política de spill de flujo inválida o incompleta");
             if (node->type_name && strcmp(node->type_name, "flujo") == 0 &&
                 node->number_value != 0.0 &&
                 (node->number_value < 1.0 || node->number_value > 1000000.0 ||
@@ -90,6 +117,7 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                 return semantic_error(node, error, "Límite de registro de flujo inválido");
             if (node->stream_column_limit > 4096u ||
                 node->stream_group_limit > 100000u ||
+                node->stream_resident_group_limit > 100000u ||
                 node->stream_row_limit > 1000000000u ||
                 (node->stream_time_limit_ms != 0.0 &&
                  (!isfinite(node->stream_time_limit_ms) ||

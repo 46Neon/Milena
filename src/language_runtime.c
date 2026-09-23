@@ -1649,6 +1649,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
 
     if (load->type_name && strcmp(load->type_name, "flujo") == 0) {
         char output_path[2048];
+        char spill_directory[2048];
         const ASTNode *export_node = dataset_runtime_find_child(analysis,
                                                                   AST_BLOQUE_EXPORTAR);
         const char *requested_output = export_node && export_node->value
@@ -1669,12 +1670,25 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 options.max_columns = load->stream_column_limit;
             if (load->stream_group_limit > 0)
                 options.max_groups = load->stream_group_limit;
+            if (load->stream_resident_group_limit > 0)
+                options.max_resident_groups = load->stream_resident_group_limit;
             if (load->stream_row_limit > 0)
                 options.max_rows = load->stream_row_limit;
             if (load->stream_time_limit_ms > 0.0)
                 options.max_elapsed_milliseconds = load->stream_time_limit_ms;
-            status = run_stream_dataset_with_options(analysis, input, output_path,
-                                                     &options, output, error);
+            if (load->stream_spill_directory) {
+                status = dataset_runtime_path(load->stream_spill_directory,
+                    script_filename, true, spill_directory,
+                    sizeof(spill_directory), error);
+                if (status == MILENA_OK) {
+                    options.spill_enabled = true;
+                    options.spill_directory = spill_directory;
+                    options.max_spill_bytes = load->stream_spill_disk_limit;
+                }
+            }
+            if (status == MILENA_OK)
+                status = run_stream_dataset_with_options(analysis, input, output_path,
+                                                         &options, output, error);
         }
         ast_destroy(program);
         parser_release(&parser);

@@ -26,6 +26,15 @@ typedef struct {
     double max_elapsed_milliseconds;
     /* Hard-capped per-operation group budget; 0 selects the default. */
     size_t max_groups;
+    /* Optional resident threshold when spill is enabled; 0 selects a safe default. */
+    size_t max_resident_groups;
+    /* Grouped CSV only. Disabled by default; 0 limits select safe defaults. */
+    bool spill_enabled;
+    /* Required only when spill_enabled; must name an existing private directory. */
+    const char *spill_directory;
+    size_t max_spill_bytes;
+    size_t max_spill_records;
+    size_t max_spill_files;
 } MilenaStreamOptions;
 
 typedef struct {
@@ -54,6 +63,10 @@ typedef struct {
     size_t bytes_read;
     size_t groups;
     size_t max_groups;
+    bool spilled;
+    size_t spill_runs;
+    size_t spill_bytes;
+    size_t spill_records;
 } MilenaStreamReport;
 
 /*
@@ -80,7 +93,11 @@ MilenaStatus milena_stream_csv_summary(const char *input_path,
 
 const char *milena_stream_operation_name(MilenaStreamOperation operation);
 
-/* Canonical one-pass CSV grouping. Group keys are emitted in bytewise order. */
+/*
+ * Canonical grouped CSV. Spill, when enabled in typed options, writes bounded
+ * checksummed local runs (tmpfile) and merges them in bytewise key order.
+ * max_spill_bytes/records/files are total per invocation; 0 selects defaults.
+ */
 MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
                                        const char *output_path,
                                        const char *group_column,
