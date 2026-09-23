@@ -25,18 +25,22 @@ for marker in required:
         raise SystemExit(f"missing typed AST contract: {marker}")
 if "milena_validate_ast(program, error)" not in runtime:
     raise SystemExit("runtime bypasses semantic validation")
-if "run_stream_dataset_with_options" not in runtime or "milena_stream_csv_summary_with_options" not in runtime:
-    raise SystemExit("stream backend is not invoked by the canonical runtime")
+if "run_stream_dataset_with_options" not in runtime or "milena_stream_execute_csv_plan" not in runtime:
+    raise SystemExit("typed CSV plan is not invoked by the canonical runtime")
+if "milena_stream_csv_summary_with_options" not in stream:
+    raise SystemExit("CSV summary backend is not dispatched by the stream planner")
 # The natural syntax branch must consume typed AST operations, not scan text.
 start = runtime.index("static MilenaStatus run_stream_dataset_with_options")
 end = runtime.index("MilenaStatus milena_run_dataset_program", start)
 stream_runtime = runtime[start:end]
 if "summary->stream_operation" not in stream_runtime:
     raise SystemExit("natural stream metrics do not use typed AST operations")
-if "milena_stream_csv_grouped_with_options" not in stream_runtime:
-    raise SystemExit("grouped streaming is not invoked by the canonical runtime")
-if "milena_stream_csv_grouped_spill_with_options" not in stream_runtime:
-    raise SystemExit("streaming spill is not invoked by the canonical runtime")
+if "milena_stream_execute_csv_plan" not in stream_runtime:
+    raise SystemExit("canonical runtime bypasses typed CSV plan execution")
+if "milena_stream_csv_grouped_with_options" not in stream:
+    raise SystemExit("grouped streaming is not dispatched by the stream planner")
+if "milena_stream_csv_grouped_spill_with_options" not in stream:
+    raise SystemExit("streaming spill is not dispatched by the stream planner")
 if "milena_stream_csv_grouped_spill_with_options" not in stream_header or \
    "milena_grouped_aggregate_finalize" not in stream:
     raise SystemExit("streaming spill does not use the canonical reducer callback")
