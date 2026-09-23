@@ -390,6 +390,7 @@ def run_validation(output_path: Path | None) -> dict[str, Any]:
         con registros de hasta 1 MiB
         con columnas de 16
         con filas hasta {ROWS}
+        con tiempo hasta 600000 ms
         con grupos de 128
     agrupar por "grupo_spill" #spill({json.dumps(str(scratch_path), ensure_ascii=False)}, 4096, 134217728, 128, 128, 16777216, 4096)
         resumir {{ suma de "importe"; }}
