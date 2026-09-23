@@ -27,7 +27,7 @@ int main(void) {
     assert(milena_partition_result_decode(buffer, written, &decoded,
                                           &error) == MILENA_ERR_DATA);
     buffer[12] ^= 1u;
-    buffer[4] = 2u;
+    buffer[4] = 3u;
     assert(milena_partition_result_decode(buffer, written, &decoded,
                                           &error) == MILENA_ERR_PARSE);
     assert(milena_partition_result_decode(buffer, written - 1, &decoded,
