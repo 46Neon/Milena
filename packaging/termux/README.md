@@ -87,6 +87,23 @@ metadatos (`python3 scripts/test_termux_packaging.py`). Si no existe hardware
 registrado, esa limitación debe permanecer visible y no se genera una falsa
 marca de compilación/instalación.
 
+## Aceptación real de CSV de 10 GB
+
+El workflow manual `.github/workflows/termux-aarch64-contract.yml` permite
+activar `run_10gb_gate=true` junto con `confirm_device=true`. En el dispositivo
+Termux/aarch64 compila el binario canónico con Clang/Bionic y ejecuta la misma
+prueba de CSV sintético que en Linux y Windows: al menos 10.000.000.000 bytes,
+1.000.000 filas y 1.000 grupos. Compara la ruta en memoria con la ruta spill,
+exige scratch temporal observado en disco y limpia los archivos al terminar.
+
+La prueba necesita al menos 10,5 GB libres en el sistema de archivos temporal
+del runner; verifica el espacio antes de generar el archivo. Sus tiempos y RSS
+son del proceso y del dispositivo concretos; el scratch es espacio en disco,
+no RAM, y estos datos sintéticos no garantizan rendimiento para todos los CSV.
+Si el gate se desactiva, el runner no está disponible o la ejecución se omite,
+Termux no queda validado para 10 GB. El informe JSON y el entorno se guardan en
+el artefacto de Actions cuando la prueba se ejecuta realmente.
+
 ## Antes de solicitar inclusión oficial
 
 1. Ejecutar lint y `build-package.sh -I -f milena` en el checkout oficial.
