@@ -339,6 +339,14 @@ static int grouped_record_compare(const void *left, const void *right) {
     return key_compare(a + 4, a_length, b + 4, b_length);
 }
 
+typedef struct {
+    unsigned char *records;
+    size_t stride;
+    size_t capacity;
+    size_t count;
+    size_t max_key_bytes;
+} GroupRunBatch;
+
 /* A sorted run must contain at most one partial state per key. Map flushes can
  * serialize the same key in later chunks; qsort alone only orders those partials.
  * Coalescing here lets the bounded pairwise merge preserve that invariant and
@@ -435,14 +443,6 @@ static void remove_run_set(const char *base, size_t pass, size_t count) {
         if (path) { (void)remove(path); free(path); }
     }
 }
-
-typedef struct {
-    unsigned char *records;
-    size_t stride;
-    size_t capacity;
-    size_t count;
-    size_t max_key_bytes;
-} GroupRunBatch;
 
 static MilenaStatus write_group_run(const char *path, const GroupRunBatch *batch,
                                     size_t quota, size_t *bytes_written,
