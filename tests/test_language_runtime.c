@@ -418,6 +418,75 @@ static int run_stream_filter_pipeline(void) {
           strstr(text, "\"valor\":14") != NULL,
           "filtro: resultado filtrado no coincide con agregado sin filtro de la clave seleccionada");
 
+    const char *numeric_csv = "test-language-runtime-filter-numeric.csv";
+    const char *numeric_output = "test-language-runtime-filter-numeric.json";
+    const char *numeric_content =
+        "importe,aporte\n"
+        "10,1\n"
+        "10.01,2\n"
+        "11,3\n"
+        ",100\n"
+        "no-numerico,100\n"
+        "10.0,4\n"
+        "nan,99\n"
+        "12x,99\n";
+    CHECK(write_file(numeric_csv, numeric_content),
+          "filtro numérico: no se pudo crear el CSV");
+    const char *numeric_source =
+        ".analisis filtro_numerico {\n"
+        "  variable importe numerica\n"
+        "  variable aporte numerica\n"
+        "  datos desde \"test-language-runtime-filter-numeric.csv\" con filas hasta 100\n"
+        "  filtrar \"importe\" > 10;\n"
+        "  resumir { suma de \"aporte\"; }\n"
+        "  guardar resultado en \"test-language-runtime-filter-numeric.json\"\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(numeric_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_OK,
+        error.message);
+    CHECK(read_file(numeric_output, text, sizeof(text)) &&
+          strstr(text, "\"valor\":5") != NULL &&
+          strstr(text, "\"valores_validos\":2") != NULL,
+          "filtro numérico: > debe excluir límite, nulos, texto inválido y NaN");
+
+    const char *numeric_missing_csv = "test-language-runtime-filter-numeric-missing.csv";
+    CHECK(write_file(numeric_missing_csv, "aporte\n1\n"),
+          "filtro numérico: no se pudo crear CSV sin columna de filtro");
+    const char *numeric_missing_source =
+        ".analisis filtro_numerico_sin_columna {\n"
+        "  variable importe numerica\n"
+        "  variable aporte numerica\n"
+        "  datos desde \"test-language-runtime-filter-numeric-missing.csv\"\n"
+        "  filtrar \"importe\" > 10;\n"
+        "  resumir { suma de \"aporte\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(numeric_missing_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_ERR_DATA,
+        "filtro numérico: una columna tipada ausente de la cabecera debe rechazarse");
+
+    const char *wrong_type_source =
+        ".analisis filtro_tipo_incorrecto {\n"
+        "  variable importe texto\n"
+        "  variable aporte numerica\n"
+        "  datos desde \"test-language-runtime-filter-numeric.csv\"\n"
+        "  filtrar \"importe\" > 10;\n"
+        "  resumir { suma de \"aporte\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(wrong_type_source,
+        "test-language-runtime-filter.milena", NULL, &error) != MILENA_OK,
+        "filtro numérico: columna no numérica debe rechazarse semánticamente");
+
+    const char *undeclared_source =
+        ".analisis filtro_sin_declaracion {\n"
+        "  variable aporte numerica\n"
+        "  datos desde \"test-language-runtime-filter-numeric.csv\"\n"
+        "  filtrar \"importe\" > 10;\n"
+        "  resumir { suma de \"aporte\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(undeclared_source,
+        "test-language-runtime-filter.milena", NULL, &error) != MILENA_OK,
+        "filtro numérico: columna sin declaración tipada debe rechazarse");
+
     const char *global_output = "test-language-runtime-filter-global.json";
     const char *global_source =
         ".analisis filtro_global {\n"
@@ -480,13 +549,14 @@ static int run_stream_filter_pipeline(void) {
         ".analisis filtro_no_soportado {\n"
         "  variable importe numerica\n"
         "  datos desde \"test-language-runtime-filter.csv\"\n"
-        "  filtrar \"importe\" > 3;\n"
+        "  filtrar \"importe\" >= 3;\n"
         "  resumir { suma de \"importe\"; }\n"
         "}\n";
     CHECK(milena_run_dataset_program(invalid_source,
         "test-language-runtime-filter.milena", NULL, &error) == MILENA_ERR_PARSE,
         "filtro: operadores y expresiones no soportados deben fallar antes de ejecutar");
     remove(csv); remove(duplicate); remove(output); remove(unfiltered); remove(global_output);
+    remove(numeric_csv); remove(numeric_output); remove(numeric_missing_csv);
     return 0;
 }
 

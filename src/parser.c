@@ -799,13 +799,32 @@ static ASTNode *parse_human_stream_filter(Parser *parser) {
     char column[MAX_TOKEN_LEN];
     strncpy(column, parser->previous.lexeme, sizeof(column) - 1);
     column[sizeof(column) - 1] = '\0';
-    if (!parser_expect(parser, TOKEN_IGUAL_IGUAL,
-                       "El filtro de flujo solo admite igualdad exacta '=='")) return NULL;
-    if (!parser_expect(parser, TOKEN_CADENA,
-                       "El filtro de flujo requiere un valor de texto entre comillas")) return NULL;
-    char value[MAX_TOKEN_LEN];
-    strncpy(value, parser->previous.lexeme, sizeof(value) - 1);
-    value[sizeof(value) - 1] = '\0';
+
+    ASTStreamFilterKind filter_kind;
+    char text_value[MAX_TOKEN_LEN] = {0};
+    double number_value = 0.0;
+    if (parser_match(parser, TOKEN_IGUAL_IGUAL)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "El filtro == requiere un valor de texto entre comillas")) return NULL;
+        strncpy(text_value, parser->previous.lexeme, sizeof(text_value) - 1);
+        text_value[sizeof(text_value) - 1] = '\0';
+        filter_kind = AST_STREAM_FILTER_TEXT_EQUAL;
+    } else if (parser_match(parser, TOKEN_MAYOR)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_NUMERO,
+                           "El filtro > requiere un literal numérico")) return NULL;
+        number_value = parser->previous.number_value;
+        if (!isfinite(number_value)) {
+            parser_error(parser, "El límite numérico del filtro debe ser finito");
+            return NULL;
+        }
+        filter_kind = AST_STREAM_FILTER_NUMERIC_GREATER;
+    } else {
+        parser_error(parser,
+            "El filtro de flujo solo admite igualdad textual == o comparación numérica >");
+        return NULL;
+    }
     if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
                        "Se esperaba ';' después del filtro de flujo")) return NULL;
     ASTNode *filter = ast_create_leaf(AST_STREAM_FILTER, column);
@@ -813,11 +832,16 @@ static ASTNode *parse_human_stream_filter(Parser *parser) {
         parser_error(parser, "Sin memoria para el filtro de flujo");
         return NULL;
     }
-    filter->type_name = milena_strdup(value);
-    if (!filter->type_name) {
-        ast_destroy(filter);
-        parser_error(parser, "Sin memoria para el valor del filtro de flujo");
-        return NULL;
+    filter->stream_filter_kind = filter_kind;
+    if (filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+        filter->type_name = milena_strdup(text_value);
+        if (!filter->type_name) {
+            ast_destroy(filter);
+            parser_error(parser, "Sin memoria para el valor del filtro de flujo");
+            return NULL;
+        }
+    } else {
+        filter->number_value = number_value;
     }
     return filter;
 }

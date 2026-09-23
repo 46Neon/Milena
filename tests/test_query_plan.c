@@ -1,6 +1,7 @@
 #include "query_plan.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -137,6 +138,34 @@ static void test_filtered_grouped_stream_plan(void) {
     ast_destroy(analysis);
 }
 
+static void test_numeric_filter_plan(void) {
+    ASTNode *analysis = new_analysis();
+    ASTNode *filter = leaf_with_value(AST_STREAM_FILTER, "importe");
+    filter->stream_filter_kind = AST_STREAM_FILTER_NUMERIC_GREATER;
+    filter->number_value = 10.0;
+    assert(ast_add_child(analysis, filter));
+    assert(ast_add_child(analysis, summary_block()));
+    MilenaStreamExecutionPlan plan;
+    MilenaError error = {0};
+    assert(milena_stream_execution_plan_build(analysis, &plan, &error) == MILENA_OK);
+    assert(plan.filter == filter && plan.filter->number_value == 10.0 &&
+           plan.filter->stream_filter_kind == AST_STREAM_FILTER_NUMERIC_GREATER &&
+           plan.filter->type_name == NULL);
+    assert(plan.logical_operators[0] == MILENA_LOGICAL_CSV_SCAN);
+    assert(plan.logical_operators[1] == MILENA_LOGICAL_FILTER);
+    assert(plan.logical_operators[2] == MILENA_LOGICAL_GLOBAL_AGGREGATE);
+    ast_destroy(analysis);
+
+    analysis = new_analysis();
+    filter = leaf_with_value(AST_STREAM_FILTER, "importe");
+    filter->stream_filter_kind = AST_STREAM_FILTER_NUMERIC_GREATER;
+    filter->number_value = NAN;
+    assert(ast_add_child(analysis, filter));
+    assert(ast_add_child(analysis, summary_block()));
+    assert(milena_stream_execution_plan_build(analysis, &plan, &error) == MILENA_ERR_PARSE);
+    ast_destroy(analysis);
+}
+
 static void test_legacy_global_summary_plan(void) {
     ASTNode *analysis = new_analysis();
     ASTNode *summary = ast_create(AST_BLOQUE_RESUMIR);
@@ -183,6 +212,7 @@ int main(void) {
     test_grouped_stream_plan();
     test_grouped_spill_stream_plan();
     test_filtered_grouped_stream_plan();
+    test_numeric_filter_plan();
     test_legacy_global_summary_plan();
     test_ambiguous_and_unsupported_plans();
     puts("Canonical logical/physical stream plans validated.");

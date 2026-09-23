@@ -1,6 +1,7 @@
 #include "language_semantic.h"
 #include "grouped_aggregate.h"
 #include <string.h>
+#include <math.h>
 
 static bool known_sst_command(const char *name) {
     static const char *const commands[] = {
@@ -236,19 +237,31 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
             }
             break;
         case AST_STREAM_FILTER: {
-            if (!node->value || !node->value[0] || !node->type_name)
+            if (!node->value || !node->value[0])
                 return semantic_error(node, error,
-                    "El filtro de flujo requiere columna y literal de texto para igualdad exacta");
+                    "El filtro de flujo requiere una columna declarada");
             if (!node->parent || node->parent->type != AST_BLOQUE_ANALISIS ||
                 !stream_find_load(node->parent))
                 return semantic_error(node, error,
                     "filtrar solo se admite dentro de un análisis con datos desde en modo flujo");
             const ASTNode *column = stream_find_column_declaration(
                 node->parent, node->value);
-            if (!column || !column->type_name ||
-                strcmp(column->type_name, "texto") != 0)
+            if (!column || !column->type_name)
                 return semantic_error(node, error,
-                    "La columna de filtrar debe declararse variable <columna> texto");
+                    "La columna del filtro debe tener una declaración variable tipada");
+            if (node->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+                if (!node->type_name || strcmp(column->type_name, "texto") != 0)
+                    return semantic_error(node, error,
+                        "El filtro == requiere una columna declarada texto y un literal textual");
+            } else if (node->stream_filter_kind == AST_STREAM_FILTER_NUMERIC_GREATER) {
+                if (node->type_name || !isfinite(node->number_value) ||
+                    strcmp(column->type_name, "numerica") != 0)
+                    return semantic_error(node, error,
+                        "El filtro > requiere una columna declarada numerica y un literal finito");
+            } else {
+                return semantic_error(node, error,
+                    "Tipo de predicado de flujo no soportado");
+            }
             break;
         }
         case AST_AGRUPACION_POR:

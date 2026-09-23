@@ -270,3 +270,50 @@ doc=json.load(open(sys.argv[1]))
 assert doc['resultados']==[] and doc['grupos']==0
 PY
 [ ! -e "$TMP_DIR/filter-empty-scratch.bin" ]
+# Typed numeric `>` predicates reject null/malformed fields by non-match and
+# produce the same grouped result in the bounded-memory and spill backends.
+cat > "$TMP_DIR/filter-numeric.csv" <<'CSV'
+grupo,importe,valor
+A,10,1
+A,10.01,2
+B,12,4
+B,,100
+B,no-numerico,100
+A,nan,100
+A,10,3
+A,12x,100
+CSV
+cat > "$TMP_DIR/filter-numeric-memory.milena" <<'MILENA'
+.analisis filtro_numerico_en_memoria {
+  variable grupo texto
+  variable importe numerica
+  variable valor numerica
+  datos desde "filter-numeric.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  filtrar "importe" > 10;
+  agrupar por "grupo" resumir { suma de "valor"; }
+  guardar resultado en "filter-numeric-memory.json"
+}
+MILENA
+cat > "$TMP_DIR/filter-numeric-spill.milena" <<EOF_M
+.analisis filtro_numerico_con_spill {
+  variable grupo texto
+  variable importe numerica
+  variable valor numerica
+  datos desde "filter-numeric.csv" con grupos de 100 con filas hasta 1000 con tiempo hasta 30000 ms
+  filtrar "importe" > 10;
+  agrupar por "grupo" #spill("$TMP_DIR/filter-numeric-scratch.bin", 4096, 1048576, 128, 100) resumir { suma de "valor"; }
+  guardar resultado en "filter-numeric-spill.json"
+}
+EOF_M
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-numeric-memory.milena)
+(cd "$TMP_DIR" && "$MILENA_BIN" run filter-numeric-spill.milena)
+python3 - "$TMP_DIR" <<'PY'
+import json,pathlib,sys
+p=pathlib.Path(sys.argv[1])
+a=json.load(open(p/'filter-numeric-memory.json'))
+b=json.load(open(p/'filter-numeric-spill.json'))
+def values(doc):
+    return {r['clave']:r['metricas'][0]['valor'] for r in doc['resultados']}
+assert values(a)==values(b)=={'A':2,'B':4}, (values(a),values(b))
+PY
+[ ! -e "$TMP_DIR/filter-numeric-scratch.bin" ]

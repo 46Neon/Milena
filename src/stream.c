@@ -238,6 +238,33 @@ static bool stream_parse_number(const char *text, double *value) {
     return true;
 }
 
+static bool stream_filter_options_valid(const MilenaStreamOptions *options) {
+    if (!options->filter_column)
+        return options->filter_kind == MILENA_STREAM_FILTER_NONE &&
+               options->filter_value == NULL;
+    if (!options->filter_column[0]) return false;
+    if (options->filter_kind == MILENA_STREAM_FILTER_TEXT_EQUAL ||
+        options->filter_kind == MILENA_STREAM_FILTER_NONE)
+        /* NONE plus the legacy filter_value pair preserves pre-typed API callers. */
+        return options->filter_value != NULL;
+    if (options->filter_kind == MILENA_STREAM_FILTER_NUMERIC_GREATER)
+        return options->filter_value == NULL && isfinite(options->filter_number);
+    return false;
+}
+
+static bool stream_filter_matches(const MilenaStreamOptions *options,
+                                  const char *field) {
+    if (!options->filter_column) return true;
+    if (options->filter_kind == MILENA_STREAM_FILTER_TEXT_EQUAL ||
+        options->filter_kind == MILENA_STREAM_FILTER_NONE)
+        return strcmp(field, options->filter_value) == 0;
+    if (options->filter_kind == MILENA_STREAM_FILTER_NUMERIC_GREATER) {
+        double value = 0.0;
+        return stream_parse_number(field, &value) && value > options->filter_number;
+    }
+    return false;
+}
+
 static void stream_accumulate(StreamAccumulator *accumulator, double value) {
     double corrected = value - accumulator->compensation;
     double next_sum = accumulator->sum + corrected;
@@ -298,8 +325,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         options->max_elapsed_milliseconds < 0.0 ||
         !isfinite(options->max_elapsed_milliseconds) ||
         options->max_groups > STREAM_HARD_MAX_GROUPS ||
-        (options->filter_column && (!options->filter_column[0] || !options->filter_value)) ||
-        (!options->filter_column && options->filter_value))
+        !stream_filter_options_valid(options))
         return MILENA_ERR_ARGUMENT;
     if (error) milena_error_clear(error);
     double started = stream_now_ms();
@@ -397,7 +423,7 @@ MilenaStatus milena_stream_csv_summary_with_options(const char *input_path,
         status = stream_split(record, ',', fields, options->max_columns, &field_count, error);
         if (status != MILENA_OK) break;
         if (field_count != column_count) { malformed++; continue; }
-        if (filter_index >= 0 && strcmp(fields[filter_index], options->filter_value) != 0)
+        if (filter_index >= 0 && !stream_filter_matches(options, fields[filter_index]))
             continue;
         bool row_valid = true;
         for (size_t i = 0; i < metric_count; i++) {
@@ -652,8 +678,7 @@ MilenaStatus milena_stream_csv_grouped_with_options(
         options->max_elapsed_milliseconds < 0.0 ||
         !isfinite(options->max_elapsed_milliseconds) ||
         group_limit > STREAM_HARD_MAX_GROUPS ||
-        (options->filter_column && (!options->filter_column[0] || !options->filter_value)) ||
-        (!options->filter_column && options->filter_value)) {
+        !stream_filter_options_valid(options)) {
         milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
                          "Opciones inválidas para agrupación CSV en flujo");
         return MILENA_ERR_ARGUMENT;
@@ -818,7 +843,7 @@ MilenaStatus milena_stream_csv_grouped_with_options(
             status = MILENA_ERR_DATA;
             break;
         }
-        if (filter_index >= 0 && strcmp(fields[filter_index], options->filter_value) != 0)
+        if (filter_index >= 0 && !stream_filter_matches(options, fields[filter_index]))
             continue;
 
         size_t slot = (size_t)stream_group_hash(fields[group_index]) &
@@ -1222,8 +1247,7 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
         options->max_columns == 0 || options->max_columns > STREAM_MAX_COLUMNS ||
         options->max_elapsed_milliseconds < 0.0 ||
         !isfinite(options->max_elapsed_milliseconds) ||
-        (options->filter_column && (!options->filter_column[0] || !options->filter_value)) ||
-        (!options->filter_column && options->filter_value) ||
+        !stream_filter_options_valid(options) ||
         policy->memory_budget_bytes < 4096u ||
         policy->memory_budget_bytes > 536870912u ||
         policy->spill_quota_bytes == 0 ||
@@ -1345,7 +1369,7 @@ MilenaStatus milena_stream_csv_grouped_spill_with_options(
                 "Fila CSV agrupada con cantidad incorrecta de columnas");
             status = MILENA_ERR_DATA; break;
         }
-        if (filter_index >= 0 && strcmp(fields[filter_index], options->filter_value) != 0)
+        if (filter_index >= 0 && !stream_filter_matches(options, fields[filter_index]))
             continue;
         size_t key_length = strlen(fields[group_index]);
         if (key_length >= policy->max_key_bytes) {

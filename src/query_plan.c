@@ -1,6 +1,7 @@
 #include "query_plan.h"
 
 #include <string.h>
+#include <math.h>
 
 static MilenaStatus plan_error(MilenaError *error, MilenaStatus code,
                                const char *message) {
@@ -65,12 +66,21 @@ MilenaStatus milena_stream_execution_plan_build(
                                   "El plan de flujo requiere una fuente CSV en modo flujo");
             plan->source = node;
             break;
-        case AST_STREAM_FILTER:
-            if (plan->filter || !node->value || !node->value[0] || !node->type_name)
+        case AST_STREAM_FILTER: {
+            bool valid_filter = node->value && node->value[0];
+            if (node->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL)
+                valid_filter = valid_filter && node->type_name != NULL;
+            else if (node->stream_filter_kind == AST_STREAM_FILTER_NUMERIC_GREATER)
+                valid_filter = valid_filter && node->type_name == NULL &&
+                               isfinite(node->number_value);
+            else
+                valid_filter = false;
+            if (plan->filter || !valid_filter)
                 return plan_error(error, MILENA_ERR_PARSE,
-                                  "El plan admite un único filtro de igualdad exacta con texto");
+                    "El plan admite un único filtro textual == o numérico > con forma tipada");
             plan->filter = node;
             break;
+        }
         case AST_BLOQUE_RESUMIR:
             if (global_summary)
                 return plan_error(error, MILENA_ERR_PARSE,

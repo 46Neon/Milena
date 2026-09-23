@@ -18,6 +18,12 @@ typedef enum {
     MILENA_STREAM_STDDEV
 } MilenaStreamOperation;
 
+typedef enum {
+    MILENA_STREAM_FILTER_NONE = 0,
+    MILENA_STREAM_FILTER_TEXT_EQUAL,
+    MILENA_STREAM_FILTER_NUMERIC_GREATER
+} MilenaStreamFilterKind;
+
 typedef struct {
     size_t chunk_rows;
     size_t max_record_bytes;
@@ -27,9 +33,11 @@ typedef struct {
     double max_elapsed_milliseconds;
     /* Hard-capped per-operation group budget; 0 selects the default. */
     size_t max_groups;
-    /* Optional canonical exact string equality predicate; borrowed for call. */
+    /* Optional canonical typed predicate; string/value pointers are borrowed. */
     const char *filter_column;
     const char *filter_value;
+    MilenaStreamFilterKind filter_kind;
+    double filter_number;
 } MilenaStreamOptions;
 
 typedef struct {

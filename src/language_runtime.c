@@ -1679,7 +1679,14 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 options.max_elapsed_milliseconds = load->stream_time_limit_ms;
             if (stream_plan.filter) {
                 options.filter_column = stream_plan.filter->value;
-                options.filter_value = stream_plan.filter->type_name;
+                if (stream_plan.filter->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+                    options.filter_kind = MILENA_STREAM_FILTER_TEXT_EQUAL;
+                    options.filter_value = stream_plan.filter->type_name;
+                } else if (stream_plan.filter->stream_filter_kind ==
+                           AST_STREAM_FILTER_NUMERIC_GREATER) {
+                    options.filter_kind = MILENA_STREAM_FILTER_NUMERIC_GREATER;
+                    options.filter_number = stream_plan.filter->number_value;
+                }
             }
             status = run_stream_dataset_with_options(&stream_plan, input, output_path,
                                                      &options, output, error);
