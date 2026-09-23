@@ -91,6 +91,8 @@ typedef struct ASTNode {
     size_t stream_record_limit;
     size_t stream_column_limit;
     size_t stream_group_limit;
+    size_t stream_row_limit;
+    double stream_time_limit_ms;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;

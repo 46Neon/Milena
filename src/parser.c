@@ -678,8 +678,27 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
                 parser_error(parser, "El límite de columnas debe ser un entero entre 1 y 4096"); goto fail;
             }
             load->stream_column_limit = (size_t)columns;
+        } else if (parser_match(parser, TOKEN_KW_FILAS)) {
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de filas")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El límite de filas debe ser numérico")) goto fail;
+            double rows = parser->previous.number_value;
+            if (!isfinite(rows) || rows < 1.0 || rows > 1000000000.0 || floor(rows) != rows) {
+                parser_error(parser, "El límite de filas debe ser un entero entre 1 y 1000000000"); goto fail;
+            }
+            load->stream_row_limit = (size_t)rows;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "tiempo") == 0) {
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de tiempo")) goto fail;
+            if (!parser_expect(parser, TOKEN_NUMERO, "El presupuesto de tiempo debe ser numérico")) goto fail;
+            double milliseconds = parser->previous.number_value;
+            if (!isfinite(milliseconds) || milliseconds < 1.0 || milliseconds > 3600000.0 || floor(milliseconds) != milliseconds) {
+                parser_error(parser, "El límite de tiempo debe ser un entero de 1 a 3600000 ms"); goto fail;
+            }
+            if (!parser_expect_word(parser, "ms", "Se esperaba la unidad 'ms'")) goto fail;
+            load->stream_time_limit_ms = milliseconds;
         } else {
-            parser_error(parser, "Se esperaba 'registros', 'grupos' o 'columnas' después de 'con'"); goto fail;
+            parser_error(parser, "Se esperaba 'registros', 'grupos', 'columnas', 'filas' o 'tiempo' después de 'con'"); goto fail;
         }
     }
     if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);

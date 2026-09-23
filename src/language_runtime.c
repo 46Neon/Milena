@@ -1669,6 +1669,10 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 options.max_columns = load->stream_column_limit;
             if (load->stream_group_limit > 0)
                 options.max_groups = load->stream_group_limit;
+            if (load->stream_row_limit > 0)
+                options.max_rows = load->stream_row_limit;
+            if (load->stream_time_limit_ms > 0.0)
+                options.max_elapsed_milliseconds = load->stream_time_limit_ms;
             status = run_stream_dataset_with_options(analysis, input, output_path,
                                                      &options, output, error);
         }

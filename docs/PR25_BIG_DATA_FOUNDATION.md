@@ -15,6 +15,8 @@ Sintaxis humana y canónica:
   datos desde "datos/ventas.csv"
     procesar por lotes de 4096 filas
     con grupos de 1000
+    con filas hasta 1000000
+    con tiempo hasta 30000 ms
   agrupar por "region" resumir {
     suma de "importe";
     media de "importe";
@@ -24,7 +26,7 @@ Sintaxis humana y canónica:
 }
 ```
 
-`agrupar por` y cada operación de `resumir` quedan tipados en el AST. La clave se compara como texto CSV decodificado y los resultados se emiten en orden lexicográfico estable. El máximo predeterminado es 1.000 grupos; el lenguaje permite configurarlo hasta un tope duro de 100.000, y el backend impone además un presupuesto de estado de 64 MiB y claves de hasta 4 KiB. Si cualquier límite se supera, la operación falla en lugar de crecer sin cota.
+`agrupar por` y cada operación de `resumir` quedan tipados en el AST. La clave se compara como texto CSV decodificado y los resultados se emiten en orden lexicográfico estable. El máximo predeterminado es 1.000 grupos; el lenguaje permite configurarlo hasta un tope duro de 100.000, y el backend impone además un presupuesto de estado de 64 MiB y claves de hasta 4 KiB. `con filas hasta N` aplica un máximo de filas (1–1.000.000.000) y `con tiempo hasta N ms` un límite de tiempo transcurrido (1–3.600.000 ms); ambos quedan en el AST y se validan antes de entrar al backend. Si cualquier límite se supera, la operación falla en lugar de crecer sin cota; no se entrega un resultado parcial como éxito.
 
 Las métricas numéricas ignoran solo el valor no numérico de su columna, incrementan su propio contador de `valores_invalidos` y marcan la fila como malformada; otros valores válidos de esa misma fila todavía se agregan. `contar de` cuenta campos no vacíos, por lo que también admite columnas textuales. Una fila con cantidad de columnas incorrecta, CSV inválido, cabecera duplicada o columna solicitada inexistente rechaza toda la operación. No se crean grupos sin filas; un campo de clave vacío sí es una clave válida. La salida está ordenada por clave y la acumulación conserva el orden de lectura para una ejecución reproducible sobre la misma entrada.
 

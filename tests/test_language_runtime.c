@@ -284,7 +284,7 @@ static int run_human_stream_pipeline(void) {
     CHECK(write_file(csv, content), "flujo humano: no se pudo crear el CSV");
     const char *source =
         ".analisis ventas_grandes {\n"
-        "  datos desde \"test-language-runtime-human-stream.csv\" procesar por lotes de 2 filas con registros de hasta 1 MiB con columnas de 8\n"
+        "  datos desde \"test-language-runtime-human-stream.csv\" procesar por lotes de 2 filas con registros de hasta 1 MiB con columnas de 8 con filas hasta 10 con tiempo hasta 30000 ms\n"
         "  resumir { suma de \"importe\"; media de \"importe\"; minimo de \"importe\"; maximo de \"importe\"; contar de \"importe\"; varianza de \"importe\"; desviacion_estandar de \"importe\"; }\n"
         "  guardar resultado en \"test-language-runtime-human-stream.json\"\n"
         "}\n";
@@ -317,7 +317,9 @@ static int run_human_stream_pipeline(void) {
           strstr(text, "\"bytes_entrada\":") != NULL &&
           strstr(text, "\"tamano_lote\":2") != NULL &&
           strstr(text, "\"limite_registro_bytes\":1048576") != NULL &&
-          strstr(text, "\"limite_columnas\":8") != NULL;
+          strstr(text, "\"limite_columnas\":8") != NULL &&
+          strstr(text, "\"limite_filas\":10") != NULL &&
+          strstr(text, "\"presupuesto_tiempo_ms\":30000.000") != NULL;
     if (!human_stream_ok) fprintf(stderr, "FLUJO_HUMANO_REPORTE=[%s]\n", text);
     CHECK(human_stream_ok, "flujo humano: sintaxis o métricas no llegaron al runtime");
     remove(csv); remove(output);
@@ -336,7 +338,7 @@ static int run_grouped_human_stream_pipeline(void) {
     CHECK(write_file(csv, content), "agrupación de flujo: no se pudo crear el CSV");
     const char *source =
         ".analisis ventas_agrupadas {\n"
-        "  datos desde \"test-language-runtime-grouped-stream.csv\" procesar por lotes de 2 filas con grupos de 4\n"
+        "  datos desde \"test-language-runtime-grouped-stream.csv\" procesar por lotes de 2 filas con grupos de 4 con filas hasta 10 con tiempo hasta 30000 ms\n"
         "  agrupar por \"zona\" resumir { suma de \"importe\"; contar de \"referencia\"; }\n"
         "  guardar resultado en \"test-language-runtime-grouped-stream.json\"\n"
         "}\n";
@@ -353,6 +355,8 @@ static int run_grouped_human_stream_pipeline(void) {
     CHECK(strstr(text, "\"modo\":\"flujo_agrupado\"") != NULL &&
           north != NULL && south != NULL && north < south &&
           strstr(text, "\"limite_grupos\":4") != NULL &&
+          strstr(text, "\"limite_filas\":10") != NULL &&
+          strstr(text, "\"presupuesto_tiempo_ms\":30000.000") != NULL &&
           strstr(text, "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_invalidos\":1,\"valor\":5") != NULL &&
           strstr(text, "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_invalidos\":0,\"valor\":2") != NULL,
           "agrupación de flujo: AST, orden o semántica de valores inválidos incorrectos");
