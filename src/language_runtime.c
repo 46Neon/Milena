@@ -1423,6 +1423,7 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
     const ASTNode *group_block = NULL;
     const ASTNode *group_key = NULL;
     const ASTNode *group_summary = NULL;
+    const ASTNode *spill_policy = NULL;
     bool has_top_summary = false;
     for (size_t i = 0; i < analysis->child_count; i++) {
         const ASTNode *node = analysis->children[i];
@@ -1470,6 +1471,13 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
                     return MILENA_ERR_PARSE;
                 }
                 group_summary = child;
+            } else if (child->type == AST_AGRUPACION_SPILL) {
+                if (spill_policy) {
+                    runtime_error(error, MILENA_ERR_PARSE,
+                                  "La agrupación de flujo solo admite una política #spill");
+                    return MILENA_ERR_PARSE;
+                }
+                spill_policy = child;
             } else {
                 runtime_error(error, MILENA_ERR_PARSE,
                               "La agrupación de flujo contiene un nodo no compatible");
@@ -1575,11 +1583,30 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
         return MILENA_ERR_PARSE;
     }
     MilenaStreamReport report = {0};
-    MilenaStatus status = group_block
-        ? milena_stream_csv_grouped_with_options(input_path, output_path,
-              group_key->value, metrics, metric_count, options, &report, error)
-        : milena_stream_csv_summary_with_options(input_path, output_path,
-              metrics, metric_count, options, &report, error);
+    MilenaStatus status;
+    if (group_block && spill_policy) {
+        if (metric_count != 1) {
+            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                          "#spill de flujo admite exactamente una métrica");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+        MilenaStreamSpillPolicy policy = {
+            spill_policy->value,
+            spill_policy->group_memory_budget_bytes,
+            spill_policy->group_spill_quota_bytes,
+            spill_policy->group_max_key_bytes,
+            spill_policy->group_max_output_groups
+        };
+        status = milena_stream_csv_grouped_spill_with_options(
+            input_path, output_path, group_key->value, &metrics[0], options,
+            &policy, &report, error);
+    } else if (group_block) {
+        status = milena_stream_csv_grouped_with_options(input_path, output_path,
+            group_key->value, metrics, metric_count, options, &report, error);
+    } else {
+        status = milena_stream_csv_summary_with_options(input_path, output_path,
+            metrics, metric_count, options, &report, error);
+    }
     if (status == MILENA_OK && output) {
         fprintf(output, "Programa de flujo ejecutado: %s\n", input_path);
         fprintf(output, "Filas: %zu | Válidas: %zu | Malformadas: %zu | Lote: %zu | Registro máximo observado: %zu bytes | Tiempo medido: %.3f ms\n",

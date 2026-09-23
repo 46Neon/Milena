@@ -3,6 +3,7 @@
 
 #include "common.h"
 
+
 /*
  * Bounded-memory execution for large CSV inputs. The stream path keeps only
  * the current record, the header and one accumulator per requested metric.
@@ -33,6 +34,14 @@ typedef struct {
     const char *name;
     MilenaStreamOperation operation;
 } MilenaStreamMetric;
+
+typedef struct {
+    const char *scratch_path;
+    size_t memory_budget_bytes;
+    size_t spill_quota_bytes;
+    size_t max_key_bytes;
+    size_t max_output_groups;
+} MilenaStreamSpillPolicy;
 
 typedef struct {
     size_t rows_read;
@@ -87,6 +96,19 @@ MilenaStatus milena_stream_csv_grouped_with_options(const char *input_path,
                                        const MilenaStreamMetric *metrics,
                                        size_t metric_count,
                                        const MilenaStreamOptions *options,
+                                       MilenaStreamReport *report,
+                                       MilenaError *error);
+
+/* CSV -> bounded parser -> spillable reducer -> callback-written JSON report.
+ * Reducer memory is a separate budget, additional to record/header/column
+ * buffers and one callback key; this does not claim a process-wide RSS cap. */
+MilenaStatus milena_stream_csv_grouped_spill_with_options(
+                                       const char *input_path,
+                                       const char *output_path,
+                                       const char *group_column,
+                                       const MilenaStreamMetric *metric,
+                                       const MilenaStreamOptions *options,
+                                       const MilenaStreamSpillPolicy *policy,
                                        MilenaStreamReport *report,
                                        MilenaError *error);
 

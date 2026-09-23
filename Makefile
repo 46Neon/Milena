@@ -85,8 +85,8 @@ test-entrypoints: tests/test_entrypoints
 tests/test_entrypoints: tests/test_entrypoints.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
-tests/test_stream: tests/test_stream.c src/stream.c src/common.c
-	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/common.c $(LDFLAGS) -o $@
+tests/test_stream: tests/test_stream.c src/stream.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c
+	$(CC) $(CFLAGS) tests/test_stream.c src/stream.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
 
 test-partition-plan: tests/test_partition_plan
 	./tests/test_partition_plan
