@@ -10,6 +10,9 @@ typedef struct Lexer {
     size_t length;
     int line;
     int column;
+    size_t token_start_offset;
+    int token_start_line;
+    int token_start_column;
     Token current_token;
     Token previous_token;
     MilenaError error;
