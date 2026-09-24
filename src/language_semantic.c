@@ -17,9 +17,185 @@ static bool known_sst_command(const char *name) {
 
 static MilenaStatus semantic_error(const ASTNode *node, MilenaError *error,
                                    const char *message) {
-    milena_error_set(error, MILENA_ERR_PARSE, node ? (size_t)node->line : 0,
-                     node ? (size_t)node->column : 0, 0, message);
+    milena_error_set(error, MILENA_ERR_PARSE,
+                     node && node->has_source_span ? (size_t)node->line : 0,
+                     node && node->has_source_span ? (size_t)node->column : 0,
+                     0, message);
     return MILENA_ERR_PARSE;
+}
+
+static MilenaStatus typed_error(const ASTNode *node, MilenaError *error,
+                                const char *message) {
+    milena_error_set(error, MILENA_ERR_TYPE,
+                     node && node->has_source_span ? (size_t)node->line : 0,
+                     node && node->has_source_span ? (size_t)node->column : 0,
+                     0, message);
+    return MILENA_ERR_TYPE;
+}
+
+static bool numeric_type(ASTValueType type) {
+    return type == AST_VALUE_NUMBER;
+}
+
+static bool scalar_type(ASTValueType type) {
+    return type == AST_VALUE_NUMBER || type == AST_VALUE_BOOLEAN;
+}
+
+static bool comparison_operator(ASTOperatorKind operation) {
+    return operation >= AST_OPERATOR_EQUAL && operation <= AST_OPERATOR_LESS_EQUAL;
+}
+
+/* Annotate scalar expressions in place after syntax/ownership validation. */
+static MilenaStatus annotate_expression(ASTNode *node, MilenaError *error) {
+    if (!node) return typed_error(NULL, error, "Expresión AST nula");
+    switch (node->type) {
+        case AST_EXPRESION_LITERAL:
+            if (!isfinite(node->number_value))
+                return typed_error(node, error, "Literal numérico no finito");
+            if (node->value_type == AST_VALUE_UNRESOLVED)
+                node->value_type = AST_VALUE_NUMBER;
+            if (!scalar_type(node->value_type))
+                return typed_error(node, error, "Tipo incompatible para literal escalar");
+            return MILENA_OK;
+        case AST_EXPRESION_IDENTIFICADOR:
+            if (!node->value || !node->value[0])
+                return typed_error(node, error, "Identificador AST vacío");
+            /* The current scalar language stores all runtime bindings as double. */
+            node->value_type = AST_VALUE_NUMBER;
+            return MILENA_OK;
+        case AST_EXPRESION_LLAMADA:
+        case AST_EXPRESION_FUNCION:
+            if (!node->value || !node->value[0])
+                return typed_error(node, error, "Llamada de función sin nombre");
+            for (size_t i = 0; i < node->child_count; ++i) {
+                MilenaStatus status = annotate_expression(node->children[i], error);
+                if (status != MILENA_OK) return status;
+            }
+            /* User functions currently have a numeric runtime ABI. */
+            node->value_type = AST_VALUE_NUMBER;
+            return MILENA_OK;
+        case AST_EXPRESION_OPERACION: {
+            if (node->child_count != 2 || !node->left_operand ||
+                !node->right_operand || node->left_operand != node->children[0] ||
+                node->right_operand != node->children[1] ||
+                node->operator_kind == AST_OPERATOR_NONE)
+                return typed_error(node, error,
+                    "Operación requiere dos operandos estructurados y operador tipado");
+            MilenaStatus status = annotate_expression(node->left_operand, error);
+            if (status != MILENA_OK) return status;
+            status = annotate_expression(node->right_operand, error);
+            if (status != MILENA_OK) return status;
+            if (!scalar_type(node->left_operand->value_type) ||
+                !scalar_type(node->right_operand->value_type))
+                return typed_error(node, error, "Los operandos deben ser valores escalares");
+            if (comparison_operator(node->operator_kind)) {
+                node->value_type = AST_VALUE_BOOLEAN;
+            } else {
+                if (!numeric_type(node->left_operand->value_type) ||
+                    !numeric_type(node->right_operand->value_type))
+                    return typed_error(node, error,
+                        "La aritmética solo admite operandos numéricos");
+                node->value_type = AST_VALUE_NUMBER;
+            }
+            return MILENA_OK;
+        }
+        case AST_EXPRESION_ARRAY:
+            for (size_t i = 0; i < node->child_count; ++i) {
+                MilenaStatus status = annotate_expression(node->children[i], error);
+                if (status != MILENA_OK) return status;
+                if (!numeric_type(node->children[i]->value_type))
+                    return typed_error(node->children[i], error,
+                        "El literal de arreglo solo admite elementos numéricos");
+            }
+            node->value_type = AST_VALUE_ARRAY;
+            return MILENA_OK;
+        default:
+            return typed_error(node, error,
+                "Nodo no escalar usado donde se esperaba una expresión tipada");
+    }
+}
+
+static MilenaStatus annotate_typed_ast(ASTNode *node, MilenaError *error) {
+    if (!node) return typed_error(NULL, error, "Nodo AST nulo");
+    switch (node->type) {
+        case AST_EXPRESION_LITERAL:
+        case AST_EXPRESION_IDENTIFICADOR:
+        case AST_EXPRESION_FUNCION:
+        case AST_EXPRESION_OPERACION:
+        case AST_EXPRESION_ARRAY:
+        case AST_EXPRESION_LLAMADA:
+            return annotate_expression(node, error);
+        case AST_OPERACION_ESTADISTICA:
+            if (node->child_count != 1 ||
+                node->children[0]->type != AST_EXPRESION_IDENTIFICADOR ||
+                !node->children[0]->value || !node->children[0]->value[0])
+                return typed_error(node, error,
+                    "Operación estadística requiere una columna estructurada");
+            node->children[0]->value_type = AST_VALUE_ARRAY;
+            node->value_type = node->axis < 0 ? AST_VALUE_NUMBER : AST_VALUE_ARRAY;
+            return MILENA_OK;
+        case AST_DECLARACION_VARIABLE:
+            if (node->child_count == 1) {
+                MilenaStatus status = annotate_expression(node->children[0], error);
+                if (status != MILENA_OK) return status;
+                node->value_type = node->children[0]->value_type;
+            } else if (node->child_count == 0 && node->type_name) {
+                if (strcmp(node->type_name, "numerica") == 0)
+                    node->value_type = AST_VALUE_NUMBER;
+                else if (strcmp(node->type_name, "binaria") == 0)
+                    node->value_type = AST_VALUE_BOOLEAN;
+                else if (strcmp(node->type_name, "categorica") == 0 ||
+                         strcmp(node->type_name, "texto") == 0 ||
+                         strcmp(node->type_name, "fecha") == 0)
+                    node->value_type = AST_VALUE_TEXT;
+            }
+            if (node->child_count > 1)
+                return typed_error(node, error,
+                    "Declaración escalar requiere cero o una inicialización");
+            break;
+        case AST_ASIGNACION_VARIABLE:
+            if (node->child_count != 1)
+                return typed_error(node, error,
+                    "Asignación escalar requiere exactamente una expresión");
+            {
+                MilenaStatus status = annotate_expression(node->children[0], error);
+                if (status != MILENA_OK) return status;
+                node->value_type = node->children[0]->value_type;
+            }
+            break;
+        case AST_COMANDO_RETORNAR:
+            if (node->child_count != 1)
+                return typed_error(node, error,
+                    "Retornar requiere exactamente una expresión");
+            {
+                MilenaStatus status = annotate_expression(node->children[0], error);
+                if (status != MILENA_OK) return status;
+                node->value_type = node->children[0]->value_type;
+            }
+            break;
+        case AST_CONDICION_SI:
+            if (node->child_count == 0)
+                return typed_error(node, error, "Condición si sin expresión");
+            {
+                MilenaStatus status = annotate_expression(node->children[0], error);
+                if (status != MILENA_OK) return status;
+                if (!scalar_type(node->children[0]->value_type))
+                    return typed_error(node->children[0], error,
+                        "La condición si debe ser escalar");
+            }
+            for (size_t i = 1; i < node->child_count; ++i) {
+                MilenaStatus status = annotate_typed_ast(node->children[i], error);
+                if (status != MILENA_OK) return status;
+            }
+            return MILENA_OK;
+        default:
+            break;
+    }
+    for (size_t i = 0; i < node->child_count; ++i) {
+        MilenaStatus status = annotate_typed_ast(node->children[i], error);
+        if (status != MILENA_OK) return status;
+    }
+    return MILENA_OK;
 }
 
 
@@ -381,5 +557,8 @@ MilenaStatus milena_validate_sst_table(const ASTNode *analysis,
 MilenaStatus milena_validate_ast(const ASTNode *program, MilenaError *error) {
     if (!program || program->type != AST_PROGRAMA)
         return semantic_error(program, error, "El programa no tiene una raíz AST válida");
-    return validate_node(program, error);
+    if (!ast_validate(program, error)) return error ? error->code : MILENA_ERR_ARGUMENT;
+    MilenaStatus status = validate_node(program, error);
+    if (status != MILENA_OK) return status;
+    return annotate_typed_ast((ASTNode *)program, error);
 }

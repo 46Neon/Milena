@@ -43,6 +43,15 @@ int main(void) {
     binary->type = saved_type;
     assert(ast_validate(program, &error));
 
+    ASTOperatorKind saved_operator = binary->operator_kind;
+    binary->operator_kind = AST_OPERATOR_NONE;
+    assert(!ast_validate(program, &error));
+    assert(error.code == MILENA_ERR_ARGUMENT);
+    binary->operator_kind = saved_operator;
+    assert(binary->left_operand == binary->children[0]);
+    assert(binary->right_operand == binary->children[1]);
+    assert(ast_validate(program, &error));
+
     size_t saved_end = binary->end_offset;
     binary->end_offset = binary->start_offset - 1;
     assert(!ast_validate(program, &error));

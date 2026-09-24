@@ -1491,7 +1491,10 @@ static ASTNode *fn_primary(Parser *p) {
         bool yes = strcmp(p->current.lexeme, "verdadero") == 0;
         parser_advance(p);
         n = ast_create_number(yes ? 1.0 : 0.0);
-        if (n) (void)ast_set_source_span(n, &literal, &literal);
+        if (n) {
+            n->value_type = AST_VALUE_BOOLEAN;
+            (void)ast_set_source_span(n, &literal, &literal);
+        }
     } else if (p->current.type == TOKEN_PAR_IZQ) {
         Token open = p->current;
         parser_advance(p);

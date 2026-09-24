@@ -134,6 +134,12 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
                                          "Tipo de nodo AST fuera de rango");
             break;
         }
+        if ((unsigned)node->value_type >= (unsigned)AST_VALUE_TYPE_COUNT ||
+            (unsigned)node->operator_kind >= (unsigned)AST_OPERATOR_COUNT) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                                         "Anotación de tipo u operador AST fuera de rango");
+            break;
+        }
         if (node->parent != entry.expected_parent) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                                          "Relación padre-hijo inconsistente en el AST");
@@ -143,6 +149,22 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
             ((node->child_capacity == 0) != (node->children == NULL))) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                                          "Almacenamiento de hijos inconsistente en el AST");
+            break;
+        }
+        if (node->type == AST_EXPRESION_OPERACION &&
+            (node->child_count != 2 || !node->value ||
+             node->operator_kind == AST_OPERATOR_NONE ||
+             node->operator_kind != ast_operator_kind_from_name(node->value) ||
+             node->left_operand != node->children[0] ||
+             node->right_operand != node->children[1])) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                                         "Operación AST sin operador u operandos estructurados coherentes");
+            break;
+        }
+        if (node->type != AST_EXPRESION_OPERACION &&
+            (node->left_operand || node->right_operand)) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                                         "Operandos estructurados en un nodo que no es operación");
             break;
         }
         if (node->has_source_span &&
@@ -187,6 +209,8 @@ ASTNode *ast_create(ASTNodeType type) {
     if (!node) return NULL;
     node->type = type;
     node->axis = -1;
+    node->value_type = AST_VALUE_UNRESOLVED;
+    node->operator_kind = AST_OPERATOR_NONE;
     return node;
 }
 
@@ -230,6 +254,8 @@ ASTNode *ast_create_leaf(ASTNodeType type, const char *value) {
             return NULL;
         }
     }
+    if (type == AST_EXPRESION_OPERACION)
+        node->operator_kind = ast_operator_kind_from_name(value);
     return node;
 }
 
@@ -244,6 +270,7 @@ ASTNode *ast_create_number(double value) {
         return NULL;
     }
     node->value = milena_strdup(buffer);
+    node->value_type = AST_VALUE_NUMBER;
     if (!node->value) {
         free(node);
         return NULL;
@@ -269,6 +296,10 @@ bool ast_add_child(ASTNode *parent, ASTNode *child) {
     }
     parent->children[parent->child_count++] = child;
     child->parent = parent;
+    if (parent->type == AST_EXPRESION_OPERACION) {
+        if (parent->child_count == 1) parent->left_operand = child;
+        else if (parent->child_count == 2) parent->right_operand = child;
+    }
     if (child->has_source_span) {
         if (!parent->has_source_span) {
             parent->line = child->line;
@@ -363,6 +394,40 @@ const char *ast_type_name(ASTNodeType type) {
         "COMANDO_SST"
     };
     if ((unsigned)type >= (unsigned)AST_NODE_TYPE_COUNT) return "DESCONOCIDO";
+    return names[type];
+}
+
+ASTOperatorKind ast_operator_kind_from_name(const char *name) {
+    if (!name) return AST_OPERATOR_NONE;
+    if (strcmp(name, "+") == 0) return AST_OPERATOR_ADD;
+    if (strcmp(name, "-") == 0) return AST_OPERATOR_SUBTRACT;
+    if (strcmp(name, "*") == 0) return AST_OPERATOR_MULTIPLY;
+    if (strcmp(name, "/") == 0) return AST_OPERATOR_DIVIDE;
+    if (strcmp(name, "==") == 0) return AST_OPERATOR_EQUAL;
+    if (strcmp(name, "!=") == 0) return AST_OPERATOR_NOT_EQUAL;
+    if (strcmp(name, ">") == 0) return AST_OPERATOR_GREATER;
+    if (strcmp(name, ">=") == 0) return AST_OPERATOR_GREATER_EQUAL;
+    if (strcmp(name, "<") == 0) return AST_OPERATOR_LESS;
+    if (strcmp(name, "<=") == 0) return AST_OPERATOR_LESS_EQUAL;
+    return AST_OPERATOR_NONE;
+}
+
+const char *ast_operator_kind_name(ASTOperatorKind operation) {
+    static const char *const names[AST_OPERATOR_COUNT] = {
+        "NINGUNO", "SUMA", "RESTA", "MULTIPLICACION", "DIVISION",
+        "IGUAL", "DISTINTO", "MAYOR", "MAYOR_IGUAL", "MENOR",
+        "MENOR_IGUAL"
+    };
+    if ((unsigned)operation >= (unsigned)AST_OPERATOR_COUNT)
+        return "DESCONOCIDO";
+    return names[operation];
+}
+
+const char *ast_value_type_name(ASTValueType type) {
+    static const char *const names[AST_VALUE_TYPE_COUNT] = {
+        "SIN_RESOLVER", "NUMERO", "BOOLEANO", "TEXTO", "ARREGLO", "DATASET"
+    };
+    if ((unsigned)type >= (unsigned)AST_VALUE_TYPE_COUNT) return "DESCONOCIDO";
     return names[type];
 }
 
