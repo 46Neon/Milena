@@ -61,6 +61,6 @@ La revisión de nombres, dependencias, licencia y disponibilidad queda a cargo
 de Termux. No se debe anunciar `pkg install milena` para terceros hasta que el
 cambio sea aceptado y publicado.
 
-La receta instala solamente `milena` y `README.md` bajo `$TERMUX_PREFIX`; no
-incorpora tests, headers, fuentes, examples ni módulos experimentales
-compiler/IR/VM.
+La receta instala `milena`, `README.md` y los avisos/licencias de Milena,
+nanoarrow/flatcc y SQLite bajo `$TERMUX_PREFIX`; no incorpora tests, headers,
+fuentes, examples ni módulos experimentales compiler/IR/VM.

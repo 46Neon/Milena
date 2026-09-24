@@ -2,7 +2,9 @@
 #include "table.h"
 #include "grouped_aggregate.h"
 #include <stdio.h>
+#include "stream.h"
 #include <string.h>
+#include <math.h>
 
 static bool known_sst_command(const char *name) {
     static const char *const commands[] = {
@@ -653,7 +655,8 @@ static const ASTNode *stream_find_load(const ASTNode *analysis) {
     for (size_t i = 0; i < analysis->child_count; ++i) {
         const ASTNode *child = analysis->children[i];
         if (child && child->type == AST_LLAMADA_CARGAR && child->type_name &&
-            strcmp(child->type_name, "flujo") == 0) return child;
+            (strcmp(child->type_name, "flujo") == 0 ||
+             strcmp(child->type_name, "arrow_ipc_stream") == 0)) return child;
     }
     return NULL;
 }
@@ -696,9 +699,92 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                   node->stream_time_limit_ms > 3600000.0)))
                 return semantic_error(node, error,
                     "Límite de columnas, grupos, filas o tiempo de flujo inválido");
+            if (node->type_name && strcmp(node->type_name, "arrow_ipc_stream") == 0 &&
+                (node->stream_chunk_rows == 0 || node->stream_chunk_rows > 65536u ||
+                 node->stream_group_limit != 0 || node->stream_record_limit != 0 ||
+                 node->stream_column_limit > 128u || node->stream_row_limit > 10000000u ||
+                 node->stream_batch_limit_bytes > 67108864u ||
+                 node->stream_input_limit_bytes > 67108864u ||
+                 node->stream_output_limit_bytes > 67108864u))
+                return semantic_error(node, error,
+                    "Los límites de Arrow IPC STREAM exceden el perfil local acotado");
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Carga de dataset sin archivo");
             break;
+        case AST_BLOQUE_ANALISIS: {
+            const ASTNode *arrow_load = NULL;
+            const ASTNode *projection = NULL;
+            const ASTNode *sink = NULL;
+            size_t filters = 0;
+            for (size_t i = 0; i < node->child_count; ++i) {
+                const ASTNode *child = node->children[i];
+                if (!child) return semantic_error(node, error,
+                    "El análisis Arrow contiene un nodo AST nulo");
+                if (child->type == AST_LLAMADA_CARGAR && child->type_name &&
+                    strcmp(child->type_name, "arrow_ipc_stream") == 0) {
+                    if (arrow_load) return semantic_error(child, error,
+                        "Arrow IPC STREAM admite una sola fuente local");
+                    arrow_load = child;
+                }
+            }
+            if (arrow_load) {
+                size_t loads = 0, sinks = 0;
+                for (size_t i = 0; i < node->child_count; ++i) {
+                    const ASTNode *child = node->children[i];
+                    if (child->type == AST_LLAMADA_CARGAR) loads++;
+                    else if (child->type == AST_COLUMNAR_PROJECT) {
+                        if (projection) return semantic_error(child, error,
+                            "Arrow admite una única proyección tipada");
+                        projection = child;
+                    } else if (child->type == AST_STREAM_FILTER) filters++;
+                    else if (child->type == AST_BLOQUE_EXPORTAR) {
+                        sinks++;
+                        sink = child;
+                    } else if (child->type != AST_DECLARACION_VARIABLE) {
+                        return semantic_error(child, error,
+                            "Arrow IPC STREAM solo admite declaración, filtrar, proyectar y guardar");
+                    }
+                }
+                if (loads != 1 || filters > 1 || sinks != 1 || !sink ||
+                    !projection || projection->child_count == 0 ||
+                    projection->child_count > 128u ||
+                    arrow_load->stream_row_limit == 0 ||
+                    arrow_load->stream_column_limit == 0 ||
+                    arrow_load->stream_time_limit_ms <= 0.0 ||
+                    arrow_load->stream_batch_limit_bytes == 0 ||
+                    arrow_load->stream_input_limit_bytes == 0 ||
+                    arrow_load->stream_output_limit_bytes == 0)
+                    return semantic_error(arrow_load, error,
+                        "Arrow exige proyección/salida y límites explícitos de filas, columnas, bytes y tiempo");
+                for (size_t i = 0; i < projection->child_count; ++i) {
+                    const ASTNode *field = projection->children[i];
+                    const ASTNode *declaration = field && field->value
+                        ? stream_find_column_declaration(node, field->value) : NULL;
+                    if (!field || field->type != AST_COLUMNAR_FIELD || !field->value ||
+                        !field->value[0] || !declaration || !declaration->type_name ||
+                        (strcmp(declaration->type_name, "numerica") != 0 &&
+                         strcmp(declaration->type_name, "texto") != 0))
+                        return semantic_error(field, error,
+                            "Cada campo Arrow proyectado requiere declaración numerica o texto compatible");
+                }
+                for (size_t i = 0; i < node->child_count; ++i) {
+                    const ASTNode *child = node->children[i];
+                    if (child && child->type == AST_STREAM_FILTER) {
+                        const ASTNode *declaration = child->value
+                            ? stream_find_column_declaration(node, child->value) : NULL;
+                        const char *expected = child->stream_filter_kind ==
+                            AST_STREAM_FILTER_TEXT_EQUAL ? "texto" :
+                            child->stream_filter_kind == AST_STREAM_FILTER_NUMERIC_GREATER
+                                ? "numerica" : NULL;
+                        if (!declaration || !declaration->type_name || !expected ||
+                            strcmp(declaration->type_name, expected) != 0)
+                            return semantic_error(child, error,
+                                "El tipo declarado del filtro Arrow no coincide con su operador");
+                    }
+                }
+            }
+            break;
+        }
         case AST_BLOQUE_UNIR: {
             size_t right_count = 0, key_count = 0;
             for (size_t i = 0; i < node->child_count; ++i) {
@@ -724,12 +810,16 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
         case AST_BLOQUE_AGRUPAR:
             if (node->type_name && strcmp(node->type_name, "flujo") == 0) {
                 size_t keys = 0, summaries = 0, policies = 0;
-                const ASTNode *key = NULL, *summary = NULL, *policy = NULL;
+                const ASTNode *key_nodes[2] = {NULL, NULL};
+                const ASTNode *summary = NULL, *policy = NULL;
                 for (size_t i = 0; i < node->child_count; i++) {
                     const ASTNode *child = node->children[i];
                     if (!child) return semantic_error(node, error,
                         "Agrupación de flujo con nodo AST nulo");
-                    if (child->type == AST_AGRUPACION_POR) { keys++; key = child; }
+                    if (child->type == AST_AGRUPACION_POR) {
+                        if (keys < 2) key_nodes[keys] = child;
+                        keys++;
+                    }
                     else if (child->type == AST_BLOQUE_RESUMIR) {
                         summaries++;
                         summary = child;
@@ -739,10 +829,18 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                     } else return semantic_error(node, error,
                         "La agrupación de flujo solo admite clave, spill opcional y resumen tipado");
                 }
-                if (keys != 1 || summaries != 1 || policies > 1 || !summary ||
+                if (keys == 0 || keys > 2 || summaries != 1 || policies > 1 || !summary ||
                     summary->child_count == 0 || summary->child_count > 64)
                     return semantic_error(node, error,
-                        "La agrupación de flujo requiere una clave, un resumen tipado y como máximo una política spill");
+                        "La agrupación de flujo requiere una o dos claves, un resumen tipado y como máximo una política spill");
+                if (keys > 1 && policies == 0)
+                    return semantic_error(key_nodes[1], error,
+                        "La agrupación de varias claves solo está soportada con #spill");
+                if (keys == 2 && (!key_nodes[0] || !key_nodes[1] ||
+                    !key_nodes[0]->value || !key_nodes[1]->value ||
+                    strcmp(key_nodes[0]->value, key_nodes[1]->value) == 0))
+                    return semantic_error(key_nodes[1], error,
+                        "Las claves de agrupación deben ser columnas distintas");
                 for (size_t i = 0; i < summary->child_count; i++) {
                     const ASTNode *metric = summary->children[i];
                     if (!metric || metric->type != AST_RESUMEN_METRICA ||
@@ -753,32 +851,39 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                             "La métrica agrupada debe usar una operación de flujo tipada");
                 }
                 if (policies) {
-                    if (summary->child_count != 1)
+                    if (summary->child_count > MILENA_STREAM_MAX_METRICS)
                         return semantic_error(summary, error,
-                            "#spill de flujo admite una sola clave y una sola métrica por operación");
-                    const ASTNode *metric = summary->children[0];
-                    if (!grouped_spill_operation(metric->stream_operation))
-                        return semantic_error(metric, error,
-                            "#spill de flujo solo admite suma, media, minimo, maximo o conteo");
-                    const ASTNode *key_decl = stream_find_column_declaration(
-                        node->parent, key->value);
-                    const ASTNode *metric_decl = stream_find_column_declaration(
-                        node->parent, metric->value);
-                    if (!key_decl || !key_decl->type_name ||
-                        strcmp(key_decl->type_name, "texto") != 0)
-                        return semantic_error(key, error,
-                            "La clave de #spill en flujo debe declararse variable <columna> texto");
-                    if (!metric_decl || !metric_decl->type_name)
-                        return semantic_error(metric, error,
-                            "La métrica de #spill en flujo debe tener declaración tipada");
-                    if (metric->stream_operation != AST_STREAM_OPERATION_COUNT &&
-                        strcmp(metric_decl->type_name, "numerica") != 0)
-                        return semantic_error(metric, error,
-                            "Las métricas numéricas de #spill requieren variable <columna> numerica (FLOAT64)");
-                    if (strcmp(key->value, metric->value) == 0 &&
-                        metric->stream_operation != AST_STREAM_OPERATION_COUNT)
-                        return semantic_error(metric, error,
-                            "La clave textual de #spill no puede reutilizarse como métrica numérica");
+                            "#spill de flujo admite como máximo 64 métricas por operación");
+                    for (size_t key_index = 0; key_index < keys; ++key_index) {
+                        const ASTNode *group_key = key_nodes[key_index];
+                        const ASTNode *key_decl = stream_find_column_declaration(
+                            node->parent, group_key->value);
+                        if (!key_decl || !key_decl->type_name ||
+                            strcmp(key_decl->type_name, "texto") != 0)
+                            return semantic_error(group_key, error,
+                                "Cada clave de #spill en flujo debe declararse variable <columna> texto");
+                    }
+                    for (size_t i = 0; i < summary->child_count; ++i) {
+                        const ASTNode *metric = summary->children[i];
+                        if (!grouped_spill_operation(metric->stream_operation))
+                            return semantic_error(metric, error,
+                                "#spill de flujo solo admite suma, media, minimo, maximo o conteo");
+                        const ASTNode *metric_decl = stream_find_column_declaration(
+                            node->parent, metric->value);
+                        if (!metric_decl || !metric_decl->type_name)
+                            return semantic_error(metric, error,
+                                "Cada métrica de #spill debe tener declaración tipada");
+                        if (metric->stream_operation != AST_STREAM_OPERATION_COUNT &&
+                            strcmp(metric_decl->type_name, "numerica") != 0)
+                            return semantic_error(metric, error,
+                                "Las métricas numéricas de #spill requieren variable <columna> numerica (FLOAT64)");
+                        for (size_t key_index = 0; key_index < keys; ++key_index) {
+                            if (strcmp(key_nodes[key_index]->value, metric->value) == 0 &&
+                                metric->stream_operation != AST_STREAM_OPERATION_COUNT)
+                                return semantic_error(metric, error,
+                                    "La clave textual de #spill solo puede reutilizarse en una métrica contar");
+                        }
+                    }
                     const ASTNode *stream_load = stream_find_load(node->parent);
                     if (!stream_load || stream_load->stream_row_limit == 0 ||
                         stream_load->stream_time_limit_ms <= 0.0)
@@ -790,7 +895,7 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                         policy->group_memory_budget_bytes > 536870912u ||
                         policy->group_spill_quota_bytes == 0 ||
                         policy->group_spill_quota_bytes > 4294967296u ||
-                        policy->group_max_key_bytes < 2u ||
+                        policy->group_max_key_bytes < 3u ||
                         policy->group_max_key_bytes > 1048576u ||
                         policy->group_max_output_groups == 0 ||
                         policy->group_max_output_groups > 1000000u ||
@@ -825,6 +930,34 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                         "La política #spill de #agrupar requiere exactamente una métrica");
             }
             break;
+        case AST_STREAM_FILTER: {
+            if (!node->value || !node->value[0])
+                return semantic_error(node, error,
+                    "El filtro de flujo requiere una columna declarada");
+            if (!node->parent || node->parent->type != AST_BLOQUE_ANALISIS ||
+                !stream_find_load(node->parent))
+                return semantic_error(node, error,
+                    "filtrar solo se admite dentro de un análisis con datos desde en modo flujo");
+            const ASTNode *column = stream_find_column_declaration(
+                node->parent, node->value);
+            if (!column || !column->type_name)
+                return semantic_error(node, error,
+                    "La columna del filtro debe tener una declaración variable tipada");
+            if (node->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+                if (!node->type_name || strcmp(column->type_name, "texto") != 0)
+                    return semantic_error(node, error,
+                        "El filtro == requiere una columna declarada texto y un literal textual");
+            } else if (node->stream_filter_kind == AST_STREAM_FILTER_NUMERIC_GREATER) {
+                if (node->type_name || !isfinite(node->number_value) ||
+                    strcmp(column->type_name, "numerica") != 0)
+                    return semantic_error(node, error,
+                        "El filtro > requiere una columna declarada numerica y un literal finito");
+            } else {
+                return semantic_error(node, error,
+                    "Tipo de predicado de flujo no soportado");
+            }
+            break;
+        }
         case AST_AGRUPACION_POR:
         case AST_AGRUPACION_SPILL:
         case AST_RESUMEN_METRICA:
@@ -851,6 +984,181 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
             if (!node->value || !node->value[0])
                 return semantic_error(node, error, "Operación AST sin argumento");
             break;
+        case AST_COLUMNAR_PROJECT: {
+            const ASTNode *source = node->parent &&
+                node->parent->type == AST_BLOQUE_ANALISIS
+                ? stream_find_load(node->parent) : NULL;
+            if (!source || !source->type_name ||
+                strcmp(source->type_name, "arrow_ipc_stream") != 0)
+                return semantic_error(node, error,
+                    "proyectar solo se admite en una fuente local Arrow IPC STREAM");
+            if (node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "La proyección Arrow requiere de 1 a 128 campos");
+            break;
+        }
+        case AST_COLUMNAR_FIELD:
+            if (!node->parent || node->parent->type != AST_COLUMNAR_PROJECT ||
+                !node->value || !node->value[0])
+                return semantic_error(node, error,
+                    "El nombre de campo de la proyección Arrow está vacío o fuera de contexto");
+            break;
+        case AST_SQL_PROGRAM:
+            if (!node->value || !node->value[0] || node->child_count == 0 ||
+                node->child_count > 10000u)
+                return semantic_error(node, error,
+                    "El programa SQL requiere una ruta y entre 1 y 10000 operaciones");
+            break;
+        case AST_SQL_QUERY:
+        case AST_SQL_EXECUTE:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                !node->value || !node->value[0] || node->child_count > 999u)
+                return semantic_error(node, error,
+                    "Consulta SQL incompleta o fuera de contexto");
+            break;
+        case AST_SQL_TABLE_SCHEMA:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                !node->value || !node->value[0] || node->child_count == 0 ||
+                node->child_count > 128u)
+                return semantic_error(node, error,
+                    "El esquema SQL requiere una tabla y de 1 a 128 columnas");
+            break;
+        case AST_SQL_SCHEMA_COLUMN:
+            if (!node->parent || node->parent->type != AST_SQL_TABLE_SCHEMA ||
+                !node->value || !node->value[0] || !node->type_name ||
+                node->sql_type < AST_SQL_TYPE_INTEGER ||
+                node->sql_type > AST_SQL_TYPE_BOOLEAN)
+                return semantic_error(node, error,
+                    "Columna de esquema SQL sin nombre o tipo admitido");
+            break;
+        case AST_SQL_TYPED_SELECT:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "SELECT tipado SQL requiere tabla, proyección y filtro");
+            break;
+        case AST_SQL_TYPED_INSERT:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "INSERT tipado SQL requiere tabla, columnas y valores");
+            break;
+        case AST_SQL_TYPED_UPDATE:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "UPDATE tipado SQL requiere tabla, asignaciones y filtro");
+            break;
+        case AST_SQL_UPDATE_ASSIGNMENT_LIST:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_UPDATE ||
+                node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "UPDATE requiere de 1 a 128 asignaciones");
+            break;
+        case AST_SQL_UPDATE_ASSIGNMENT:
+            if (!node->parent || node->parent->type != AST_SQL_UPDATE_ASSIGNMENT_LIST ||
+                node->child_count != 2u)
+                return semantic_error(node, error,
+                    "Asignación UPDATE requiere columna y literal");
+            break;
+        case AST_SQL_UPDATE_COLUMN:
+            if (!node->parent || node->parent->type != AST_SQL_UPDATE_ASSIGNMENT ||
+                !node->value || !node->value[0] || node->child_count)
+                return semantic_error(node, error,
+                    "Columna de asignación UPDATE vacía o fuera de contexto");
+            break;
+        case AST_SQL_UPDATE_FILTER:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_UPDATE ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "El filtro UPDATE requiere columna, operador y literal");
+            break;
+        case AST_SQL_INSERT_COLUMN_LIST:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_INSERT ||
+                node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "La lista de columnas INSERT requiere de 1 a 128 columnas");
+            break;
+        case AST_SQL_INSERT_COLUMN:
+            if (!node->parent || node->parent->type != AST_SQL_INSERT_COLUMN_LIST ||
+                !node->value || !node->value[0] || node->child_count)
+                return semantic_error(node, error,
+                    "Columna INSERT SQL vacía o fuera de contexto");
+            break;
+        case AST_SQL_INSERT_VALUE_LIST:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_INSERT ||
+                node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "La lista de valores INSERT requiere de 1 a 128 valores");
+            break;
+        case AST_SQL_TABLE_REFERENCE:
+        case AST_SQL_PROJECTED_COLUMN:
+        case AST_SQL_FILTER_COLUMN:
+            if (!node->value || !node->value[0])
+                return semantic_error(node, error,
+                    "Referencia de tabla o columna SQL vacía");
+            break;
+        case AST_SQL_PROJECTION_LIST:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_SELECT ||
+                node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "La proyección SQL requiere de 1 a 128 columnas");
+            break;
+        case AST_SQL_FILTER:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_SELECT ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "El filtro SQL requiere columna, operador y parámetro");
+            break;
+        case AST_SQL_FILTER_OPERATOR:
+            if (!node->parent ||
+                (node->parent->type != AST_SQL_FILTER &&
+                 node->parent->type != AST_SQL_UPDATE_FILTER) ||
+                node->sql_operator < AST_SQL_OPERATOR_EQUAL ||
+                node->sql_operator > AST_SQL_OPERATOR_GREATER_EQUAL)
+                return semantic_error(node, error,
+                    "Operador de filtro SQL inválido");
+            break;
+        case AST_SQL_BEGIN:
+        case AST_SQL_COMMIT:
+        case AST_SQL_ROLLBACK:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM || node->child_count)
+                return semantic_error(node, error,
+                    "Operación transaccional SQL inválida");
+            break;
+        case AST_SQL_PARAMETER: {
+            if (!node->parent || (node->parent->type != AST_SQL_QUERY &&
+                node->parent->type != AST_SQL_EXECUTE &&
+                node->parent->type != AST_SQL_FILTER &&
+                node->parent->type != AST_SQL_UPDATE_FILTER &&
+                node->parent->type != AST_SQL_UPDATE_ASSIGNMENT &&
+                node->parent->type != AST_SQL_INSERT_VALUE_LIST) || !node->type_name || !node->value)
+                return semantic_error(node, error, "Parámetro SQL sin tipo o fuera de contexto");
+            if (strcmp(node->type_name, "texto") == 0) break;
+            if (strcmp(node->type_name, "nulo") == 0) {
+                if (strcmp(node->value, "nulo") != 0)
+                    return semantic_error(node, error, "Literal NULL SQL inválido");
+                break;
+            }
+            if (strcmp(node->type_name, "booleano") == 0) {
+                if (strcmp(node->value, "verdadero") != 0 && strcmp(node->value, "falso") != 0)
+                    return semantic_error(node, error, "Literal booleano SQL inválido");
+                break;
+            }
+            char *end = NULL;
+            errno = 0;
+            if (strcmp(node->type_name, "entero") == 0) {
+                (void)strtoll(node->value, &end, 10);
+            } else if (strcmp(node->type_name, "real") == 0) {
+                double real = strtod(node->value, &end);
+                if (!isfinite(real)) errno = ERANGE;
+            } else {
+                return semantic_error(node, error, "Tipo de parámetro SQL no admitido");
+            }
+            if (errno || !end || *end != '\0')
+                return semantic_error(node, error, "Parámetro numérico SQL fuera de rango");
+            break;
+        }
         case AST_COMANDO_COLUMNAS:
         case AST_COMANDO_DERECHA:
         case AST_COMANDO_CLAVE:
@@ -898,10 +1206,11 @@ static MilenaStatus validate_sst_table_node(const ASTNode *node,
         char spec[512];
         strncpy(spec, node->value, sizeof(spec) - 1);
         spec[sizeof(spec) - 1] = '\0';
-        char *a = strtok(spec, ",");
-        char *b = strtok(NULL, ",");
-        char *c = strtok(NULL, ",");
-        char *d = strtok(NULL, ",");
+        char *spec_state = NULL;
+        char *a = milena_token_next(spec, ",", &spec_state);
+        char *b = milena_token_next(NULL, ",", &spec_state);
+        char *c = milena_token_next(NULL, ",", &spec_state);
+        char *d = milena_token_next(NULL, ",", &spec_state);
         MilenaStatus status = MILENA_OK;
         if (strcmp(node->type_name, "perfil_avanzado") == 0 ||
             strcmp(node->type_name, "histograma") == 0 ||

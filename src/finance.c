@@ -420,21 +420,6 @@ static MilenaStatus decimal_one(MilenaDecimal *out, MilenaError *error) {
     return milena_decimal_from_i64(out, 1, error);
 }
 
-static MilenaStatus decimal_negate(MilenaDecimal *out, const MilenaDecimal *value,
-                                   MilenaError *error) {
-    if (!out || !decimal_valid(value)) {
-        finance_error(error, MILENA_ERR_ARGUMENT, "Decimal inválido");
-        return MILENA_ERR_ARGUMENT;
-    }
-    if (value->coefficient == INT64_MIN) {
-        finance_error(error, MILENA_ERR_OVERFLOW, "No se puede negar el decimal mínimo");
-        return MILENA_ERR_OVERFLOW;
-    }
-    *out = *value;
-    out->coefficient = -out->coefficient;
-    return MILENA_OK;
-}
-
 MilenaStatus milena_decimal_pow_uint(MilenaDecimal *out,
                                      const MilenaDecimal *base,
                                      uint32_t exponent,

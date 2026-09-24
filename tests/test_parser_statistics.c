@@ -98,7 +98,7 @@ int main(void) {
         assert(strcmp(ast_type_name((ASTNodeType)type), "DESCONOCIDO") != 0);
     }
     for (int type = 0; type < TOKEN_TYPE_COUNT; type++) {
-        assert(strcmp(token_type_name((TokenType)type), "DESCONOCIDO") != 0);
+        assert(strcmp(token_type_name((MilenaTokenType)type), "DESCONOCIDO") != 0);
     }
 
     expect_error_contains("media(no_declarado);", "no ha sido declarado");

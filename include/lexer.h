@@ -22,7 +22,7 @@ void lexer_init(Lexer *lexer, const char *source);
 Token lexer_next_token(Lexer *lexer);
 Token lexer_peek_token(Lexer *lexer);
 void lexer_advance_token(Lexer *lexer);
-bool lexer_match(Lexer *lexer, TokenType type);
-bool lexer_expect(Lexer *lexer, TokenType type, const char *error_msg);
+bool lexer_match(Lexer *lexer, MilenaTokenType type);
+bool lexer_expect(Lexer *lexer, MilenaTokenType type, const char *error_msg);
 
 #endif

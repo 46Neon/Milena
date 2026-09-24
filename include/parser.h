@@ -20,8 +20,8 @@ void parser_release(Parser *parser);
 ASTNode* parser_parse(Parser *parser);
 ASTNode* parser_parse_statistical_call(Parser *parser);
 void parser_error(Parser *parser, const char *msg);
-bool parser_match(Parser *parser, TokenType type);
-bool parser_expect(Parser *parser, TokenType type, const char *msg);
+bool parser_match(Parser *parser, MilenaTokenType type);
+bool parser_expect(Parser *parser, MilenaTokenType type, const char *msg);
 void parser_advance(Parser *parser);
 
 #endif

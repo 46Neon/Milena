@@ -1,5 +1,6 @@
 #include "stream.h"
 #include "grouped_aggregate.h"
+#include "source_reader.h"
 
 #include <assert.h>
 
@@ -28,7 +29,39 @@ static void write_fixture(const char *path) {
     assert(fclose(file) == 0);
 }
 
+static void test_local_source_reader(void) {
+    const char *path = "tests/.source_reader_fixture.csv";
+    FILE *file = fopen(path, "wb");
+    assert(file != NULL);
+    fputs("id,nota\r\n1,\"linea uno\r\nlinea dos\"\r\n2,final", file);
+    assert(fclose(file) == 0);
+
+    MilenaSourceReader reader = {0};
+    MilenaError error;
+    milena_error_clear(&error);
+    assert(milena_source_reader_open_local_csv(&reader, path, &error) == MILENA_OK);
+    char *record = NULL;
+    size_t capacity = 0, length = 0, position = 0;
+    assert(milena_source_reader_read_record(&reader, &record, &capacity,
+        4096, &length, &error) == MILENA_OK);
+    assert(length == strlen("id,nota") && strcmp(record, "id,nota") == 0);
+    assert(milena_source_reader_position_bytes(&reader, &position) && position == 9);
+    assert(milena_source_reader_read_record(&reader, &record, &capacity,
+        4096, &length, &error) == MILENA_OK);
+    assert(strcmp(record, "1,\"linea uno\nlinea dos\"") == 0);
+    assert(milena_source_reader_read_record(&reader, &record, &capacity,
+        4096, &length, &error) == MILENA_OK);
+    assert(strcmp(record, "2,final") == 0);
+    assert(milena_source_reader_read_record(&reader, &record, &capacity,
+        4096, &length, &error) == MILENA_ERR_IO);
+    assert(milena_source_reader_at_end(&reader));
+    assert(milena_source_reader_close(&reader) == MILENA_OK);
+    free(record);
+    assert(remove(path) == 0);
+}
+
 int main(void) {
+    test_local_source_reader();
     const char *input = "tests/.stream_fixture.csv";
     const char *output = "tests/.stream_report.json";
     write_fixture(input);
@@ -41,48 +74,8 @@ int main(void) {
     MilenaStreamReport report = {0};
     MilenaError error;
     milena_error_clear(&error);
-    MilenaStreamExecutionPlan execution_plan;
-    assert(milena_stream_plan_build_csv(false, false, &execution_plan,
-                                        &error) == MILENA_OK);
-    assert(execution_plan.kind == MILENA_STREAM_PLAN_SUMMARY);
-    assert(execution_plan.operator_count == 3 &&
-           execution_plan.operators[0] == MILENA_STREAM_PLAN_SCAN_CSV_RECORDS &&
-           execution_plan.operators[1] == MILENA_STREAM_PLAN_SUMMARY_AGGREGATE &&
-           execution_plan.operators[2] == MILENA_STREAM_PLAN_JSON_SINK);
-    assert(execution_plan.partition_count == 1 &&
-           execution_plan.worker_count == 1 && execution_plan.csv_record_safe &&
-           !execution_plan.parallel_enabled);
-    assert(milena_stream_execute_csv_plan(&execution_plan, input, output, NULL,
-        metrics, sizeof(metrics) / sizeof(metrics[0]), NULL, NULL, &report,
-        &error) == MILENA_OK);
-    assert(milena_stream_plan_build_csv(true, true, &execution_plan,
-                                        &error) == MILENA_OK);
-    assert(execution_plan.kind == MILENA_STREAM_PLAN_GROUPED_SPILL_MODE &&
-           execution_plan.operator_count == 5 &&
-           execution_plan.operators[0] == MILENA_STREAM_PLAN_SCAN_CSV_RECORDS &&
-           execution_plan.operators[1] == MILENA_STREAM_PLAN_GROUPED_SPILL &&
-           execution_plan.operators[2] ==
-               MILENA_STREAM_PLAN_REDUCE_PARTIAL_STATES &&
-           execution_plan.operators[3] == MILENA_STREAM_PLAN_ORDER_BY_KEY &&
-           execution_plan.operators[4] == MILENA_STREAM_PLAN_JSON_SINK &&
-           execution_plan.partition_count == 1 &&
-           execution_plan.worker_count == 1 &&
-           execution_plan.csv_record_safe &&
-           !execution_plan.parallel_enabled);
-    MilenaStreamExecutionPlan unsafe_plan = execution_plan;
-    unsafe_plan.parallel_enabled = true;
-    assert(milena_stream_plan_validate_csv(&unsafe_plan, &error) ==
-           MILENA_ERR_UNSUPPORTED);
-    unsafe_plan = execution_plan;
-    unsafe_plan.csv_record_safe = false;
-    assert(milena_stream_plan_validate_csv(&unsafe_plan, &error) ==
-           MILENA_ERR_UNSUPPORTED);
-    unsafe_plan = execution_plan;
-    unsafe_plan.operators[2] = MILENA_STREAM_PLAN_ORDER_BY_KEY;
-    assert(milena_stream_plan_validate_csv(&unsafe_plan, &error) ==
-           MILENA_ERR_DATA);
-    assert(milena_stream_plan_build_csv(false, true, &execution_plan,
-                                        &error) == MILENA_ERR_ARGUMENT);
+    assert(milena_stream_csv_summary_with_options(input, output, metrics,
+        sizeof(metrics) / sizeof(metrics[0]), NULL, &report, &error) == MILENA_OK);
     assert(report.rows_read == 4);
     assert(report.rows_with_valid_values == 3);
     assert(report.malformed_rows == 1);
@@ -194,15 +187,14 @@ int main(void) {
     MilenaStreamReport grouped_report = {0};
     MilenaError grouped_error;
     milena_error_clear(&grouped_error);
-    assert(milena_stream_plan_build_csv(true, false, &execution_plan,
-                                        &grouped_error) == MILENA_OK);
-    assert(milena_stream_execute_csv_plan(&execution_plan, group_input,
-        group_output, "zona", grouped_metrics, 2, &grouped_options, NULL,
-        &grouped_report, &grouped_error) == MILENA_OK);
+    assert(milena_stream_csv_grouped_with_options(group_input, group_output,
+        "zona", grouped_metrics, 2, &grouped_options, &grouped_report,
+        &grouped_error) == MILENA_OK);
     assert(grouped_report.rows_read == 4);
     assert(grouped_report.rows_with_valid_values == 4);
     assert(grouped_report.malformed_rows == 2);
     assert(grouped_report.input_bytes > 0);
+    assert(grouped_report.bytes_read == grouped_report.input_bytes);
     assert(grouped_report.groups == 2);
     assert(grouped_report.max_groups == 10);
     json = fopen(group_output, "rb");
@@ -221,6 +213,7 @@ int main(void) {
     assert(strstr(buffer,
         "\"nombre\":\"referencia_conteo\",\"valores_validos\":1,\"valores_nulos\":1,\"valores_invalidos\":0,\"valor\":1") != NULL);
     assert(strstr(buffer, "\"limite_grupos\":10") != NULL);
+    assert(strstr(buffer, "\"bytes_leidos\":") != NULL);
     remove(group_output);
 
     const char *spill_group_output = "tests/.stream_group_spill_report.json";
@@ -230,13 +223,10 @@ int main(void) {
     MilenaStreamSpillPolicy plan_spill_policy = {
         spill_group_scratch, 4096u, 1024u * 1024u, 32u, 10u, 0u, 10u
     };
-    assert(milena_stream_plan_build_csv(true, true, &execution_plan,
-                                        &grouped_error) == MILENA_OK);
     memset(&grouped_report, 0, sizeof(grouped_report));
-    assert(milena_stream_execute_csv_plan(&execution_plan, group_input,
-        spill_group_output, "zona", &grouped_metrics[0], 1,
-        &grouped_options, &plan_spill_policy, &grouped_report,
-        &grouped_error) == MILENA_OK);
+    assert(milena_stream_csv_grouped_spill_with_options(group_input,
+        spill_group_output, "zona", &grouped_metrics[0], 1u, &grouped_options,
+        &plan_spill_policy, &grouped_report, &grouped_error) == MILENA_OK);
     assert(grouped_report.groups == 2);
     json = fopen(spill_group_output, "rb");
     assert(json != NULL);
@@ -267,6 +257,115 @@ int main(void) {
     assert(fopen(group_output, "rb") == NULL);
     remove(group_input);
     remove(group_output);
+
+    /* Public report counters must come from the canonical reducer/store, and
+     * stay zero on a failed staged publication even after real spill occurred. */
+    const char *spill_input = "tests/.stream_group_spill_fixture.csv";
+    const char *spill_output = "tests/.stream_group_spill_report.json";
+    const char *spill_scratch = "tests/.stream_group_spill_scratch";
+    FILE *spill_fixture = fopen(spill_input, "wb");
+    assert(spill_fixture != NULL);
+    fputs("zona,importe\n", spill_fixture);
+    for (size_t i = 0; i < 200; ++i)
+        fprintf(spill_fixture, "g%03zu,1\n", i);
+    assert(fclose(spill_fixture) == 0);
+    MilenaStreamMetric spill_metric = {"importe", "importe_suma", MILENA_STREAM_SUM};
+    MilenaStreamOptions spill_options = milena_stream_options_default();
+    spill_options.max_groups = 256;
+    MilenaStreamSpillPolicy spill_policy = {spill_scratch, 4096, 1048576,
+        32, 256, 2097152, 4096};
+    MilenaStreamReport spill_report = {0};
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_spill_with_options(spill_input, spill_output,
+        "zona", &spill_metric, 1, &spill_options, &spill_policy, &spill_report,
+        &grouped_error) == MILENA_OK);
+    assert(spill_report.groups == 200);
+    assert(spill_report.spill_bytes > 0);
+    assert(spill_report.spill_records > 0);
+    assert(spill_report.spill_runs > 0);
+    FILE *spill_report_file = fopen(spill_output, "rb");
+    assert(spill_report_file != NULL);
+    assert(fclose(spill_report_file) == 0);
+    spill_report_file = fopen(spill_scratch, "rb");
+    assert(spill_report_file == NULL);
+    remove(spill_output);
+
+    /* Pair-key backend path: separators and CSV quotes stay unambiguous, the
+     * same first key with a different second key is distinct, valid empty
+     * strings remain distinct from invalid UTF-8 components, and each group
+     * still carries the declared multi-metric aggregate state. */
+    const char *pair_input = "tests/.stream_pair_spill_fixture.csv";
+    const char *pair_output = "tests/.stream_pair_spill_report.json";
+    const char *pair_scratch = "tests/.stream_pair_spill_scratch";
+    FILE *pair_file = fopen(pair_input, "wb");
+    assert(pair_file != NULL);
+    fputs("zona,subzona,importe\n", pair_file);
+    fputs("\"north|\"\"quoted\"\"\",\"a,b|c\",1\n", pair_file);
+    fputs("\"north|\"\"quoted\"\"\",\"a,b|c\",2\n", pair_file);
+    fputs("\"north|\"\"quoted\"\"\",third,3\n", pair_file);
+    fputs(",,4\n", pair_file);
+    fputc(0xff, pair_file);
+    fputs(",invalid-component,5\n", pair_file);
+    assert(fclose(pair_file) == 0);
+    MilenaStreamGroupKeyDescriptor pair_keys[] = {
+        {"zona", MILENA_STREAM_GROUP_KEY_TEXT},
+        {"subzona", MILENA_STREAM_GROUP_KEY_TEXT}
+    };
+    MilenaStreamMetric pair_metrics[] = {
+        {"importe", "importe_suma", MILENA_STREAM_SUM},
+        {"importe", "filas", MILENA_STREAM_COUNT}
+    };
+    MilenaStreamSpillPolicy pair_policy = {pair_scratch, 4096, 1048576,
+        128, 16, 2097152, 4096};
+    spill_options = milena_stream_options_default();
+    spill_options.max_groups = 16;
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_spill_with_keys_and_options(
+        pair_input, pair_output, pair_keys, 2, pair_metrics, 2,
+        &spill_options, &pair_policy, &spill_report, &grouped_error) == MILENA_OK);
+    assert(spill_report.groups == 4);
+    assert(spill_report.spill_bytes > 0 && spill_report.spill_records > 0);
+    json = fopen(pair_output, "rb");
+    assert(json != NULL);
+    memset(buffer, 0, sizeof(buffer));
+    assert(fread(buffer, 1, sizeof(buffer) - 1, json) > 0);
+    assert(fclose(json) == 0);
+    assert(strstr(buffer, "\"columnas_grupo\":[{\"nombre\":\"zona\",\"tipo\":\"texto\"},{\"nombre\":\"subzona\",\"tipo\":\"texto\"}]") != NULL);
+    assert(strstr(buffer, "\"valor\":\"north|\\\"quoted\\\"\",\"valido\":true") != NULL);
+    assert(strstr(buffer, "\"valor\":\"a,b|c\",\"valido\":true") != NULL);
+    assert(strstr(buffer, "\"valor\":\"third\",\"valido\":true") != NULL);
+    assert(strstr(buffer, "\"valor\":\"\",\"valido\":true") != NULL);
+    assert(strstr(buffer, "\"valor\":null,\"valido\":false") != NULL);
+    assert(strstr(buffer, "\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":3") != NULL);
+    assert(fopen(pair_scratch, "rb") == NULL);
+    remove(pair_output);
+
+    /* A group-limit failure never publishes a partial JSON report and still
+     * releases both reducer scratch and the sibling staging file. */
+    pair_policy.max_output_groups = 1;
+    spill_options.max_groups = 1;
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_spill_with_keys_and_options(
+        pair_input, pair_output, pair_keys, 2, pair_metrics, 2,
+        &spill_options, &pair_policy, &spill_report, &grouped_error) == MILENA_ERR_OVERFLOW);
+    assert(fopen(pair_output, "rb") == NULL);
+    assert(fopen(pair_scratch, "rb") == NULL);
+    remove(pair_input);
+
+    spill_options.max_groups = 1;
+    memset(&spill_report, 0xA5, sizeof(spill_report));
+    milena_error_clear(&grouped_error);
+    assert(milena_stream_csv_grouped_spill_with_options(spill_input, spill_output,
+        "zona", &spill_metric, 1, &spill_options, &spill_policy, &spill_report,
+        &grouped_error) != MILENA_OK);
+    assert(spill_report.spill_bytes == 0);
+    assert(spill_report.spill_records == 0);
+    assert(spill_report.spill_runs == 0);
+    spill_report_file = fopen(spill_output, "rb");
+    assert(spill_report_file == NULL);
+    spill_report_file = fopen(spill_scratch, "rb");
+    assert(spill_report_file == NULL);
+    remove(spill_input);
 
     /* The no-spill stream accumulator uses compensated summation. Compare it
      * with the mergeable grouped-spill path when cancellation values are

@@ -21,4 +21,16 @@ stream = (ROOT / "src/stream.c").read_text(encoding="utf-8")
 assert "milena_stream_csv_summary_with_options" in stream
 assert not (ROOT / "src/stream_main.c").exists()
 
+
+# Streaming programs are planned after semantic/resource validation and the
+# chosen physical operator is consumed by the canonical runtime.
+runtime = (ROOT / "src/language_runtime.c").read_text(encoding="utf-8")
+planner = (ROOT / "src/query_plan.c").read_text(encoding="utf-8")
+assert "milena_stream_execution_plan_build" in runtime
+assert "MILENA_PHYSICAL_CSV_STREAM_SUMMARY" in runtime
+assert "MILENA_PHYSICAL_CSV_STREAM_GROUPED" in runtime
+assert "MILENA_LOGICAL_CSV_SCAN" in planner
+assert "MILENA_LOGICAL_JSON_REPORT" in planner
+assert "main(" not in planner, "el planificador no puede crear otro ejecutable"
+
 print("OK: CLI y flujo respetan la frontera lexer-parser-AST-semántica-runtime-backend")
