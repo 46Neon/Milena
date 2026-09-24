@@ -53,7 +53,7 @@ static bool is_keyword(const char *str) {
     return false;
 }
 
-static TokenType keyword_type(const char *str) {
+static MilenaTokenType keyword_type(const char *str) {
     if (strcmp(str, "analisis") == 0) return TOKEN_KW_ANALISIS;
     if (strcmp(str, "datos") == 0) return TOKEN_KW_DATOS;
     if (strcmp(str, "estadistica") == 0) return TOKEN_KW_ESTADISTICA;
@@ -105,7 +105,7 @@ static TokenType keyword_type(const char *str) {
     return TOKEN_IDENTIFICADOR;
 }
 
-static Token lexer_create_token(Lexer *lexer, TokenType type, const char *lexeme) {
+static Token lexer_create_token(Lexer *lexer, MilenaTokenType type, const char *lexeme) {
     Token token;
     token.type = type;
     strncpy(token.lexeme, lexeme, MAX_TOKEN_LEN - 1);
@@ -423,7 +423,7 @@ Token lexer_next_token(Lexer *lexer) {
             return token;
         }
         buffer[idx] = '\0';
-        TokenType type = keyword_type(buffer);
+        MilenaTokenType type = keyword_type(buffer);
         token = lexer_create_token(lexer, type, buffer);
         
         if (type == TOKEN_BOOLEANO) {
@@ -467,11 +467,11 @@ void lexer_advance_token(Lexer *lexer) {
     lexer->current_token = lexer_next_token(lexer);
 }
 
-bool lexer_match(Lexer *lexer, TokenType type) {
+bool lexer_match(Lexer *lexer, MilenaTokenType type) {
     return lexer->current_token.type == type;
 }
 
-bool lexer_expect(Lexer *lexer, TokenType type, const char *error_msg) {
+bool lexer_expect(Lexer *lexer, MilenaTokenType type, const char *error_msg) {
     if (lexer->current_token.type != type) {
         milena_error_set(&lexer->error, MILENA_ERR_PARSE, (size_t)lexer->current_token.line, (size_t)lexer->current_token.column, 0, error_msg);
         return false;
@@ -479,7 +479,7 @@ bool lexer_expect(Lexer *lexer, TokenType type, const char *error_msg) {
     return true;
 }
 
-const char *token_type_name(TokenType type) {
+const char *token_type_name(MilenaTokenType type) {
     static const char *const names[TOKEN_TYPE_COUNT] = {
         "EOF", "ERROR", "ANALISIS", "DATOS", "ESTADISTICA", "DATASET",
         "LIMPIAR", "TRANSFORMAR", "VISUALIZAR", "EXPORTAR", "FILTRAR",
@@ -503,11 +503,11 @@ const char *token_type_name(TokenType type) {
     return names[type];
 }
 
-bool token_is_keyword(TokenType type) {
+bool token_is_keyword(MilenaTokenType type) {
     return type >= TOKEN_KW_ANALISIS && type <= TOKEN_KW_CONTAR;
 }
 
-bool token_is_operator(TokenType type) {
+bool token_is_operator(MilenaTokenType type) {
     return (type >= TOKEN_IGUAL && type <= TOKEN_DIV) || 
            type == TOKEN_ASIGNACION;
 }

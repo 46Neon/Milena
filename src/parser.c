@@ -27,7 +27,7 @@ void parser_advance(Parser *parser) {
     parser->current = lexer_next_token(parser->lexer);
 }
 
-bool parser_match(Parser *parser, TokenType type) {
+bool parser_match(Parser *parser, MilenaTokenType type) {
     return parser->current.type == type;
 }
 
@@ -37,7 +37,7 @@ static bool parser_is_identifier(Parser *parser) {
            parser_match(parser, TOKEN_KW_TOTAL);
 }
 
-bool parser_expect(Parser *parser, TokenType type, const char *msg) {
+bool parser_expect(Parser *parser, MilenaTokenType type, const char *msg) {
     if (!parser_match(parser, type)) {
         parser_error(parser, msg);
         return false;
@@ -243,7 +243,7 @@ static ASTNode *parse_expression(Parser *parser) {
     }
 
     while (parser_match(parser, TOKEN_MAS) || parser_match(parser, TOKEN_MENOS)) {
-        TokenType operator_type = parser->current.type;
+        MilenaTokenType operator_type = parser->current.type;
         parser_advance(parser);
         ASTNode *right = NULL;
         if (parser_match(parser, TOKEN_NUMERO)) {
@@ -386,7 +386,7 @@ static ASTNode *parse_assignment(Parser *parser) {
     return node;
 }
 
-static bool parser_is_statistical_token(TokenType type) {
+static bool parser_is_statistical_token(MilenaTokenType type) {
     return type == TOKEN_FUNCION_SUMA ||
            type == TOKEN_FUNCION_MEDIA ||
            type == TOKEN_FUNCION_MINIMO ||
@@ -397,7 +397,7 @@ static bool parser_is_statistical_token(TokenType type) {
            type == TOKEN_FUNCION_PERCENTIL;
 }
 
-static ASTStatOperation parser_statistical_operation(TokenType type) {
+static ASTStatOperation parser_statistical_operation(MilenaTokenType type) {
     switch (type) {
         case TOKEN_FUNCION_SUMA: return AST_ESTADISTICA_SUMA;
         case TOKEN_FUNCION_MEDIA: return AST_ESTADISTICA_MEDIA;
@@ -1568,7 +1568,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
 
 /* User-defined numeric functions. Expressions use numeric booleans (0/1). */
 static ASTNode *fn_expr(Parser *p);
-static int fn_precedence(TokenType t) {
+static int fn_precedence(MilenaTokenType t) {
     switch (t) {
     case TOKEN_IGUAL_IGUAL: case TOKEN_DISTINTO: case TOKEN_MAYOR:
     case TOKEN_MAYOR_IGUAL: case TOKEN_MENOR: case TOKEN_MENOR_IGUAL: return 1;
@@ -1577,7 +1577,7 @@ static int fn_precedence(TokenType t) {
     default: return 0;
     }
 }
-static const char *fn_operator(TokenType t) {
+static const char *fn_operator(MilenaTokenType t) {
     switch (t) { case TOKEN_IGUAL_IGUAL:return "=="; case TOKEN_DISTINTO:return "!=";
     case TOKEN_MAYOR:return ">"; case TOKEN_MAYOR_IGUAL:return ">="; case TOKEN_MENOR:return "<";
     case TOKEN_MENOR_IGUAL:return "<="; case TOKEN_MAS:return "+"; case TOKEN_MENOS:return "-";
@@ -1645,7 +1645,7 @@ static ASTNode *fn_expr_prec(Parser *p, int min_prec) {
     for (;;) {
         int prec = fn_precedence(p->current.type);
         if (prec < min_prec) break;
-        TokenType token = p->current.type;
+        MilenaTokenType token = p->current.type;
         parser_advance(p);
         ASTNode *right = fn_expr_prec(p, prec + 1);
         if (!right) { ast_destroy(left); return NULL; }
@@ -2185,7 +2185,7 @@ static ASTNode *parse_sql_typed_insert(Parser *parser) {
     return insert;
 }
 
-static ASTSqlOperator parse_sql_comparison_operator(TokenType type) {
+static ASTSqlOperator parse_sql_comparison_operator(MilenaTokenType type) {
     switch (type) {
         case TOKEN_IGUAL: case TOKEN_IGUAL_IGUAL: return AST_SQL_OPERATOR_EQUAL;
         case TOKEN_DISTINTO: return AST_SQL_OPERATOR_NOT_EQUAL;

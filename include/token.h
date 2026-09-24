@@ -101,18 +101,23 @@ typedef enum {
     // Especiales
     TOKEN_COMMENT,
     TOKEN_TYPE_COUNT
-} TokenType;
+} MilenaTokenType;
+
+/* The Windows SDK also declares TokenType; retain the legacy alias elsewhere. */
+#ifndef _WIN32
+typedef MilenaTokenType TokenType;
+#endif
 
 typedef struct Token {
-    TokenType type;
+    MilenaTokenType type;
     char lexeme[MAX_TOKEN_LEN];
     int line;
     int column;
     double number_value;
 } Token;
 
-const char *token_type_name(TokenType type);
-bool token_is_keyword(TokenType type);
-bool token_is_operator(TokenType type);
+const char *token_type_name(MilenaTokenType type);
+bool token_is_keyword(MilenaTokenType type);
+bool token_is_operator(MilenaTokenType type);
 
 #endif
