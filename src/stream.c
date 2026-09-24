@@ -44,8 +44,16 @@ typedef struct {
 } StreamAccumulator;
 
 static double stream_now_ms(void) {
+#ifdef _WIN32
     struct timespec value;
     if (timespec_get(&value, TIME_UTC) != TIME_UTC) return 0.0;
+#else
+    struct timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) == 0)
+        return (double)value.tv_sec * 1000.0 +
+               (double)value.tv_nsec / 1000000.0;
+    if (clock_gettime(CLOCK_REALTIME, &value) != 0) return 0.0;
+#endif
     return (double)value.tv_sec * 1000.0 + (double)value.tv_nsec / 1000000.0;
 }
 
