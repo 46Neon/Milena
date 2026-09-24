@@ -849,6 +849,50 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             terminal_operation_seen = true;
             continue;
         }
+        if (node->type == AST_BLOQUE_UNIR) {
+            const ASTNode *right_node = NULL;
+            const ASTNode *key_node = NULL;
+            for (size_t j = 0; j < node->child_count; ++j) {
+                const ASTNode *child = node->children[j];
+                if (!child) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
+                if (child->type == AST_COMANDO_DERECHA && child->value && !right_node)
+                    right_node = child;
+                else if (child->type == AST_COMANDO_CLAVE && child->value && !key_node)
+                    key_node = child;
+                else {
+                    data_hir_release(hir);
+                    return HIR_BUILD_UNSUPPORTED;
+                }
+            }
+            if (!right_node || !key_node || !node->join_memory_budget_bytes ||
+                !node->join_max_output_rows) {
+                data_hir_release(hir);
+                return HIR_BUILD_UNSUPPORTED;
+            }
+            MilenaHIRDataOperation op = {0};
+            op.kind = MILENA_HIR_DATA_JOIN;
+            hir_source_span(&op.span, node);
+            op.as.join.right_source = milena_strdup(right_node->value);
+            op.as.join.right_dataset_id = 2;
+            op.as.join.left_key = hir_unresolved_column(key_node->value, key_node);
+            op.as.join.right_key = hir_unresolved_column(key_node->value, key_node);
+            op.as.join.join_type = MILENA_JOIN_INNER;
+            op.as.join.policy.max_input_rows = SIZE_MAX;
+            op.as.join.policy.max_output_rows = node->join_max_output_rows;
+            op.as.join.policy.max_columns = SIZE_MAX;
+            op.as.join.memory_budget_bytes = node->join_memory_budget_bytes;
+            if (!op.as.join.right_source || !op.as.join.left_key.name ||
+                !op.as.join.right_key.name ||
+                !hir_append_data_operation(hir, &op)) {
+                free(op.as.join.right_source);
+                hir_column_ref_release(&op.as.join.left_key);
+                hir_column_ref_release(&op.as.join.right_key);
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            terminal_operation_seen = true;
+            continue;
+        }
         if (node->type == AST_BLOQUE_SELECCIONAR) {
             if (node->child_count != 1 || !node->children[0] ||
                 node->children[0]->type != AST_COMANDO_COLUMNAS ||
@@ -906,6 +950,7 @@ void milena_canonical_program_init(MilenaCanonicalProgram *program) {
     if (!program) return;
     program->ast = NULL;
     program->table = NULL;
+    program->right_table = NULL;
     program->hir = NULL;
     program->data_hir = NULL;
 }
@@ -919,6 +964,7 @@ void milena_canonical_program_release(MilenaCanonicalProgram *program) {
     ast_destroy(program->ast);
     program->ast = NULL;
     program->table = NULL;
+    program->right_table = NULL;
 }
 
 MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
@@ -1060,9 +1106,10 @@ static MilenaStatus hir_bind_column(const MilenaTable *table,
     return MILENA_OK;
 }
 
-static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
-                                        const MilenaTable *table,
-                                        MilenaError *error) {
+static MilenaStatus data_hir_bind_tables(MilenaDataHIR *hir,
+                                         const MilenaTable *table,
+                                         const MilenaTable *right_table,
+                                         MilenaError *error) {
     if (!hir || !table) return MILENA_ERR_ARGUMENT;
     const char *table_source = milena_table_get_metadata(
         table, MILENA_HIR_DATASET_PATH_METADATA);
@@ -1072,8 +1119,47 @@ static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
             "La tabla no acredita la ruta de fuente de datos declarada por HIR");
         return MILENA_ERR_DATA;
     }
+    MilenaHIRDataOperation *join = NULL;
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        if (hir->operations[i].kind == MILENA_HIR_DATA_JOIN) {
+            if (join) {
+                canonical_span_error(error, MILENA_ERR_UNSUPPORTED,
+                    &hir->operations[i].span,
+                    "La HIR admite un solo dataset derecho por programa");
+                return MILENA_ERR_UNSUPPORTED;
+            }
+            join = &hir->operations[i];
+        }
+    }
+    if ((join && !right_table) || (!join && right_table)) {
+        canonical_span_error(error, MILENA_ERR_DATA, join ? &join->span :
+                             &hir->source.span,
+            join ? "La operación join requiere el segundo dataset ligado" :
+                   "Se recibió un segundo dataset que la HIR no declaró");
+        return MILENA_ERR_DATA;
+    }
+    if (join) {
+        const char *right_source = milena_table_get_metadata(
+            right_table, MILENA_HIR_DATASET_PATH_METADATA);
+        if (!join->as.join.right_source || !right_source ||
+            strcmp(right_source, join->as.join.right_source) != 0 ||
+            join->as.join.right_dataset_id == 0 ||
+            join->as.join.right_dataset_id == hir->source.resolved_dataset_id) {
+            canonical_span_error(error, MILENA_ERR_DATA, &join->span,
+                "La tabla derecha no acredita el dataset declarado por la operación join");
+            return MILENA_ERR_DATA;
+        }
+    }
     size_t current_columns = table->column_count;
     size_t maximum_columns = table->column_count;
+    size_t maximum_input_rows = table->row_count;
+    size_t maximum_output_rows = table->row_count;
+    if (right_table) {
+        if (right_table->row_count > maximum_input_rows)
+            maximum_input_rows = right_table->row_count;
+        if (right_table->column_count > maximum_columns)
+            maximum_columns = right_table->column_count;
+    }
     for (size_t i = 0; i < hir->declared_column_count; ++i) {
         MilenaHIRColumnRef *declared = &hir->declared_schema[i];
         if (!declared->span.has_source_span) declared->span = hir->source.span;
@@ -1151,26 +1237,61 @@ static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
                 if (status != MILENA_OK) return status;
             }
             current_columns = op->as.summarize.aggregate_count;
+        } else if (op->kind == MILENA_HIR_DATA_JOIN) {
+            if (!right_table || !op->as.join.memory_budget_bytes ||
+                !op->as.join.policy.max_output_rows) {
+                canonical_span_error(error, MILENA_ERR_DATA, &op->span,
+                                     "El join HIR requiere tablas y límites válidos");
+                return MILENA_ERR_DATA;
+            }
+            status = hir_bind_column(table, hir, &op->as.join.left_key, i,
+                                     false, error);
+            MilenaDataHIR right_scope = {0};
+            if (status == MILENA_OK)
+                status = hir_bind_column(right_table, &right_scope,
+                    &op->as.join.right_key, 0, false, error);
+            if (status != MILENA_OK) return status;
+            if (op->as.join.left_key.type == MILENA_HIR_COLUMN_UNKNOWN ||
+                op->as.join.left_key.type != op->as.join.right_key.type ||
+                op->as.join.left_key.dtype != op->as.join.right_key.dtype) {
+                canonical_span_error(error, MILENA_ERR_TYPE,
+                    &op->as.join.left_key.span,
+                    "Las claves de join deben tener tipo y dtype compatibles");
+                return MILENA_ERR_TYPE;
+            }
+            if (current_columns > SIZE_MAX - right_table->column_count)
+                return MILENA_ERR_OVERFLOW;
+            current_columns += right_table->column_count;
+            if (op->as.join.policy.max_output_rows > maximum_output_rows)
+                maximum_output_rows = op->as.join.policy.max_output_rows;
         }
         if (current_columns > maximum_columns) maximum_columns = current_columns;
     }
-    hir->resource_policy.max_input_rows = table->row_count;
-    hir->resource_policy.max_output_rows = table->row_count;
+    hir->resource_policy.max_input_rows = maximum_input_rows;
+    hir->resource_policy.max_output_rows = maximum_output_rows;
     hir->resource_policy.max_columns = maximum_columns;
     hir->schema_bound = true;
     return MILENA_OK;
 }
 
-MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program,
-                                                 const MilenaTable *table,
-                                                 MilenaError *error) {
+MilenaStatus milena_canonical_program_bind_tables(
+    MilenaCanonicalProgram *program, const MilenaTable *table,
+    const MilenaTable *right_table, MilenaError *error) {
+    if (error) milena_error_clear(error);
     if (!program || !program->ast || !table) {
         canonical_error(error, MILENA_ERR_ARGUMENT,
                         "La frontera canónica requiere AST y MilenaTable");
         return MILENA_ERR_ARGUMENT;
     }
+    program->table = NULL;
+    program->right_table = NULL;
+    if (program->data_hir) program->data_hir->schema_bound = false;
     MilenaStatus status = milena_table_validate(table, error);
     if (status != MILENA_OK) return status;
+    if (right_table) {
+        status = milena_table_validate(right_table, error);
+        if (status != MILENA_OK) return status;
+    }
 
     const ASTNode *analysis = NULL;
     for (size_t i = 0; i < program->ast->child_count; i++) {
@@ -1185,12 +1306,22 @@ MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program
         if (status != MILENA_OK) return status;
     }
     if (program->data_hir) {
-        program->data_hir->schema_bound = false;
-        status = data_hir_bind_table(program->data_hir, table, error);
+        status = data_hir_bind_tables(program->data_hir, table, right_table, error);
         if (status != MILENA_OK) return status;
+    } else if (right_table) {
+        canonical_error(error, MILENA_ERR_ARGUMENT,
+                        "La entrada HIR no declara un segundo dataset");
+        return MILENA_ERR_ARGUMENT;
     }
     program->table = table;
+    program->right_table = right_table;
     return MILENA_OK;
+}
+
+MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program,
+                                                 const MilenaTable *table,
+                                                 MilenaError *error) {
+    return milena_canonical_program_bind_tables(program, table, NULL, error);
 }
 
 static const char *hir_operator_text(ASTOperatorKind operation) {
@@ -1225,18 +1356,21 @@ MilenaStatus milena_canonical_program_execute_data(
                         "La ejecución de datos HIR requiere HIR ligada, tabla y salida inicializada");
         return MILENA_ERR_ARGUMENT;
     }
-    if (output == program->table) {
+    if (output == program->table || output == program->right_table) {
         canonical_error(error, MILENA_ERR_ARGUMENT,
-                        "La salida no puede aliasar la tabla prestada de entrada");
+                        "La salida no puede aliasar ninguna tabla prestada de entrada");
         return MILENA_ERR_ARGUMENT;
     }
     const MilenaHIRResourcePolicy *limits = policy ? policy :
         &program->data_hir->resource_policy;
     const MilenaTable *input = program->table;
     if (input->row_count > limits->max_input_rows ||
-        input->column_count > limits->max_columns) {
+        input->column_count > limits->max_columns ||
+        (program->right_table &&
+         (program->right_table->row_count > limits->max_input_rows ||
+          program->right_table->column_count > limits->max_columns))) {
         canonical_error(error, MILENA_ERR_OVERFLOW,
-                        "La tabla ligada excede la política de recursos HIR");
+                        "Una tabla ligada excede la política de recursos HIR");
         return MILENA_ERR_OVERFLOW;
     }
     MilenaTable working = {0};
@@ -1326,6 +1460,39 @@ MilenaStatus milena_canonical_program_execute_data(
                 milena_table_destroy(&aggregated);
                 free(specifications);
             }
+        } else if (op->kind == MILENA_HIR_DATA_JOIN) {
+            if (!program->right_table || !op->as.join.right_source) {
+                status = MILENA_ERR_DATA;
+                canonical_span_error(error, status, &op->span,
+                                     "El join HIR requiere el dataset derecho ligado");
+            } else {
+                size_t max_rows = op->as.join.policy.max_output_rows;
+                if (limits->max_output_rows < max_rows)
+                    max_rows = limits->max_output_rows;
+                if (!max_rows) {
+                    status = MILENA_ERR_OVERFLOW;
+                    canonical_span_error(error, status, &op->span,
+                                         "El límite de filas join es cero");
+                } else {
+                    const char *left_keys[1] = {op->as.join.left_key.name};
+                    const char *right_keys[1] = {op->as.join.right_key.name};
+                    MilenaTable joined = {0};
+                    milena_table_init(&joined);
+                    status = milena_table_join_with_limits(
+                        &joined, &working, program->right_table, left_keys,
+                        right_keys, 1, op->as.join.join_type,
+                        op->as.join.memory_budget_bytes, max_rows, error);
+                    if (status == MILENA_OK &&
+                        joined.column_count > limits->max_columns) {
+                        status = MILENA_ERR_OVERFLOW;
+                        canonical_span_error(error, status, &op->span,
+                            "La unión excede el límite de columnas HIR");
+                    }
+                    if (status == MILENA_OK) milena_table_swap(&working, &joined);
+                    else hir_attach_error_span(error, &op->span);
+                    milena_table_destroy(&joined);
+                }
+            }
         } else {
             status = MILENA_ERR_UNSUPPORTED;
             canonical_span_error(error, status, &op->span,
@@ -1364,6 +1531,7 @@ MilenaStatus milena_canonical_compatibility_input(
     if (input) {
         input->ast = NULL;
         input->table = NULL;
+        input->right_table = NULL;
         input->hir = NULL;
         input->data_hir = NULL;
     }
@@ -1375,6 +1543,7 @@ MilenaStatus milena_canonical_compatibility_input(
     }
     input->ast = program->ast;
     input->table = program->table;
+    input->right_table = program->right_table;
     input->hir = program->hir;
     input->data_hir = program->data_hir;
     return MILENA_OK;
@@ -1429,6 +1598,9 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_AGRUPACION_POR:
         case AST_RESUMEN_METRICA:
         case AST_BLOQUE_RESUMIR:
+        case AST_BLOQUE_UNIR:
+        case AST_COMANDO_DERECHA:
+        case AST_COMANDO_CLAVE:
         case AST_BLOQUE_SELECCIONAR:
         case AST_COMANDO_COLUMNAS:
         case AST_BLOQUE_EXPORTAR:
@@ -1456,6 +1628,7 @@ MilenaStatus milena_canonical_hir_input(
     if (input) {
         input->ast = NULL;
         input->table = NULL;
+        input->right_table = NULL;
         input->hir = NULL;
         input->data_hir = NULL;
     }

@@ -462,21 +462,122 @@ int main(void) {
           "el binder debe rechazar tablas cuya provenance no coincide con el dataset HIR");
     milena_canonical_program_release(&program);
 
+    /* A bounded join resolves a second dataset and both key bindings. */
+    MilenaArray right_ids = {0};
+    int64_t right_id_values[] = {1, 2, 3};
+    const char *segment_values[] = {"A", "B", "C"};
+    CHECK(milena_array_from_i64(&right_ids, 1, data_shape, right_id_values,
+                                &error) == MILENA_OK, error.message);
+    MilenaTable catalog_table;
+    milena_table_init(&catalog_table);
+    CHECK(milena_table_add_column_copy(&catalog_table, "id", &right_ids, NULL,
+                                        &error) == MILENA_OK &&
+          milena_table_add_string_column_copy(&catalog_table, "segment",
+                segment_values, 3, NULL, &error) == MILENA_OK &&
+          milena_table_set_metadata(&catalog_table,
+                MILENA_HIR_DATASET_PATH_METADATA, "catalogo.csv",
+                &error) == MILENA_OK, error.message);
+    milena_canonical_program_init(&program);
+    const char *join_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".unir { #derecha(\"catalogo.csv\") #clave(\"id\") } }";
+    CHECK(milena_canonical_program_parse(&program, join_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(program.data_hir && program.data_hir->operation_count == 1 &&
+          program.data_hir->operations[0].kind == MILENA_HIR_DATA_JOIN &&
+          program.data_hir->operations[0].span.has_source_span &&
+          program.data_hir->operations[0].as.join.left_key.span.has_source_span &&
+          program.data_hir->operations[0].as.join.right_key.span.has_source_span &&
+          program.data_hir->operations[0].as.join.right_dataset_id !=
+              program.data_hir->source.resolved_dataset_id,
+          "el join debe bajar con identidad separada para el dataset derecho");
+    CHECK(milena_canonical_program_bind_tables(&program, &data_table,
+          &catalog_table, &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_compiler_input(&program, &data_input, &error) == MILENA_OK &&
+          data_input.right_table == &catalog_table,
+          "la entrada HIR estricta debe exponer ambos datasets ligados");
+    MilenaTable joined_output;
+    milena_table_init(&joined_output);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &joined_output,
+                                                &error) == MILENA_OK,
+          error.message);
+    int segment_column = milena_table_column_index(&joined_output, "segment");
+    const char *segment = NULL;
+    CHECK(joined_output.row_count == 3 && segment_column >= 0 &&
+          milena_table_get_string(&joined_output, (size_t)segment_column, 2,
+                                  &segment, &error) == MILENA_OK &&
+          strcmp(segment, "C") == 0,
+          "el join HIR debe materializar filas y columnas del dataset derecho");
+    MilenaTable join_sentinel;
+    milena_table_init(&join_sentinel);
+    CHECK(milena_table_clone(&join_sentinel, &joined_output, &error) == MILENA_OK,
+          error.message);
+    MilenaHIRResourcePolicy join_limit = {
+        .max_input_rows = 3, .max_output_rows = 2, .max_columns = 6
+    };
+    CHECK(milena_canonical_program_execute_data(&program, &join_limit,
+          &join_sentinel, &error) == MILENA_ERR_OVERFLOW &&
+          join_sentinel.row_count == 3 &&
+          milena_table_column_index(&join_sentinel, "segment") >= 0,
+          "el límite de salida join debe preservar la tabla anterior");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&join_sentinel);
+    milena_table_destroy(&joined_output);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, join_source, &error) == MILENA_OK,
+          error.message);
+    MilenaTable wrong_path_table;
+    milena_table_init(&wrong_path_table);
+    CHECK(milena_table_clone(&wrong_path_table, &catalog_table, &error) == MILENA_OK &&
+          milena_table_set_metadata(&wrong_path_table,
+                MILENA_HIR_DATASET_PATH_METADATA, "otro.csv", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_tables(&program, &data_table,
+          &wrong_path_table, &error) == MILENA_ERR_DATA &&
+          program.table == NULL && program.right_table == NULL &&
+          !program.data_hir->schema_bound,
+          "el binder debe rechazar provenance de ruta derecha discordante");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&wrong_path_table);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, join_source, &error) == MILENA_OK,
+          error.message);
+    MilenaTable wrong_key_table;
+    milena_table_init(&wrong_key_table);
+    const char *text_ids[] = {"1", "2", "3"};
+    CHECK(milena_table_add_string_column_copy(&wrong_key_table, "id", text_ids,
+                3, NULL, &error) == MILENA_OK &&
+          milena_table_add_string_column_copy(&wrong_key_table, "segment",
+                segment_values, 3, NULL, &error) == MILENA_OK &&
+          milena_table_set_metadata(&wrong_key_table,
+                MILENA_HIR_DATASET_PATH_METADATA, "catalogo.csv",
+                &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_bind_tables(&program, &data_table,
+          &wrong_key_table, &error) == MILENA_ERR_TYPE &&
+          program.table == NULL && program.right_table == NULL,
+          "el binder debe rechazar tipos incompatibles entre claves de join");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&wrong_key_table);
+    milena_table_destroy(&catalog_table);
+    milena_array_release(&right_ids);
+
     milena_table_destroy(&data_table);
     milena_array_release(&ids);
     milena_array_release(&prices);
     milena_array_release(&quantities);
 
     milena_canonical_program_init(&program);
-    const char *unsupported_join_source =
+    const char *unsupported_cleaning_source =
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
-        ".unir { #derecha(\"catalogo.csv\") #clave(\"id\") } }";
-    CHECK(milena_canonical_program_parse(&program, unsupported_join_source, &error) == MILENA_OK,
+        ".limpiar dataset { #nulos(\"eliminar\") } }";
+    CHECK(milena_canonical_program_parse(&program, unsupported_cleaning_source, &error) == MILENA_OK,
           error.message);
     CHECK(milena_canonical_compiler_input(&program, &data_input, &error) ==
               MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&
-          strstr(error.message, "BLOQUE_UNIR") != NULL,
-          "una unión todavía no representada debe fallar cerrado con AST y sin vista parcial");
+          strstr(error.message, "BLOQUE_LIMPIAR") != NULL,
+          "una limpieza no representada debe fallar cerrado con AST y sin vista parcial");
     milena_canonical_program_release(&program);
 
     puts("OK: canonical compiler boundary, typed scalar/data HIR, binding, execution and source diagnostics");

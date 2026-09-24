@@ -264,9 +264,48 @@ static int run_typed_data_hir_runtime(void) {
           strstr(text, "\"filas\": 3") != NULL &&
           strstr(text, "precio_suma") != NULL,
           "HIR runtime: agrupación canónica no llegó al reporte con su agregado");
+
+    const char *right_csv = "test-hir-join-runtime-right.csv";
+    const char *join_report = "test-hir-join-runtime.json";
+    CHECK(write_file(right_csv, "id,region\n1,Norte\n2,Centro\n3,Sur\n"),
+          "HIR join runtime: no se pudo escribir el CSV derecho");
+    const char *join_source =
+        ".analisis ventas_unidas {\n"
+        " variable id numerica\n"
+        " dataset cargar datos(\"test-hir-data-runtime.csv\")\n"
+        " .unir { #derecha(\"test-hir-join-runtime-right.csv\") #clave(\"id\") }\n"
+        " .exportar { (\"test-hir-join-runtime.json\") }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(join_source,
+          "test-hir-join-runtime.milena", NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(read_file(join_report, text, sizeof(text)) &&
+          strstr(text, "\"filas\": 3") != NULL &&
+          strstr(text, "region") != NULL && strstr(text, "Norte") != NULL,
+          "HIR join runtime: el pipeline canónico no enlazó ni reportó el dataset derecho");
+
+    const char *missing_report = "test-hir-join-missing.json";
+    const char *missing_join_source =
+        ".analisis join_fuente_ausente {\n"
+        " dataset cargar datos(\"test-hir-data-runtime.csv\")\n"
+        " .unir { #derecha(\"test-hir-join-right-absent.csv\") #clave(\"id\") }\n"
+        " .exportar { (\"test-hir-join-missing.json\") }\n"
+        "}\n";
+    remove(missing_report);
+    remove("test-hir-join-right-absent.csv");
+    CHECK(milena_run_dataset_program(missing_join_source,
+          "test-hir-join-missing.milena", NULL, &error) != MILENA_OK,
+          "HIR join runtime: debió fallar al abrir una fuente derecha inexistente");
+    FILE *missing_output = fopen(missing_report, "rb");
+    if (missing_output) fclose(missing_output);
+    CHECK(missing_output == NULL,
+          "HIR join runtime: publicó un reporte pese a faltar la fuente derecha");
     remove(csv);
     remove(report);
     remove(group_report);
+    remove(right_csv);
+    remove(join_report);
+    remove(missing_report);
     return 0;
 }
 

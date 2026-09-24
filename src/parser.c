@@ -1411,6 +1411,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     parser_advance(parser);
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
+                        Token block_start = parser->previous;
                         ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
                                                        (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
                         if (filtrar && joining) {
@@ -1478,6 +1479,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                         if (parser_expect(parser, TOKEN_CADENA, "Se esperaba valor de unión")) {
                                             ASTNode *command = ast_create_leaf(command_type,
                                                                                 parser->previous.lexeme);
+                                            if (command) (void)ast_set_source_span(command,
+                                                &parser->previous, &parser->previous);
                                             if (command && filtrar && !parser_add_child(parser, filtrar, command, "Sin memoria para unión")) break;
                                             parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de unión");
                                         }
@@ -1499,6 +1502,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             }
                         }
                         parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                        Token block_end = parser->previous;
+                        if (filtrar && block_start.type != TOKEN_EOF &&
+                            block_end.type == TOKEN_LLAVE_DER)
+                            (void)ast_set_source_span(filtrar, &block_start, &block_end);
                         if (filtrar && filtrar->child_count > 0) {
                             if (!parser_add_child(parser, node, filtrar, "Sin memoria para bloque de filtro")) break;
                         }

@@ -182,7 +182,7 @@ typedef struct {
         struct { MilenaHIRColumnRef *columns; size_t count; } select;
         struct { MilenaHIRColumnRef key; MilenaHIRAggregate *aggregates; size_t aggregate_count; MilenaHIRResourcePolicy policy; } group;
         struct { MilenaHIRAggregate *aggregates; size_t aggregate_count; } summarize;
-        struct { char *right_source; MilenaHIRColumnRef left_key, right_key; MilenaJoinType join_type; MilenaHIRResourcePolicy policy; } join;
+        struct { char *right_source; size_t right_dataset_id; MilenaHIRColumnRef left_key, right_key; MilenaJoinType join_type; MilenaHIRResourcePolicy policy; size_t memory_budget_bytes; } join;
         struct { char *name; MilenaHIRColumnRef *columns; size_t column_count; } sst;
         struct { char *path; } export_result;
     } as;
@@ -202,6 +202,7 @@ typedef struct {
 typedef struct {
     const ASTNode *ast;
     const MilenaTable *table;
+    const MilenaTable *right_table; /* Borrowed second dataset for a typed join. */
     const MilenaScalarHIR *hir;
     const MilenaDataHIR *data_hir; /* NULL outside the typed data subset. */
 } MilenaCanonicalCompilerInput;
@@ -209,6 +210,7 @@ typedef struct {
 typedef struct {
     ASTNode *ast;
     const MilenaTable *table;
+    const MilenaTable *right_table; /* Borrowed second dataset when HIR has a join. */
     MilenaScalarHIR *hir; /* Owned scalar HIR, when the scalar subset applies. */
     MilenaDataHIR *data_hir; /* Owned data HIR, when the table subset applies. */
 } MilenaCanonicalProgram;
@@ -228,8 +230,13 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
 MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program,
                                                  const MilenaTable *table,
                                                  MilenaError *error);
+/* Bind the primary source and, for HIR with one join, its explicitly resolved
+ * right-side source. Both borrowed tables must carry matching path metadata. */
+MilenaStatus milena_canonical_program_bind_tables(
+    MilenaCanonicalProgram *program, const MilenaTable *table,
+    const MilenaTable *right_table, MilenaError *error);
 
-/* Execute the supported typed data-HIR subset against the borrowed bound table.
+/* Execute the supported typed data-HIR subset against the borrowed bound table(s).
  * `output` is replaced transactionally on success and left unchanged on error.
  * A NULL policy uses safe bounds derived from the input table dimensions. */
 MilenaStatus milena_canonical_program_execute_data(
