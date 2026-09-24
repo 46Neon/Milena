@@ -144,14 +144,16 @@ static double arrow_now_ms(void) {
     if (QueryPerformanceFrequency(&frequency) &&
         QueryPerformanceCounter(&counter) && frequency.QuadPart > 0)
         return (double)counter.QuadPart * 1000.0 / (double)frequency.QuadPart;
+    struct timespec value;
+    if (timespec_get(&value, TIME_UTC) != TIME_UTC) return 0.0;
 #else
     struct timespec monotonic;
     if (clock_gettime(CLOCK_MONOTONIC, &monotonic) == 0)
         return (double)monotonic.tv_sec * 1000.0 +
                (double)monotonic.tv_nsec / 1000000.0;
-#endif
     struct timespec value;
-    if (timespec_get(&value, TIME_UTC) != TIME_UTC) return 0.0;
+    if (clock_gettime(CLOCK_REALTIME, &value) != 0) return 0.0;
+#endif
     return (double)value.tv_sec * 1000.0 + (double)value.tv_nsec / 1000000.0;
 }
 
