@@ -37,16 +37,18 @@ static uint64_t now_ms(void) {
         frequency.QuadPart > 0)
         return (uint64_t)((long double)counter.QuadPart * 1000.0L /
                           (long double)frequency.QuadPart);
+    struct timespec t;
+    if (timespec_get(&t, TIME_UTC) != TIME_UTC) return 0;
 #else
     struct timespec monotonic;
     if (clock_gettime(CLOCK_MONOTONIC, &monotonic) == 0)
         return (uint64_t)monotonic.tv_sec * 1000u +
                (uint64_t)monotonic.tv_nsec / 1000000u;
-#endif
-    /* Portable last-resort fallback; UTC can jump, but is used only where a
-     * monotonic OS clock is unavailable. */
     struct timespec t;
-    if (timespec_get(&t, TIME_UTC) != TIME_UTC) return 0;
+    if (clock_gettime(CLOCK_REALTIME, &t) != 0) return 0;
+#endif
+    /* Use a realtime fallback only if the platform's monotonic clock is
+     * unavailable. */
     return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
 }
 static void err(MilenaError *e, MilenaStatus s, const char *m) {
