@@ -18,6 +18,7 @@
 #include "sst_contingency.h"
 #include "sst_model.h"
 #include "language_semantic.h"
+#include "canonical_compiler.h"
 #include "finance.h"
 #include "ast.h"
 #include "lexer.h"
@@ -59,6 +60,28 @@ static bool runtime_numeric_cell(const MilenaTableColumn *data,
         default: return false; /* complex storage is never reinterpreted */
     }
     return isfinite(*value);
+}
+
+static MilenaVariableType runtime_column_schema_type(
+    const MilenaTableColumn *column) {
+    if (!column) return MILENA_VAR_TEXT;
+    if (column->type == MILENA_COLUMN_STRING) return MILENA_VAR_TEXT;
+    if (column->type == MILENA_COLUMN_CATEGORICAL) return MILENA_VAR_CATEGORICAL;
+    if (column->type != MILENA_COLUMN_ARRAY) return MILENA_VAR_TEXT;
+    switch (column->values.dtype) {
+        case MILENA_DTYPE_BOOL: return MILENA_VAR_BINARY;
+        case MILENA_DTYPE_INT8:
+        case MILENA_DTYPE_INT16:
+        case MILENA_DTYPE_INT32:
+        case MILENA_DTYPE_INT64:
+        case MILENA_DTYPE_UINT8:
+        case MILENA_DTYPE_UINT16:
+        case MILENA_DTYPE_UINT32:
+        case MILENA_DTYPE_UINT64:
+        case MILENA_DTYPE_FLOAT32:
+        case MILENA_DTYPE_FLOAT64: return MILENA_VAR_NUMERIC;
+        default: return MILENA_VAR_TEXT;
+    }
 }
 
 static MilenaStatus runtime_numeric_value(const MilenaTable *table, size_t column,
@@ -1693,8 +1716,16 @@ MilenaStatus milena_run_dataset_program(const char *source,
     }
 
     char input[2048];
-    MilenaStatus status = dataset_runtime_path(load->value, script_filename, false,
-                                               input, sizeof(input), error);
+    MilenaCanonicalProgram source_program;
+    milena_canonical_program_init(&source_program);
+    MilenaStatus status = milena_canonical_program_parse(&source_program, source, error);
+    const char *source_path = load->value;
+    if (status == MILENA_OK && source_program.data_hir)
+        source_path = source_program.data_hir->source.path;
+    if (status == MILENA_OK)
+        status = dataset_runtime_path(source_path, script_filename, false,
+                                      input, sizeof(input), error);
+    milena_canonical_program_release(&source_program);
     if (status != MILENA_OK) {
         ast_destroy(program);
         parser_release(&parser);
@@ -1891,7 +1922,136 @@ MilenaStatus milena_run_dataset_program(const char *source,
         status = milena_table_from_dataset(&canonical_table, &runtime.dataset,
                                            &schema, error);
     }
+    bool data_hir_executed = false;
     if (status == MILENA_OK) {
+        /* The closed HIR subset is the actual runtime consumer for products,
+         * numeric filters, projections and in-memory aggregates. Unsupported programs continue only
+         * through this explicitly legacy AST interpreter path. */
+        MilenaCanonicalProgram canonical_program;
+        milena_canonical_program_init(&canonical_program);
+        status = milena_canonical_program_parse(&canonical_program, source, error);
+        if (status == MILENA_OK && canonical_program.data_hir) {
+            Dataset right_dataset;
+            dataset_init(&right_dataset);
+            MilenaTable right_table = {0};
+            milena_table_init(&right_table);
+            const MilenaHIRDataOperation *join_operation = NULL;
+            for (size_t i = 0; i < canonical_program.data_hir->operation_count; ++i) {
+                const MilenaHIRDataOperation *candidate =
+                    &canonical_program.data_hir->operations[i];
+                if (candidate->kind != MILENA_HIR_DATA_JOIN) continue;
+                if (join_operation) {
+                    runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                        "El runtime canónico admite un solo dataset derecho por programa");
+                    status = MILENA_ERR_UNSUPPORTED;
+                    break;
+                }
+                join_operation = candidate;
+            }
+            if (status == MILENA_OK && join_operation) {
+                char right_input[2048];
+                status = dataset_runtime_path(join_operation->as.join.right_source,
+                    script_filename, false, right_input, sizeof(right_input), error);
+                if (status == MILENA_OK) {
+                    status = dataset_load_csv(&right_dataset, right_input, ',', error);
+                }
+                if (status == MILENA_OK) {
+                    status = milena_table_from_dataset(&right_table, &right_dataset,
+                                                       &schema, error);
+                }
+                if (status == MILENA_OK) {
+                    const char *existing_right_source = milena_table_get_metadata(
+                        &right_table, MILENA_HIR_DATASET_PATH_METADATA);
+                    if (existing_right_source && strcmp(existing_right_source,
+                        join_operation->as.join.right_source) != 0) {
+                        runtime_error(error, MILENA_ERR_DATA,
+                                      "La tabla derecha ya tiene procedencia de otra ruta");
+                        status = MILENA_ERR_DATA;
+                    } else if (!existing_right_source) {
+                        status = milena_table_set_metadata(&right_table,
+                            MILENA_HIR_DATASET_PATH_METADATA,
+                            join_operation->as.join.right_source, error);
+                    }
+                }
+            }
+            char hir_input[2048];
+            if (status == MILENA_OK)
+                status = dataset_runtime_path(canonical_program.data_hir->source.path,
+                                          script_filename, false, hir_input,
+                                          sizeof(hir_input), error);
+            if (status == MILENA_OK && strcmp(hir_input, input) != 0) {
+                runtime_error(error, MILENA_ERR_DATA,
+                              "La ruta de fuente HIR no coincide con el dataset cargado");
+                status = MILENA_ERR_DATA;
+            }
+            if (status == MILENA_OK) {
+                const char *existing_source = milena_table_get_metadata(
+                    &canonical_table, MILENA_HIR_DATASET_PATH_METADATA);
+                if (existing_source && strcmp(existing_source,
+                    canonical_program.data_hir->source.path) != 0) {
+                    runtime_error(error, MILENA_ERR_DATA,
+                                  "La tabla ya tiene procedencia de otra ruta");
+                    status = MILENA_ERR_DATA;
+                } else if (!existing_source) {
+                    status = milena_table_set_metadata(&canonical_table,
+                        MILENA_HIR_DATASET_PATH_METADATA,
+                        canonical_program.data_hir->source.path, error);
+                }
+            }
+            if (status == MILENA_OK && canonical_program.data_hir->export_path)
+                status = dataset_runtime_path(
+                    canonical_program.data_hir->export_path, script_filename, true,
+                    output_path, sizeof(output_path), error);
+            if (status == MILENA_OK) {
+                status = join_operation
+                    ? milena_canonical_program_bind_tables(&canonical_program,
+                        &canonical_table, &right_table, error)
+                    : milena_canonical_program_bind_table(&canonical_program,
+                        &canonical_table, error);
+            }
+            MilenaCanonicalCompilerInput compiler_input = {0};
+            if (status == MILENA_OK)
+                status = milena_canonical_compiler_input(&canonical_program,
+                                                         &compiler_input, error);
+            MilenaTable executed = {0};
+            milena_table_init(&executed);
+            if (status == MILENA_OK)
+                status = milena_canonical_program_execute_data(&canonical_program,
+                                                               NULL, &executed, error);
+            if (status == MILENA_OK) {
+                milena_table_swap(&canonical_table, &executed);
+                for (size_t i = 0; i < canonical_program.data_hir->operation_count; ++i) {
+                    const MilenaHIRDataOperation *op =
+                        &canonical_program.data_hir->operations[i];
+                    if (op->kind == MILENA_HIR_DATA_PRODUCT) {
+                        status = schema_add(&schema, op->as.product.output_name,
+                                            MILENA_VAR_NUMERIC,
+                                            MILENA_ROLE_FEATURE, error);
+                        if (status != MILENA_OK) break;
+                    } else if (op->kind == MILENA_HIR_DATA_JOIN) {
+                        for (size_t column = 0;
+                             column < canonical_table.column_count; ++column) {
+                            const MilenaTableColumn *joined_column =
+                                milena_table_column(&canonical_table, column);
+                            if (!joined_column || schema_index(&schema,
+                                joined_column->name) >= 0) continue;
+                            status = schema_add(&schema, joined_column->name,
+                                runtime_column_schema_type(joined_column),
+                                MILENA_ROLE_FEATURE, error);
+                            if (status != MILENA_OK) break;
+                        }
+                        if (status != MILENA_OK) break;
+                    }
+                }
+                data_hir_executed = status == MILENA_OK;
+            }
+            milena_table_destroy(&executed);
+            milena_table_destroy(&right_table);
+            dataset_destroy(&right_dataset);
+        }
+        milena_canonical_program_release(&canonical_program);
+    }
+    if (status == MILENA_OK && !data_hir_executed) {
         for (size_t i = 0; i < analysis->child_count; i++) {
             const ASTNode *block = analysis->children[i];
             if (!block) continue;

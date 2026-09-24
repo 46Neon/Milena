@@ -30,8 +30,9 @@ TEST_SQLITE_OBJECT = third_party/sqlite/sqlite3.o
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
+.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer test-ast-validation check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-hir-ast-coverage debug
 
+.PHONY: test-common-tokenizer
 test-common-tokenizer: tests/test_common_tokenizer
 	./tests/test_common_tokenizer
 
@@ -222,7 +223,7 @@ tests/test_lexer_safety: tests/test_lexer_safety.c src/lexer.c src/common.c
 test-language-runtime: tests/test_language_runtime
 	timeout --signal=TERM --kill-after=5s 60s ./tests/test_language_runtime
 
-tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/arrow_ipc.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/source_reader.c src/group_key_codec.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/query_plan.c src/sqlite_backend.c $(TEST_SQLITE_OBJECT)
+tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/arrow_ipc.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/source_reader.c src/group_key_codec.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/query_plan.c src/sqlite_backend.c $(TEST_SQLITE_OBJECT)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SQLITE_CFLAGS) $(filter %.c,$^) $(filter %.o,$^) $(LDFLAGS) -o $@
 
 .PHONY: test-arrow-ipc
@@ -259,10 +260,16 @@ test-parser-array: tests/test_parser_array
 tests/test_parser_array: tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
 
-.PHONY: test-parser-variables
+.PHONY: test-parser-variables test-ast-validation
 
 test-parser-variables: tests/test_parser_variables
 	./tests/test_parser_variables
+
+test-ast-validation: tests/test_ast_validation
+	./tests/test_ast_validation
+
+tests/test_ast_validation: tests/test_ast_validation.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 test-functions: tests/test_functions
 	./tests/test_functions
@@ -321,7 +328,10 @@ check-termux-industrial:
 check-compiler-boundary:
 	python3 scripts/check_compiler_boundary.py
 
-test-canonical-compiler: tests/test_canonical_compiler
+check-hir-ast-coverage:
+	python3 scripts/check_hir_ast_coverage.py
+
+test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
 tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c
@@ -388,23 +398,14 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer \
-      test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics \
-      test-parser-variables test-functions test-script-functions test-user-functions \
-      test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
+	./tests/run_tests.sh
 	./tests/run_tests.sh
 
 clean:
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
-		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
-		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
-		tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/test_common_tokenizer tests/test_canonical_compiler \
-		tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream \
-		tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
-
-
-
+		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/test_common_tokenizer tests/test_canonical_compiler tests/test_sqlite_backend tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
 
 # Opt-in end-to-end million-row validation; it remains outside ordinary make test.
 .PHONY: scale-million-row

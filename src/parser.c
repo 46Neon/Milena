@@ -23,6 +23,15 @@ void parser_error(Parser *parser, const char *msg) {
     parser->has_error = true;
 }
 
+static void parser_error_at(Parser *parser, const Token *token,
+                            const char *msg) {
+    if (!parser || !token || !msg) return;
+    size_t line = token->line > 0 ? (size_t)token->line : 0;
+    size_t column = token->column > 0 ? (size_t)token->column : 0;
+    milena_error_set(&parser->error, MILENA_ERR_PARSE, line, column, 0, msg);
+    parser->has_error = true;
+}
+
 void parser_advance(Parser *parser) {
     parser->previous = parser->current;
     parser->current = lexer_next_token(parser->lexer);
@@ -225,15 +234,19 @@ static ASTNode *parse_array_declaration(Parser *parser) {
 static ASTNode *parse_expression(Parser *parser) {
     ASTNode *left = NULL;
     if (parser_match(parser, TOKEN_NUMERO)) {
+        Token literal = parser->current;
         parser_advance(parser);
         left = ast_create_number(parser->previous.number_value);
+        if (left) (void)ast_set_source_span(left, &literal, &literal);
     } else if (parser_is_identifier(parser)) {
         if (!milena_symbols_exists(&parser->symbols, parser->current.lexeme)) {
             parser_error(parser, "La variable usada no ha sido declarada");
             return NULL;
         }
+        Token identifier = parser->current;
         left = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR, parser->current.lexeme);
         parser_advance(parser);
+        if (left) (void)ast_set_source_span(left, &identifier, &identifier);
     } else {
         parser_error(parser, "Se esperaba una expresión numérica");
         return NULL;
@@ -248,16 +261,20 @@ static ASTNode *parse_expression(Parser *parser) {
         parser_advance(parser);
         ASTNode *right = NULL;
         if (parser_match(parser, TOKEN_NUMERO)) {
+            Token literal = parser->current;
             parser_advance(parser);
             right = ast_create_number(parser->previous.number_value);
+            if (right) (void)ast_set_source_span(right, &literal, &literal);
         } else if (parser_is_identifier(parser)) {
             if (!milena_symbols_exists(&parser->symbols, parser->current.lexeme)) {
                 ast_destroy(left);
                 parser_error(parser, "La variable usada no ha sido declarada");
                 return NULL;
             }
+            Token identifier = parser->current;
             right = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR, parser->current.lexeme);
             parser_advance(parser);
+            if (right) (void)ast_set_source_span(right, &identifier, &identifier);
         } else {
             ast_destroy(left);
             parser_error(parser, "Se esperaba un valor después del operador");
@@ -270,6 +287,13 @@ static ASTNode *parse_expression(Parser *parser) {
             ast_destroy(right);
             ast_destroy(operation);
             parser_error(parser, "No se pudo crear la expresión");
+            return NULL;
+        }
+        if (!ast_set_source_span_from_nodes(operation, left, right)) {
+            ast_destroy(left);
+            ast_destroy(right);
+            ast_destroy(operation);
+            parser_error(parser, "No se pudo conservar el rango de la expresión");
             return NULL;
         }
         if (!parser_add_child(parser, operation, left,
@@ -297,6 +321,7 @@ static bool parser_is_schema_type(const char *text) {
 }
 
 static ASTNode *parse_variable_declaration(Parser *parser) {
+    Token declaration_start = parser->current;
     parser_advance(parser);
     if (!parser_is_identifier(parser)) {
         parser_error(parser, "Se esperaba nombre de variable");
@@ -327,6 +352,11 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
             parser->has_error = true;
             return NULL;
         }
+        if (!ast_set_source_span(node, &declaration_start, &parser->previous)) {
+            ast_destroy(node);
+            parser_error(parser, "No se pudo conservar el rango de la declaración");
+            return NULL;
+        }
         return node;
     }
 
@@ -355,10 +385,16 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
         ast_destroy(node);
         return NULL;
     }
+    if (!ast_set_source_span(node, &declaration_start, &parser->previous)) {
+        ast_destroy(node);
+        parser_error(parser, "No se pudo conservar el rango de la declaración");
+        return NULL;
+    }
     return node;
 }
 
 static ASTNode *parse_assignment(Parser *parser) {
+    Token assignment_start = parser->current;
     char name[MAX_TOKEN_LEN];
     strncpy(name, parser->current.lexeme, sizeof(name) - 1); name[sizeof(name) - 1] = '\0';
     if (!milena_symbols_exists(&parser->symbols, name)) {
@@ -382,6 +418,11 @@ static ASTNode *parse_assignment(Parser *parser) {
     }
     if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de la asignación")) {
         ast_destroy(node);
+        return NULL;
+    }
+    if (!ast_set_source_span(node, &assignment_start, &parser->previous)) {
+        ast_destroy(node);
+        parser_error(parser, "No se pudo conservar el rango de la asignación");
         return NULL;
     }
     return node;
@@ -419,6 +460,7 @@ static ASTNode *parse_statistical_call(Parser *parser,
         return NULL;
     }
 
+    Token operation_start = parser->current;
     ASTStatOperation operation = parser_statistical_operation(parser->current.type);
     parser_advance(parser);
     if (!parser_expect(parser, TOKEN_PAR_IZQ,
@@ -430,13 +472,15 @@ static ASTNode *parse_statistical_call(Parser *parser,
         return NULL;
     }
 
+    Token argument_token = parser->current;
     char symbol[MAX_TOKEN_LEN];
     strncpy(symbol, parser->current.lexeme, sizeof(symbol) - 1);
     symbol[sizeof(symbol) - 1] = '\0';
     parser_advance(parser);
     if (require_declared_symbol &&
         !milena_symbols_exists(&parser->symbols, symbol)) {
-        parser_error(parser, "El arreglo usado no ha sido declarado");
+        parser_error_at(parser, &argument_token,
+                        "El arreglo usado no ha sido declarado");
         return NULL;
     }
 
@@ -445,6 +489,7 @@ static ASTNode *parse_statistical_call(Parser *parser,
         parser_error(parser, "No se pudo crear el argumento estadístico");
         return NULL;
     }
+    (void)ast_set_source_span(argument, &argument_token, &argument_token);
 
     double percentile = 0.0;
     int axis = -1;
@@ -525,7 +570,18 @@ static ASTNode *parse_statistical_call(Parser *parser,
         ast_destroy(argument);
         return NULL;
     }
-    return ast_create_statistic(operation, argument, axis, keepdims, percentile);
+    ASTNode *node = ast_create_statistic(operation, argument, axis, keepdims,
+                                         percentile);
+    if (!node) {
+        parser_error(parser, "No se pudo crear la operación estadística");
+        return NULL;
+    }
+    if (!ast_set_source_span(node, &operation_start, &parser->previous)) {
+        ast_destroy(node);
+        parser_error(parser, "No se pudo conservar el rango de la estadística");
+        return NULL;
+    }
+    return node;
 }
 
 static bool parser_expect_word(Parser *parser, const char *word, const char *msg) {
@@ -962,6 +1018,7 @@ static ASTNode *parse_human_stream_export(Parser *parser) {
 }
 
 static ASTNode* parse_bloque_analisis(Parser *parser) {
+    Token block_start = parser->current;
     if (!parser_expect(parser, TOKEN_PUNTO, "Se esperaba '.'")) return NULL;
     if (!parser_expect(parser, TOKEN_KW_ANALISIS, "Se esperaba 'analisis'")) return NULL;
     if (!parser_expect(parser, TOKEN_IDENTIFICADOR, "Se esperaba nombre")) return NULL;
@@ -1159,38 +1216,59 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
         } else if (parser_match(parser, TOKEN_PUNTO)) {
             parser_advance(parser);
             if (parser_match(parser, TOKEN_KW_LIMPIAR)) {
+                Token cleaning_start = parser->current;
                 parser_advance(parser);
                 if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
                     ASTNode *limpiar = ast_create(AST_BLOQUE_LIMPIAR);
+                    if (!limpiar) parser_error(parser, "Sin memoria para bloque limpiar");
                     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                         if (parser_match(parser, TOKEN_NUMERAL)) {
+                            Token command_start = parser->current;
                             parser_advance(parser);
-                            if (parser_match(parser, TOKEN_KW_NULOS)) {
-                                parser_advance(parser);
-                                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                                    if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
-                                        if (!parser_add_child(parser, limpiar, ast_create_leaf(AST_COMANDO_NULOS, parser->previous.lexeme), "Sin memoria para comando nulos")) break;
-                                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
-                                    }
-                                }
-                            } else if (parser_match(parser, TOKEN_KW_DUPLICADOS)) {
-                                parser_advance(parser);
-                                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                                    if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
-                                        if (!parser_add_child(parser, limpiar, ast_create_leaf(AST_COMANDO_DUPLICADOS, parser->previous.lexeme), "Sin memoria para comando duplicados")) break;
-                                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
-                                    }
-                                }
+                            ASTNodeType command_type;
+                            if (parser_match(parser, TOKEN_KW_NULOS))
+                                command_type = AST_COMANDO_NULOS;
+                            else if (parser_match(parser, TOKEN_KW_DUPLICADOS))
+                                command_type = AST_COMANDO_DUPLICADOS;
+                            else {
+                                parser_error(parser, "Comando desconocido en limpiar");
+                                break;
                             }
+                            parser_advance(parser);
+                            if (!parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) break;
+                            if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) break;
+                            ASTNode *command = ast_create_leaf(command_type,
+                                                               parser->previous.lexeme);
+                            if (!command) {
+                                parser_error(parser, "Sin memoria para comando de limpieza");
+                                break;
+                            }
+                            if (!ast_set_source_span(command, &command_start,
+                                                     &parser->previous)) {
+                                ast_destroy(command);
+                                parser_error(parser, "No se pudo registrar el origen del comando de limpieza");
+                                break;
+                            }
+                            if (!parser_add_child(parser, limpiar, command,
+                                                  "Sin memoria para comando de limpieza")) break;
+                            if (!parser_expect(parser, TOKEN_PAR_DER,
+                                               "Se esperaba ')'")) break;
                         } else {
                             parser_error(parser, "Comando desconocido en limpiar");
                         }
                     }
-                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-                    if (limpiar) parser_add_child(parser, node, limpiar,
-                                                   "Sin memoria para el AST");
+                    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'"))
+                        ast_destroy(limpiar);
+                    else if (limpiar && !ast_set_source_span(limpiar,
+                                &cleaning_start, &parser->previous)) {
+                        ast_destroy(limpiar);
+                        parser_error(parser, "No se pudo registrar el origen del bloque limpiar");
+                    } else if (limpiar && !parser_add_child(parser, node, limpiar,
+                                                   "Sin memoria para el AST")) {
+                        break;
+                    }
                 }
             } else if (parser_match(parser, TOKEN_KW_TRANSFORMAR)) {
                 parser_advance(parser);
@@ -1228,6 +1306,68 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
                     if (transformar) parser_add_child(parser, node, transformar,
                                                        "Sin memoria para el AST");
+                }
+            } else if (parser_match(parser, TOKEN_KW_FILTRAR)) {
+                Token filter_start = parser->previous;
+                parser_advance(parser);
+                if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
+                if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
+                    ASTNode *filtrar = ast_create(AST_BLOQUE_FILTRAR);
+                    if (!filtrar) parser_error(parser, "Sin memoria para bloque filtrar");
+                    while (filtrar && !parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                            parser_error(parser, "Comando desconocido en filtrar");
+                            break;
+                        }
+                        parser_advance(parser);
+                        if (!parser_match(parser, TOKEN_KW_CONDICION)) {
+                            parser_error(parser, "Se esperaba #condicion en filtrar");
+                            break;
+                        }
+                        Token condition_start = parser->current;
+                        parser_advance(parser);
+                        if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                                           "Se esperaba '(' después de #condicion")) break;
+                        if (!parser_expect(parser, TOKEN_CADENA,
+                                           "Se esperaba una condición entre comillas")) break;
+                        ASTNode *condition = ast_create_leaf(AST_COMANDO_CONDICION,
+                                                             parser->previous.lexeme);
+                        if (!condition) {
+                            parser_error(parser, "Sin memoria para condición de filtro");
+                            break;
+                        }
+                        if (!ast_set_source_span(condition, &condition_start,
+                                                 &parser->previous)) {
+                            ast_destroy(condition);
+                            parser_error(parser, "No se pudo registrar el origen de la condición");
+                            break;
+                        }
+                        if (!parser_expect(parser, TOKEN_PAR_DER,
+                                           "Se esperaba ')' después de la condición")) {
+                            ast_destroy(condition);
+                            break;
+                        }
+                        if (!parser_add_child(parser, filtrar, condition,
+                                              "Sin memoria para condición de filtro")) break;
+                    }
+                    if (filtrar) {
+                        if (parser->has_error) {
+                            ast_destroy(filtrar);
+                        } else if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
+                            ast_destroy(filtrar);
+                        } else if (filtrar->child_count == 0) {
+                            ast_destroy(filtrar);
+                            parser_error(parser, "El bloque filtrar requiere #condicion");
+                        } else if (!ast_set_source_span(filtrar, &filter_start,
+                                                        &parser->previous)) {
+                            ast_destroy(filtrar);
+                            parser_error(parser, "No se pudo registrar el origen del filtro");
+                        } else if (!parser_add_child(parser, node, filtrar,
+                                                     "Sin memoria para el bloque filtrar")) {
+                            break;
+                        }
+                    }
                 }
             } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
                 parser_advance(parser);
@@ -1459,6 +1599,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     parser_advance(parser);
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
+                        Token block_start = parser->previous;
                         ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
                                                        (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
                         if (filtrar && joining) {
@@ -1526,6 +1667,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                         if (parser_expect(parser, TOKEN_CADENA, "Se esperaba valor de unión")) {
                                             ASTNode *command = ast_create_leaf(command_type,
                                                                                 parser->previous.lexeme);
+                                            if (command) (void)ast_set_source_span(command,
+                                                &parser->previous, &parser->previous);
                                             if (command && filtrar && !parser_add_child(parser, filtrar, command, "Sin memoria para unión")) break;
                                             parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de unión");
                                         }
@@ -1547,6 +1690,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             }
                         }
                         parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                        Token block_end = parser->previous;
+                        if (filtrar && block_start.type != TOKEN_EOF &&
+                            block_end.type == TOKEN_LLAVE_DER)
+                            (void)ast_set_source_span(filtrar, &block_start, &block_end);
                         if (filtrar && filtrar->child_count > 0) {
                             if (!parser_add_child(parser, node, filtrar, "Sin memoria para bloque de filtro")) break;
                         }
@@ -1561,6 +1708,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
     
     if (!parser->has_error) {
         parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+        if (!parser->has_error &&
+            !ast_set_source_span(node, &block_start, &parser->previous)) {
+            parser_error(parser, "No se pudo conservar el rango del análisis");
+        }
     }
     milena_symbols_leave_scope(&parser->symbols);
     return node;
@@ -1587,21 +1738,35 @@ static const char *fn_operator(MilenaTokenType t) {
 static ASTNode *fn_primary(Parser *p) {
     ASTNode *n = NULL;
     if (p->current.type == TOKEN_NUMERO) {
+        Token literal = p->current;
         double value = p->current.number_value;
         parser_advance(p);
         n = ast_create_number(value);
+        if (n) (void)ast_set_source_span(n, &literal, &literal);
     } else if (p->current.type == TOKEN_BOOLEANO) {
+        Token literal = p->current;
         bool yes = strcmp(p->current.lexeme, "verdadero") == 0;
         parser_advance(p);
         n = ast_create_number(yes ? 1.0 : 0.0);
+        if (n) {
+            n->value_type = AST_VALUE_BOOLEAN;
+            (void)ast_set_source_span(n, &literal, &literal);
+        }
     } else if (p->current.type == TOKEN_PAR_IZQ) {
+        Token open = p->current;
         parser_advance(p);
         n = fn_expr(p);
         if (!n || !parser_expect(p, TOKEN_PAR_DER, "Se esperaba ')'")) {
             ast_destroy(n);
             return NULL;
         }
+        if (!ast_set_source_span(n, &open, &p->previous)) {
+            ast_destroy(n);
+            parser_error(p, "No se pudo conservar el rango de la expresión entre paréntesis");
+            return NULL;
+        }
     } else if (parser_is_identifier(p)) {
+        Token identifier = p->current;
         char name[MAX_TOKEN_LEN];
         strncpy(name, p->current.lexeme, sizeof(name) - 1);
         name[sizeof(name) - 1] = '\0';
@@ -1632,6 +1797,11 @@ static ASTNode *fn_primary(Parser *p) {
         } else {
             n = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR, name);
         }
+        if (n && !ast_set_source_span(n, &identifier, &p->previous)) {
+            ast_destroy(n);
+            parser_error(p, "No se pudo conservar el rango del identificador");
+            return NULL;
+        }
     } else {
         parser_error(p, "Se esperaba expresión numérica o booleana");
         return NULL;
@@ -1656,6 +1826,11 @@ static ASTNode *fn_expr_prec(Parser *p, int min_prec) {
             parser_error(p, "Sin memoria para operación");
             return NULL;
         }
+        if (!ast_set_source_span_from_nodes(op, left, right)) {
+            ast_destroy(left); ast_destroy(right); ast_destroy(op);
+            parser_error(p, "No se pudo conservar el rango de la operación");
+            return NULL;
+        }
         if (!parser_add_child(p, op, left, "Sin memoria para operando izquierdo") ||
             !parser_add_child(p, op, right, "Sin memoria para operando derecho")) {
             ast_destroy(op);
@@ -1672,6 +1847,7 @@ static ASTNode *parse_fn_body(Parser *p) {
     ASTNode *body = ast_create(AST_BLOQUE_FUNCION);
     if (!body) { parser_error(p, "Sin memoria para cuerpo de función"); return NULL; }
     while (!parser_match(p, TOKEN_LLAVE_DER) && !parser_match(p, TOKEN_EOF)) {
+        Token statement_start = p->current;
         ASTNode *statement = NULL;
         if (p->current.type == TOKEN_KW_RETORNAR) {
             parser_advance(p);
@@ -1779,6 +1955,12 @@ static ASTNode *parse_fn_body(Parser *p) {
             parser_error(p, "Sentencia no válida en función");
             ast_destroy(body); return NULL;
         }
+        if (!ast_set_source_span(statement, &statement_start, &p->previous)) {
+            ast_destroy(statement);
+            ast_destroy(body);
+            parser_error(p, "No se pudo conservar el rango de la sentencia");
+            return NULL;
+        }
         if (!parser_add_child(p, body, statement, "Sin memoria para sentencia")) {
             ast_destroy(body); return NULL;
         }
@@ -1787,6 +1969,7 @@ static ASTNode *parse_fn_body(Parser *p) {
 }
 
 static ASTNode *parse_user_function(Parser *p) {
+    Token function_start = p->current;
     parser_advance(p);
     if (!parser_expect(p, TOKEN_IDENTIFICADOR, "Se esperaba nombre de función")) return NULL;
     char name[MAX_TOKEN_LEN];
@@ -1800,8 +1983,16 @@ static ASTNode *parse_user_function(Parser *p) {
             if (!parser_is_identifier(p)) {
                 parser_error(p, "Se esperaba parámetro"); ast_destroy(params); return NULL;
             }
+            Token parameter_token = p->current;
             ASTNode *parameter = ast_create_leaf(AST_EXPRESION_IDENTIFICADOR,
                                                  p->current.lexeme);
+            if (parameter &&
+                !ast_set_source_span(parameter, &parameter_token, &parameter_token)) {
+                ast_destroy(parameter);
+                ast_destroy(params);
+                parser_error(p, "No se pudo conservar el rango del parámetro");
+                return NULL;
+            }
             if (!parser_add_child(p, params, parameter, "Sin memoria para parámetro")) {
                 ast_destroy(params); return NULL;
             }
@@ -1826,10 +2017,16 @@ static ASTNode *parse_user_function(Parser *p) {
         !parser_add_child(p, function, body, "Sin memoria para cuerpo de función")) {
         ast_destroy(function); return NULL;
     }
+    if (!ast_set_source_span(function, &function_start, &p->previous)) {
+        ast_destroy(function);
+        parser_error(p, "No se pudo conservar el rango de la función");
+        return NULL;
+    }
     return function;
 }
 
 static ASTNode *parse_user_program(Parser *p) {
+    Token program_start = p->current;
     ASTNode *program = ast_create(AST_PROGRAMA);
     if (!program) { parser_error(p, "Sin memoria para programa"); return NULL; }
     while (!parser_match(p, TOKEN_EOF)) {
@@ -1857,6 +2054,11 @@ static ASTNode *parse_user_program(Parser *p) {
             parser_error(p, "Se esperaba función o variable");
             ast_destroy(program); return NULL;
         }
+    }
+    if (!ast_set_source_span(program, &program_start, &p->previous)) {
+        ast_destroy(program);
+        parser_error(p, "No se pudo conservar el rango del programa");
+        return NULL;
     }
     return program;
 }
@@ -2495,6 +2697,7 @@ ASTNode* parser_parse(Parser *parser) {
     if (parser->current.type == TOKEN_KW_FUNCION) {
         return parse_user_program(parser);
     }
+    Token program_start = parser->current;
 
     ASTNode *program = ast_create(AST_PROGRAMA);
     if (!program) {
@@ -2525,6 +2728,11 @@ ASTNode* parser_parse(Parser *parser) {
     }
     if (parser->has_error) {
         ast_destroy(program);
+        return NULL;
+    }
+    if (!ast_set_source_span(program, &program_start, &parser->previous)) {
+        ast_destroy(program);
+        parser_error(parser, "No se pudo conservar el rango del programa");
         return NULL;
     }
     return program;

@@ -103,6 +103,32 @@ typedef enum {
     AST_STREAM_FILTER_NUMERIC_GREATER
 } ASTStreamFilterKind;
 
+/* Static value annotations used by the typed scalar-expression frontend. */
+typedef enum {
+    AST_VALUE_UNRESOLVED = 0,
+    AST_VALUE_NUMBER,
+    AST_VALUE_BOOLEAN,
+    AST_VALUE_TEXT,
+    AST_VALUE_ARRAY,
+    AST_VALUE_DATASET,
+    AST_VALUE_TYPE_COUNT
+} ASTValueType;
+
+typedef enum {
+    AST_OPERATOR_NONE = 0,
+    AST_OPERATOR_ADD,
+    AST_OPERATOR_SUBTRACT,
+    AST_OPERATOR_MULTIPLY,
+    AST_OPERATOR_DIVIDE,
+    AST_OPERATOR_EQUAL,
+    AST_OPERATOR_NOT_EQUAL,
+    AST_OPERATOR_GREATER,
+    AST_OPERATOR_GREATER_EQUAL,
+    AST_OPERATOR_LESS,
+    AST_OPERATOR_LESS_EQUAL,
+    AST_OPERATOR_COUNT
+} ASTOperatorKind;
+
 typedef enum {
     AST_ESTADISTICA_NINGUNA,
     AST_ESTADISTICA_SUMA,
@@ -130,6 +156,15 @@ typedef enum {
 typedef struct ASTNode {
     ASTNodeType type;
     ASTStatOperation statistical_operation;
+    /* Semantic annotation; unresolved until the typed frontend pass. */
+    ASTValueType value_type;
+    /* Nonzero ID assigned by canonical script name resolution; never an owner. */
+    size_t resolved_symbol_id;
+    /* Structured scalar-expression operator, independent of legacy value text. */
+    ASTOperatorKind operator_kind;
+    /* Non-owning aliases of children[0] and children[1] for binary operators. */
+    struct ASTNode *left_operand;
+    struct ASTNode *right_operand;
     char *value;
     char *type_name;
     double number_value;
@@ -174,10 +209,20 @@ typedef struct ASTNode {
     size_t child_capacity;
     int line;
     int column;
+    int end_line;
+    int end_column;
+    size_t start_offset;
+    size_t end_offset;
+    bool has_source_span;
     struct ASTNode *parent;
 } ASTNode;
 
 ASTNode* ast_create(ASTNodeType type);
+/* Validate ownership, parent links, child storage, types and source-span containment. */
+bool ast_validate(const ASTNode *root, MilenaError *error);
+bool ast_set_source_span(ASTNode *node, const Token *start, const Token *end);
+bool ast_set_source_span_from_nodes(ASTNode *node, const ASTNode *first,
+                                    const ASTNode *last);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
 ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,
@@ -187,5 +232,8 @@ void ast_print(ASTNode *node, int depth);
 void ast_destroy(ASTNode *node);
 const char* ast_type_name(ASTNodeType type);
 const char *ast_stat_operation_name(ASTStatOperation operation);
+ASTOperatorKind ast_operator_kind_from_name(const char *name);
+const char *ast_operator_kind_name(ASTOperatorKind operation);
+const char *ast_value_type_name(ASTValueType type);
 
 #endif

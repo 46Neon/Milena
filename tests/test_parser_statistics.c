@@ -49,6 +49,9 @@ int main(void) {
     assert(program->child_count == 1);
     ASTNode *analysis = program->children[0];
     assert(analysis->type == AST_BLOQUE_ANALISIS);
+    assert(analysis->has_source_span);
+    assert(analysis->start_offset == 0);
+    assert(analysis->end_offset == strlen(source) - 1);
     assert(analysis->child_count == 9);
 
     const ASTStatOperation expected[] = {
@@ -68,6 +71,19 @@ int main(void) {
         assert(strcmp(ast_stat_operation_name(operation->statistical_operation),
                       "DESCONOCIDA") != 0);
     }
+    ASTNode *sum_call = analysis->children[1];
+    const char *sum_source = strstr(source, "suma(valores)");
+    assert(sum_source != NULL);
+    assert(sum_call->has_source_span);
+    assert(sum_call->start_offset == (size_t)(sum_source - source));
+    assert(sum_call->end_offset ==
+           (size_t)(sum_source - source) + strlen("suma(valores)"));
+    assert(sum_call->children[0]->has_source_span);
+    assert(sum_call->children[0]->start_offset ==
+           (size_t)(sum_source - source) + strlen("suma("));
+    assert(sum_call->children[0]->end_offset ==
+           (size_t)(sum_source - source) + strlen("suma(valores"));
+
     ASTNode *median = analysis->children[7];
     assert(median->axis == 0);
     assert(!median->keepdims);
@@ -96,5 +112,18 @@ int main(void) {
     expect_error("media(valores, eje 0, conservar eje);");
     expect_error("media(valores, porcentaje 10);");
     expect_error("media(valores, eje 0;");
+
+    /* A semantic diagnostic must point at the undeclared operand itself, not
+       at the closing parenthesis consumed during lookahead. */
+    const char *location_source =
+        ".analisis ubicacion {\n"
+        "  media(no_declarado);\n"
+        "}\n";
+    program = parse(location_source, &parser, &lexer);
+    assert(program == NULL);
+    assert(parser.has_error);
+    assert(parser.error.line == 2 && parser.error.column == 9);
+    assert(strstr(parser.error.message, "no ha sido declarado") != NULL);
+    parser_release(&parser);
     return 0;
 }

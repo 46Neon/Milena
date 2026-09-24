@@ -111,8 +111,13 @@ typedef MilenaTokenType TokenType;
 typedef struct Token {
     MilenaTokenType type;
     char lexeme[MAX_TOKEN_LEN];
+    /* One-based start and exclusive end coordinates; offsets are source bytes. */
     int line;
     int column;
+    int end_line;
+    int end_column;
+    size_t start_offset;
+    size_t end_offset;
     double number_value;
 } Token;
 

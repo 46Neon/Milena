@@ -225,6 +225,113 @@ static int run_dataset_pipeline(void) {
     return 0;
 }
 
+static int run_typed_data_hir_runtime(void) {
+    const char *csv = "test-hir-data-runtime.csv";
+    const char *report = "test-hir-data-runtime.json";
+    const char *content = "id,precio,cantidad\n1,2,3\n2,5,2\n3,4,1\n";
+    CHECK(write_file(csv, content), "HIR runtime: no se pudo escribir el CSV de entrada");
+    const char *source =
+        ".analisis ventas {\n"
+        " variable id numerica\n"
+        " variable precio numerica\n"
+        " variable cantidad numerica\n"
+        " dataset cargar datos(\"test-hir-data-runtime.csv\")\n"
+        " .transformar dataset { #total(\"precio * cantidad\") }\n"
+        " .filtrar { #condicion(\"total >= 10\") }\n"
+        " .seleccionar { #columnas(\"id,total\") }\n"
+        " .exportar { (\"test-hir-data-runtime.json\") }\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(source, "test-hir-data-runtime.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    char text[4096];
+    CHECK(read_file(report, text, sizeof(text)), "HIR runtime: no se publicó el reporte");
+    CHECK(strstr(text, "\"filas\": 1") != NULL &&
+          strstr(text, "total") != NULL && strstr(text, "precio") == NULL,
+          "HIR runtime: la ruta canónica no ejecutó producto/filtro/proyección antes de exportar");
+
+    const char *group_report = "test-hir-group-runtime.json";
+    const char *group_source =
+        ".analisis agrupado {\n"
+        " variable id numerica\n"
+        " variable precio numerica\n"
+        " dataset cargar datos(\"test-hir-data-runtime.csv\")\n"
+        " .agrupar dataset { #por(\"id\") #suma(\"precio\") }\n"
+        " .exportar { (\"test-hir-group-runtime.json\") }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(group_source, "test-hir-group-runtime.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(read_file(group_report, text, sizeof(text)) &&
+          strstr(text, "\"filas\": 3") != NULL &&
+          strstr(text, "precio_suma") != NULL,
+          "HIR runtime: agrupación canónica no llegó al reporte con su agregado");
+
+    const char *clean_csv = "test-hir-clean-runtime.csv";
+    const char *clean_report = "test-hir-clean-runtime.json";
+    CHECK(write_file(clean_csv, "id,name\n1,A\n1,A\n2,B\n"),
+          "HIR cleaning runtime: no se pudo escribir el CSV de prueba");
+    const char *clean_source =
+        ".analisis limpieza_canonica {\n"
+        " dataset cargar datos(\"test-hir-clean-runtime.csv\")\n"
+        " .limpiar dataset { #duplicados(\"eliminar\") }\n"
+        " .exportar { (\"test-hir-clean-runtime.json\") }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(clean_source,
+          "test-hir-clean-runtime.milena", NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(read_file(clean_report, text, sizeof(text)) &&
+          strstr(text, "\"filas\": 2") != NULL,
+          "HIR cleaning runtime: la deduplicación no llegó a la salida canónica");
+
+    const char *right_csv = "test-hir-join-runtime-right.csv";
+    const char *join_report = "test-hir-join-runtime.json";
+    CHECK(write_file(right_csv, "id,region\n1,Norte\n2,Centro\n3,Sur\n"),
+          "HIR join runtime: no se pudo escribir el CSV derecho");
+    const char *join_source =
+        ".analisis ventas_unidas {\n"
+        " variable id numerica\n"
+        " dataset cargar datos(\"test-hir-data-runtime.csv\")\n"
+        " .unir { #derecha(\"test-hir-join-runtime-right.csv\") #clave(\"id\") }\n"
+        " .exportar { (\"test-hir-join-runtime.json\") }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(join_source,
+          "test-hir-join-runtime.milena", NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(read_file(join_report, text, sizeof(text)) &&
+          strstr(text, "\"filas\": 3") != NULL &&
+          strstr(text, "region") != NULL && strstr(text, "Norte") != NULL,
+          "HIR join runtime: el pipeline canónico no enlazó ni reportó el dataset derecho");
+
+    const char *missing_report = "test-hir-join-missing.json";
+    const char *missing_join_source =
+        ".analisis join_fuente_ausente {\n"
+        " dataset cargar datos(\"test-hir-data-runtime.csv\")\n"
+        " .unir { #derecha(\"test-hir-join-right-absent.csv\") #clave(\"id\") }\n"
+        " .exportar { (\"test-hir-join-missing.json\") }\n"
+        "}\n";
+    remove(missing_report);
+    remove("test-hir-join-right-absent.csv");
+    CHECK(milena_run_dataset_program(missing_join_source,
+          "test-hir-join-missing.milena", NULL, &error) != MILENA_OK,
+          "HIR join runtime: debió fallar al abrir una fuente derecha inexistente");
+    FILE *missing_output = fopen(missing_report, "rb");
+    if (missing_output) fclose(missing_output);
+    CHECK(missing_output == NULL,
+          "HIR join runtime: publicó un reporte pese a faltar la fuente derecha");
+    remove(csv);
+    remove(report);
+    remove(group_report);
+    remove(clean_csv);
+    remove(clean_report);
+    remove(right_csv);
+    remove(join_report);
+    remove(missing_report);
+    return 0;
+}
+
 static int run_inference_pipeline(void) {
     const char *csv = "test-language-runtime-inference-data.csv";
     const char *output = "test-language-runtime-inference-data.json";
@@ -769,6 +876,7 @@ int main(void) {
           "falló la fase de AST y semántica SQL tipados");
     CHECK(run_arrays() == 0, "falló la fase de arrays");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
+    CHECK(run_typed_data_hir_runtime() == 0, "falló la fase de HIR de datos");
     CHECK(run_inference_pipeline() == 0, "falló la fase de inferencia");
     CHECK(run_summary_pipeline() == 0, "falló la fase de resumen");
     CHECK(run_stream_pipeline() == 0, "falló la fase de flujo");
