@@ -111,10 +111,18 @@ typedef struct ASTNode {
     size_t child_capacity;
     int line;
     int column;
+    int end_line;
+    int end_column;
+    size_t start_offset;
+    size_t end_offset;
+    bool has_source_span;
     struct ASTNode *parent;
 } ASTNode;
 
 ASTNode* ast_create(ASTNodeType type);
+bool ast_set_source_span(ASTNode *node, const Token *start, const Token *end);
+bool ast_set_source_span_from_nodes(ASTNode *node, const ASTNode *first,
+                                    const ASTNode *last);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
 ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,

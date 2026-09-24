@@ -67,6 +67,19 @@ int main(void) {
     token = lexer_next_token(&lexer);
     assert(token.type == TOKEN_NUMERO && token.number_value == 2.0);
 
+    /* An exponent sign belongs to the number; the following minus remains an
+       independent operator with its own exact byte range. */
+    lexer_init(&lexer, "1e-2-3");
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_NUMERO && token.number_value == 0.01);
+    assert(token.start_offset == 0 && token.end_offset == 4);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_MENOS);
+    assert(token.start_offset == 4 && token.end_offset == 5);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_NUMERO && token.number_value == 3.0);
+    assert(token.start_offset == 5 && token.end_offset == 6);
+
     lexer_init(&lexer, "1e+");
     token = lexer_peek_token(&lexer);
     assert(token.type == TOKEN_ERROR);
@@ -84,6 +97,37 @@ int main(void) {
     lexer_init(&lexer, "\"escape\\q\"");
     assert(lexer_next_token(&lexer).type == TOKEN_ERROR);
     assert(strstr(lexer.error.message, "escape") != NULL);
+
+    const char *unterminated = "\"line\nopen";
+    lexer_init(&lexer, unterminated);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.start_offset == 0 && token.end_offset == strlen(unterminated));
+    assert(token.line == 1 && token.column == 1);
+    assert(token.end_line == 2 && token.end_column == 5);
+    assert(lexer.error.code == MILENA_ERR_PARSE);
+    assert(lexer.error.line == 1 && lexer.error.column == 1);
+
+    /* Peek must leave the previous/current tokens, coordinates, and diagnostic
+       untouched even when the peeked token is malformed. */
+    lexer_init(&lexer, "suma 1e+");
+    Token current = lexer_next_token(&lexer);
+    Token previous = lexer.previous_token;
+    size_t saved_position = lexer.position;
+    int saved_line = lexer.line;
+    int saved_column = lexer.column;
+    peeked = lexer_peek_token(&lexer);
+    assert(peeked.type == TOKEN_ERROR);
+    assert(lexer.position == saved_position);
+    assert(lexer.line == saved_line && lexer.column == saved_column);
+    assert(lexer.current_token.type == current.type);
+    assert(strcmp(lexer.current_token.lexeme, current.lexeme) == 0);
+    assert(lexer.previous_token.type == previous.type);
+    assert(lexer.error.code == MILENA_OK);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.start_offset == 5 && token.end_offset == 8);
+    assert(lexer.error.line == 1 && lexer.error.column == 6);
 
     puts("lexer safety: ok");
     return 0;

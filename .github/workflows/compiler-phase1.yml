@@ -42,4 +42,5 @@ jobs:
           make clean
           make CC=clang \
             CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
-            LDFLAGS='-fsanitize=address,undefined -lm -pthread' test-lexer-safety
+            LDFLAGS='-fsanitize=address,undefined -lm -pthread' \
+            test-lexer-safety test-parser-variables test-parser-statistics

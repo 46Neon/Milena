@@ -8,6 +8,36 @@ ASTNode *ast_create(ASTNodeType type) {
     return node;
 }
 
+bool ast_set_source_span(ASTNode *node, const Token *start, const Token *end) {
+    if (!node || !start || !end || end->end_offset < start->start_offset) {
+        return false;
+    }
+    node->line = start->line;
+    node->column = start->column;
+    node->end_line = end->end_line;
+    node->end_column = end->end_column;
+    node->start_offset = start->start_offset;
+    node->end_offset = end->end_offset;
+    node->has_source_span = true;
+    return true;
+}
+
+bool ast_set_source_span_from_nodes(ASTNode *node, const ASTNode *first,
+                                    const ASTNode *last) {
+    if (!node || !first || !last || !first->has_source_span ||
+        !last->has_source_span || last->end_offset < first->start_offset) {
+        return false;
+    }
+    node->line = first->line;
+    node->column = first->column;
+    node->end_line = last->end_line;
+    node->end_column = last->end_column;
+    node->start_offset = first->start_offset;
+    node->end_offset = last->end_offset;
+    node->has_source_span = true;
+    return true;
+}
+
 ASTNode *ast_create_leaf(ASTNodeType type, const char *value) {
     ASTNode *node = ast_create(type);
     if (!node) return NULL;
@@ -57,6 +87,28 @@ bool ast_add_child(ASTNode *parent, ASTNode *child) {
     }
     parent->children[parent->child_count++] = child;
     child->parent = parent;
+    if (child->has_source_span) {
+        if (!parent->has_source_span) {
+            parent->line = child->line;
+            parent->column = child->column;
+            parent->end_line = child->end_line;
+            parent->end_column = child->end_column;
+            parent->start_offset = child->start_offset;
+            parent->end_offset = child->end_offset;
+            parent->has_source_span = true;
+        } else {
+            if (child->start_offset < parent->start_offset) {
+                parent->start_offset = child->start_offset;
+                parent->line = child->line;
+                parent->column = child->column;
+            }
+            if (child->end_offset > parent->end_offset) {
+                parent->end_offset = child->end_offset;
+                parent->end_line = child->end_line;
+                parent->end_column = child->end_column;
+            }
+        }
+    }
     return true;
 }
 
