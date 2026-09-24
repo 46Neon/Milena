@@ -313,7 +313,7 @@ check-experimental-isolation:
 check-stream-architecture:
 	python3 scripts/check_stream_architecture.py
 
-check-unification-architecture:
+check-unification-architecture: check-hir-ast-coverage
 	python3 scripts/check_unification_architecture.py
 
 check-termux-packaging:
