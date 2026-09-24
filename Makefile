@@ -15,15 +15,18 @@ else
 CFLAGS ?= -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude
 LDFLAGS ?= -lm -pthread
 endif
-CPPFLAGS += -Iinclude -Ithird_party/nanoarrow/include
+CPPFLAGS += -Iinclude -Ithird_party/nanoarrow/include -Ithird_party/sqlite
+SQLITE_CFLAGS = -DSQLITE_THREADSAFE=1 -DSQLITE_DQS=0 -DSQLITE_OMIT_LOAD_EXTENSION
 SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/dataset.c src/analysis.c src/script.c src/main.c \
           src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/arrow_ipc.c src/language_runtime.c src/language_grouped_spill.c src/canonical_compiler.c src/interpreter.c \
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
-          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/source_reader.c src/group_key_codec.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/partition_protocol.c src/partition_protocol_reduce.c src/spill_store.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/mergeable_aggregate.c src/grouped_aggregate.c src/external_merge.c src/external_sort.c src/query_plan.c src/entrypoints.c
+          src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/source_reader.c src/group_key_codec.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/partition_protocol.c src/partition_protocol_reduce.c src/spill_store.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/mergeable_aggregate.c src/grouped_aggregate.c src/external_merge.c src/external_sort.c src/query_plan.c src/entrypoints.c src/sqlite_backend.c third_party/sqlite/sqlite3.c
 OBJECTS = $(SOURCES:.c=.o)
 SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
+TEST_SOURCES_NO_MAIN = $(filter-out third_party/sqlite/sqlite3.c,$(SOURCES_NO_MAIN))
+TEST_SQLITE_OBJECT = third_party/sqlite/sqlite3.o
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
@@ -83,8 +86,8 @@ test-stream: tests/test_stream
 test-entrypoints: tests/test_entrypoints
 	./tests/test_entrypoints
 
-tests/test_entrypoints: tests/test_entrypoints.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
+tests/test_entrypoints: tests/test_entrypoints.c $(TEST_SOURCES_NO_MAIN) $(FUNCTION_OBJECTS) $(TEST_SQLITE_OBJECT)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SQLITE_CFLAGS) $(filter %.c,$^) $(filter %.o,$^) $(LDFLAGS) -o $@
 
 tests/test_stream: tests/test_stream.c src/stream.c src/source_reader.c src/group_key_codec.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_stream.c src/stream.c src/source_reader.c src/group_key_codec.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/common.c $(LDFLAGS) -o $@
@@ -213,8 +216,8 @@ tests/test_lexer_safety: tests/test_lexer_safety.c src/lexer.c src/common.c
 test-language-runtime: tests/test_language_runtime
 	timeout --signal=TERM --kill-after=5s 60s ./tests/test_language_runtime
 
-tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/arrow_ipc.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/source_reader.c src/group_key_codec.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/query_plan.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
+tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/arrow_ipc.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/source_reader.c src/group_key_codec.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/query_plan.c src/sqlite_backend.c $(TEST_SQLITE_OBJECT)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SQLITE_CFLAGS) $(filter %.c,$^) $(filter %.o,$^) $(LDFLAGS) -o $@
 
 .PHONY: test-arrow-ipc
 test-arrow-ipc: tests/test_arrow_ipc
@@ -222,6 +225,25 @@ test-arrow-ipc: tests/test_arrow_ipc
 
 tests/test_arrow_ipc: tests/test_arrow_ipc.c src/arrow_ipc.c src/common.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
+
+.PHONY: test-sqlite-backend test-sqlite-cli test-sqlite-typed-sql
+test-sqlite-backend: tests/test_sqlite_backend
+	./tests/test_sqlite_backend
+
+tests/test_sqlite_backend: tests/test_sqlite_backend.c src/sqlite_backend.c src/query_plan.c src/ast.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c third_party/sqlite/sqlite3.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SQLITE_CFLAGS) $(filter %.c,$^) third_party/sqlite/sqlite3.o $(LDFLAGS) -o $@
+
+src/sqlite_backend.o: src/sqlite_backend.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SQLITE_CFLAGS) -c $< -o $@
+
+test-sqlite-cli: $(TARGET)
+	bash tests/test_sqlite_cli.sh
+
+test-sqlite-typed-sql: tests/test_sqlite_typed_sql
+	./tests/test_sqlite_typed_sql
+
+tests/test_sqlite_typed_sql: tests/test_sqlite_typed_sql.c src/parser.c src/lexer.c src/ast.c src/query_plan.c src/common.c src/symbol_table.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
 
 .PHONY: test-parser-array
 
@@ -245,8 +267,8 @@ tests/test_functions: tests/test_functions.c src/parser.c src/lexer.c src/ast.c 
 test-script-functions: tests/test_script_functions
 	./tests/test_script_functions
 
-tests/test_script_functions: tests/test_script_functions.c $(SOURCES_NO_MAIN) $(FUNCTION_OBJECTS)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
+tests/test_script_functions: tests/test_script_functions.c $(TEST_SOURCES_NO_MAIN) $(FUNCTION_OBJECTS) $(TEST_SQLITE_OBJECT)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SQLITE_CFLAGS) $(filter %.c,$^) $(filter %.o,$^) $(LDFLAGS) -o $@
 
 test-user-functions: tests/test_user_functions
 	./tests/test_user_functions
@@ -334,6 +356,7 @@ termux-install: termux-build
 	install -Dm644 third_party/nanoarrow/LICENSE.txt "$(DESTDIR)$(TERMUX_PREFIX)/share/licenses/milena/nanoarrow-LICENSE.txt"
 	install -Dm644 third_party/nanoarrow/NOTICE.txt "$(DESTDIR)$(TERMUX_PREFIX)/share/licenses/milena/nanoarrow-NOTICE.txt"
 	install -Dm644 third_party/nanoarrow/FLATCC-LICENSE.txt "$(DESTDIR)$(TERMUX_PREFIX)/share/licenses/milena/flatcc-LICENSE.txt"
+	install -Dm644 third_party/sqlite/README.md "$(DESTDIR)$(TERMUX_PREFIX)/share/licenses/milena/sqlite-PROVENANCE-LICENSE.md"
 
 # Host-side, reproducible contract. It checks the canonical binary and CLI
 # without pretending that a Linux runner is Android/Bionic hardware.
@@ -342,6 +365,9 @@ termux-contract:
 
 $(TARGET): $(OBJECTS) $(FUNCTION_OBJECTS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJECTS) $(FUNCTION_OBJECTS) $(LDFLAGS) -o $@
+
+third_party/sqlite/%.o: third_party/sqlite/%.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -w $(SQLITE_CFLAGS) -c $< -o $@
 
 test-sst: tests/test_sst_modules
 	./tests/test_sst_modules
@@ -358,7 +384,8 @@ debug:
 
 test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints \
       test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics \
-      test-parser-variables test-functions test-script-functions test-user-functions
+      test-parser-variables test-functions test-script-functions test-user-functions \
+      test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
 	./tests/run_tests.sh
 
 clean:
@@ -367,7 +394,7 @@ clean:
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
 		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
 		tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/test_canonical_compiler \
-		tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream \
+		tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream \
 		tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
 
 

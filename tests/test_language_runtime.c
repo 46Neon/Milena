@@ -1,5 +1,9 @@
 #include "language_runtime.h"
 #include "language_grouped_spill.h"
+#include "language_semantic.h"
+#include "query_plan.h"
+#include "parser.h"
+#include "lexer.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -672,7 +676,97 @@ static int run_stream_filter_pipeline(void) {
     remove(numeric_csv); remove(numeric_output); remove(numeric_missing_csv);
     return 0;
 }
+static int run_typed_sql_semantics(void) {
+    const char *missing_db = "test-sql-typed-semantic-missing.db";
+    const char *valid =
+        "sql desde \"test-sql-typed-semantic-missing.db\" {\n"
+        "  tabla personas (id entero, nombre texto, activo booleano);\n"
+        "  seleccionar id, nombre de personas donde id = 7;\n"
+        "}";
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, valid);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    CHECK(program != NULL && !parser.has_error,
+          "SQL tipado: el parser no construyó el AST válido");
+    parser_release(&parser);
+    CHECK(program->child_count == 1 &&
+          program->children[0]->type == AST_SQL_PROGRAM,
+          "SQL tipado: raíz AST incorrecta");
+    const ASTNode *sql = program->children[0];
+    CHECK(sql->child_count == 2 &&
+          sql->children[0]->type == AST_SQL_TABLE_SCHEMA &&
+          sql->children[0]->child_count == 3 &&
+          sql->children[0]->children[0]->sql_type == AST_SQL_TYPE_INTEGER &&
+          sql->children[0]->children[1]->sql_type == AST_SQL_TYPE_TEXT &&
+          sql->children[0]->children[2]->sql_type == AST_SQL_TYPE_BOOLEAN,
+          "SQL tipado: AST del esquema no preservó nombres/tipos tipados");
+    const ASTNode *select = sql->children[1];
+    CHECK(select->type == AST_SQL_TYPED_SELECT && select->child_count == 3 &&
+          select->children[0]->type == AST_SQL_TABLE_REFERENCE &&
+          select->children[1]->type == AST_SQL_PROJECTION_LIST &&
+          select->children[1]->child_count == 2 &&
+          select->children[2]->type == AST_SQL_FILTER &&
+          select->children[2]->children[1]->sql_operator == AST_SQL_OPERATOR_EQUAL &&
+          select->children[2]->children[2]->sql_type == AST_SQL_TYPE_INTEGER,
+          "SQL tipado: AST de tabla, proyección, operador o parámetro incorrecto");
+    MilenaError error;
+    CHECK(milena_validate_ast(program, &error) == MILENA_OK,
+          "SQL tipado: la validación AST general rechazó el árbol");
+    CHECK(milena_sql_semantic_validate(sql, &error) == MILENA_OK,
+          "SQL tipado: la validación semántica rechazó el esquema y SELECT válidos");
+    MilenaSqlExecutionPlan plan = {0};
+    CHECK(milena_sql_execution_plan_build(sql, &plan, &error) == MILENA_OK,
+          "SQL tipado: no se construyó el plan validado");
+    CHECK(plan.operation_count == 2 &&
+          plan.operations[0].kind == MILENA_SQL_PLAN_SCHEMA &&
+          plan.operations[1].kind == MILENA_SQL_PLAN_TYPED_SELECT &&
+          strcmp(plan.operations[1].statement,
+                 "SELECT \"id\", \"nombre\" FROM \"personas\" WHERE \"id\" = ?") == 0 &&
+          plan.operations[1].parameter_count == 1 &&
+          plan.operations[1].parameters[0].kind == MILENA_SQL_PLAN_INT64 &&
+          plan.operations[1].parameters[0].value.i64 == 7 &&
+          plan.operations[1].projections[0].type == AST_SQL_TYPE_INTEGER,
+          "SQL tipado: plan no contiene SQL con placeholder/AST y binding tipados");
+    milena_sql_execution_plan_destroy(&plan);
+    ast_destroy(program);
+
+    struct {
+        const char *description;
+        const char *statement;
+        MilenaStatus expected;
+    } invalid[] = {
+        {"tabla desconocida", "seleccionar id de fantasma donde id = 7;", MILENA_ERR_TYPE},
+        {"proyección desconocida", "seleccionar ausente de personas donde id = 7;", MILENA_ERR_TYPE},
+        {"filtro desconocido", "seleccionar id de personas donde ausente = 7;", MILENA_ERR_TYPE},
+        {"tipo de parámetro incompatible", "seleccionar id de personas donde id = \"7\";", MILENA_ERR_TYPE},
+        {"operador no admitido", "seleccionar id de personas donde id > 7;", MILENA_ERR_UNSUPPORTED}
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        char source[1024];
+        int written = snprintf(source, sizeof(source),
+            "sql desde \"%s\" { tabla personas (id entero); %s }",
+            missing_db, invalid[i].statement);
+        CHECK(written > 0 && (size_t)written < sizeof(source),
+              "SQL tipado: no se pudo preparar el caso semántico inválido");
+        (void)remove(missing_db);
+        MilenaStatus status = milena_run_dataset_program(source, NULL, NULL,
+                                                         &error);
+        CHECK(status == invalid[i].expected,
+              invalid[i].description);
+        FILE *created = fopen(missing_db, "rb");
+        CHECK(created == NULL,
+              "SQL tipado: un error semántico abrió o creó la base de datos");
+        if (created) fclose(created);
+    }
+    (void)remove(missing_db);
+    return 0;
+}
+
 int main(void) {
+    CHECK(run_typed_sql_semantics() == 0,
+          "falló la fase de AST y semántica SQL tipados");
     CHECK(run_arrays() == 0, "falló la fase de arrays");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
     CHECK(run_inference_pipeline() == 0, "falló la fase de inferencia");

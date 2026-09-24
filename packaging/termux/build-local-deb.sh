@@ -49,6 +49,7 @@ install -m 0644 LICENSE "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/LICENSE"
 install -m 0644 third_party/nanoarrow/LICENSE.txt "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/nanoarrow-LICENSE.txt"
 install -m 0644 third_party/nanoarrow/NOTICE.txt "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/nanoarrow-NOTICE.txt"
 install -m 0644 third_party/nanoarrow/FLATCC-LICENSE.txt "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/flatcc-LICENSE.txt"
+install -m 0644 third_party/sqlite/README.md "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/sqlite-PROVENANCE-LICENSE.md"
 # Deliberately ship no examples, tests, headers, source, objects or build logs.
 python3 "$ROOT_DIR/scripts/validate_termux_elf.py" milena
 cat > "$STAGE/DEBIAN/control" <<EOF_CONTROL

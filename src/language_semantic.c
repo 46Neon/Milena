@@ -436,6 +436,162 @@ static MilenaStatus validate_node(const ASTNode *node, MilenaError *error) {
                 return semantic_error(node, error,
                     "El nombre de campo de la proyección Arrow está vacío o fuera de contexto");
             break;
+        case AST_SQL_PROGRAM:
+            if (!node->value || !node->value[0] || node->child_count == 0 ||
+                node->child_count > 10000u)
+                return semantic_error(node, error,
+                    "El programa SQL requiere una ruta y entre 1 y 10000 operaciones");
+            break;
+        case AST_SQL_QUERY:
+        case AST_SQL_EXECUTE:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                !node->value || !node->value[0] || node->child_count > 999u)
+                return semantic_error(node, error,
+                    "Consulta SQL incompleta o fuera de contexto");
+            break;
+        case AST_SQL_TABLE_SCHEMA:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                !node->value || !node->value[0] || node->child_count == 0 ||
+                node->child_count > 128u)
+                return semantic_error(node, error,
+                    "El esquema SQL requiere una tabla y de 1 a 128 columnas");
+            break;
+        case AST_SQL_SCHEMA_COLUMN:
+            if (!node->parent || node->parent->type != AST_SQL_TABLE_SCHEMA ||
+                !node->value || !node->value[0] || !node->type_name ||
+                node->sql_type < AST_SQL_TYPE_INTEGER ||
+                node->sql_type > AST_SQL_TYPE_BOOLEAN)
+                return semantic_error(node, error,
+                    "Columna de esquema SQL sin nombre o tipo admitido");
+            break;
+        case AST_SQL_TYPED_SELECT:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "SELECT tipado SQL requiere tabla, proyección y filtro");
+            break;
+        case AST_SQL_TYPED_INSERT:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "INSERT tipado SQL requiere tabla, columnas y valores");
+            break;
+        case AST_SQL_TYPED_UPDATE:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "UPDATE tipado SQL requiere tabla, asignaciones y filtro");
+            break;
+        case AST_SQL_UPDATE_ASSIGNMENT_LIST:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_UPDATE ||
+                node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "UPDATE requiere de 1 a 128 asignaciones");
+            break;
+        case AST_SQL_UPDATE_ASSIGNMENT:
+            if (!node->parent || node->parent->type != AST_SQL_UPDATE_ASSIGNMENT_LIST ||
+                node->child_count != 2u)
+                return semantic_error(node, error,
+                    "Asignación UPDATE requiere columna y literal");
+            break;
+        case AST_SQL_UPDATE_COLUMN:
+            if (!node->parent || node->parent->type != AST_SQL_UPDATE_ASSIGNMENT ||
+                !node->value || !node->value[0] || node->child_count)
+                return semantic_error(node, error,
+                    "Columna de asignación UPDATE vacía o fuera de contexto");
+            break;
+        case AST_SQL_UPDATE_FILTER:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_UPDATE ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "El filtro UPDATE requiere columna, operador y literal");
+            break;
+        case AST_SQL_INSERT_COLUMN_LIST:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_INSERT ||
+                node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "La lista de columnas INSERT requiere de 1 a 128 columnas");
+            break;
+        case AST_SQL_INSERT_COLUMN:
+            if (!node->parent || node->parent->type != AST_SQL_INSERT_COLUMN_LIST ||
+                !node->value || !node->value[0] || node->child_count)
+                return semantic_error(node, error,
+                    "Columna INSERT SQL vacía o fuera de contexto");
+            break;
+        case AST_SQL_INSERT_VALUE_LIST:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_INSERT ||
+                node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "La lista de valores INSERT requiere de 1 a 128 valores");
+            break;
+        case AST_SQL_TABLE_REFERENCE:
+        case AST_SQL_PROJECTED_COLUMN:
+        case AST_SQL_FILTER_COLUMN:
+            if (!node->value || !node->value[0])
+                return semantic_error(node, error,
+                    "Referencia de tabla o columna SQL vacía");
+            break;
+        case AST_SQL_PROJECTION_LIST:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_SELECT ||
+                node->child_count == 0 || node->child_count > 128u)
+                return semantic_error(node, error,
+                    "La proyección SQL requiere de 1 a 128 columnas");
+            break;
+        case AST_SQL_FILTER:
+            if (!node->parent || node->parent->type != AST_SQL_TYPED_SELECT ||
+                node->child_count != 3u)
+                return semantic_error(node, error,
+                    "El filtro SQL requiere columna, operador y parámetro");
+            break;
+        case AST_SQL_FILTER_OPERATOR:
+            if (!node->parent ||
+                (node->parent->type != AST_SQL_FILTER &&
+                 node->parent->type != AST_SQL_UPDATE_FILTER) ||
+                node->sql_operator < AST_SQL_OPERATOR_EQUAL ||
+                node->sql_operator > AST_SQL_OPERATOR_GREATER_EQUAL)
+                return semantic_error(node, error,
+                    "Operador de filtro SQL inválido");
+            break;
+        case AST_SQL_BEGIN:
+        case AST_SQL_COMMIT:
+        case AST_SQL_ROLLBACK:
+            if (!node->parent || node->parent->type != AST_SQL_PROGRAM || node->child_count)
+                return semantic_error(node, error,
+                    "Operación transaccional SQL inválida");
+            break;
+        case AST_SQL_PARAMETER: {
+            if (!node->parent || (node->parent->type != AST_SQL_QUERY &&
+                node->parent->type != AST_SQL_EXECUTE &&
+                node->parent->type != AST_SQL_FILTER &&
+                node->parent->type != AST_SQL_UPDATE_FILTER &&
+                node->parent->type != AST_SQL_UPDATE_ASSIGNMENT &&
+                node->parent->type != AST_SQL_INSERT_VALUE_LIST) || !node->type_name || !node->value)
+                return semantic_error(node, error, "Parámetro SQL sin tipo o fuera de contexto");
+            if (strcmp(node->type_name, "texto") == 0) break;
+            if (strcmp(node->type_name, "nulo") == 0) {
+                if (strcmp(node->value, "nulo") != 0)
+                    return semantic_error(node, error, "Literal NULL SQL inválido");
+                break;
+            }
+            if (strcmp(node->type_name, "booleano") == 0) {
+                if (strcmp(node->value, "verdadero") != 0 && strcmp(node->value, "falso") != 0)
+                    return semantic_error(node, error, "Literal booleano SQL inválido");
+                break;
+            }
+            char *end = NULL;
+            errno = 0;
+            if (strcmp(node->type_name, "entero") == 0) {
+                (void)strtoll(node->value, &end, 10);
+            } else if (strcmp(node->type_name, "real") == 0) {
+                double real = strtod(node->value, &end);
+                if (!isfinite(real)) errno = ERANGE;
+            } else {
+                return semantic_error(node, error, "Tipo de parámetro SQL no admitido");
+            }
+            if (errno || !end || *end != '\0')
+                return semantic_error(node, error, "Parámetro numérico SQL fuera de rango");
+            break;
+        }
         case AST_COMANDO_COLUMNAS:
         case AST_COMANDO_DERECHA:
         case AST_COMANDO_CLAVE:

@@ -22,6 +22,7 @@
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
+#include "sqlite_backend.h"
 
 #include <float.h>
 #include <ctype.h>
@@ -1621,6 +1622,25 @@ MilenaStatus milena_run_dataset_program(const char *source,
         ast_destroy(program);
         parser_release(&parser);
         return semantic_status;
+    }
+
+    if (program->child_count == 1 &&
+        program->children[0]->type == AST_SQL_PROGRAM) {
+        MilenaSqlExecutionPlan sql_plan = {0};
+        MilenaStatus sql_status = milena_sql_semantic_validate(
+            program->children[0], error);
+        if (sql_status == MILENA_OK)
+            sql_status = milena_sql_execution_plan_build(
+                program->children[0], &sql_plan, error);
+        if (sql_status == MILENA_OK)
+            sql_status = milena_sql_execution_plan_validate(&sql_plan, error);
+        if (sql_status == MILENA_OK)
+            sql_status = milena_sql_run_plan(&sql_plan, output, error);
+        milena_sql_execution_plan_destroy(&sql_plan);
+        ast_destroy(program);
+        parser_release(&parser);
+        (void)script_filename;
+        return sql_status;
     }
 
     const ASTNode *analysis = NULL;

@@ -26,14 +26,17 @@ $SourceNames = @(
     'sst_inference.c', 'sst_correlation.c', 'sst_normality.c',
     'logger.c', 'metrics.c', 'function_parser.c', 'user_functions.c',
     'third_party/nanoarrow/src/nanoarrow.c', 'third_party/nanoarrow/src/nanoarrow_ipc.c',
-    'third_party/nanoarrow/src/flatcc.c' 
+    'third_party/nanoarrow/src/flatcc.c',
+    'sqlite_backend.c', 'third_party/sqlite/sqlite3.c'
 )
 $Compiler = if ($env:CC) { $env:CC } else { 'clang' }
 $VersionHeader = Join-Path $ObjectDir 'milena-version.h'
 ("#define MILENA_VERSION `"$Version`"") | Set-Content -Encoding ascii -Path $VersionHeader
 $Flags = @(
     '-std=c17', '-Wall', '-Wextra', '-Wpedantic', '-Wshadow', '-Wconversion',
-    '-O2', '-Iinclude', '-Ithird_party/nanoarrow/include', '-include', $VersionHeader
+    '-O2', '-Iinclude', '-Ithird_party/nanoarrow/include', '-Ithird_party/sqlite',
+    '-DSQLITE_THREADSAFE=1', '-DSQLITE_DQS=0', '-DSQLITE_OMIT_LOAD_EXTENSION',
+    '-include', $VersionHeader
 )
 $Objects = @()
 
@@ -48,7 +51,9 @@ foreach ($SourceName in $SourceNames) {
     $ObjectParent = Split-Path -Parent $Object
     New-Item -ItemType Directory -Force -Path $ObjectParent | Out-Null
     Write-Host "[Windows] Compilando $SourceName"
-    & $Compiler @Flags '-c' $Source '-o' $Object
+    $SourceFlags = @()
+    if ($SourceName -like 'third_party/sqlite/*') { $SourceFlags += '-w' }
+    & $Compiler @Flags @SourceFlags '-c' $Source '-o' $Object
     if ($LASTEXITCODE -ne 0) { throw "Falló la compilación Windows de $SourceName" }
     $Objects += $Object
 }
@@ -68,3 +73,4 @@ Copy-Item (Join-Path $Root 'LICENSE') (Join-Path $LicenseDir 'Milena-LICENSE') -
 Copy-Item (Join-Path $Root 'third_party/nanoarrow/LICENSE.txt') (Join-Path $LicenseDir 'nanoarrow-LICENSE.txt') -Force
 Copy-Item (Join-Path $Root 'third_party/nanoarrow/NOTICE.txt') (Join-Path $LicenseDir 'nanoarrow-NOTICE.txt') -Force
 Copy-Item (Join-Path $Root 'third_party/nanoarrow/FLATCC-LICENSE.txt') (Join-Path $LicenseDir 'flatcc-LICENSE.txt') -Force
+Copy-Item (Join-Path $Root 'third_party/sqlite/README.md') (Join-Path $LicenseDir 'sqlite-PROVENANCE-LICENSE.md') -Force

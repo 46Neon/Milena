@@ -52,8 +52,51 @@ typedef enum {
     AST_STREAM_FILTER,
     AST_COLUMNAR_PROJECT,
     AST_COLUMNAR_FIELD,
+    AST_SQL_PROGRAM,
+    AST_SQL_QUERY,
+    AST_SQL_EXECUTE,
+    AST_SQL_BEGIN,
+    AST_SQL_COMMIT,
+    AST_SQL_ROLLBACK,
+    AST_SQL_PARAMETER,
+    AST_SQL_TABLE_SCHEMA,
+    AST_SQL_SCHEMA_COLUMN,
+    AST_SQL_TYPED_SELECT,
+    AST_SQL_TABLE_REFERENCE,
+    AST_SQL_PROJECTION_LIST,
+    AST_SQL_PROJECTED_COLUMN,
+    AST_SQL_FILTER,
+    AST_SQL_FILTER_COLUMN,
+    AST_SQL_FILTER_OPERATOR,
+    AST_SQL_TYPED_INSERT,
+    AST_SQL_INSERT_COLUMN_LIST,
+    AST_SQL_INSERT_COLUMN,
+    AST_SQL_INSERT_VALUE_LIST,
+    AST_SQL_TYPED_UPDATE,
+    AST_SQL_UPDATE_ASSIGNMENT_LIST,
+    AST_SQL_UPDATE_ASSIGNMENT,
+    AST_SQL_UPDATE_COLUMN,
+    AST_SQL_UPDATE_FILTER,
     AST_NODE_TYPE_COUNT
 } ASTNodeType;
+
+typedef enum {
+    AST_SQL_TYPE_UNSPECIFIED = 0,
+    AST_SQL_TYPE_INTEGER,
+    AST_SQL_TYPE_REAL,
+    AST_SQL_TYPE_TEXT,
+    AST_SQL_TYPE_BOOLEAN
+} ASTSqlType;
+
+typedef enum {
+    AST_SQL_OPERATOR_UNSPECIFIED = 0,
+    AST_SQL_OPERATOR_EQUAL,
+    AST_SQL_OPERATOR_NOT_EQUAL,
+    AST_SQL_OPERATOR_LESS,
+    AST_SQL_OPERATOR_LESS_EQUAL,
+    AST_SQL_OPERATOR_GREATER,
+    AST_SQL_OPERATOR_GREATER_EQUAL
+} ASTSqlOperator;
 
 typedef enum {
     AST_STREAM_FILTER_TEXT_EQUAL = 0,
@@ -118,6 +161,14 @@ typedef struct ASTNode {
     size_t join_memory_budget_bytes;
     size_t join_max_output_rows;
     bool join_limits_explicit;
+    /* SQL execution budgets; zero selects the documented default. */
+    size_t sql_max_rows;
+    size_t sql_max_bytes;
+    size_t sql_timeout_ms;
+    bool sql_limits_explicit;
+    /* Explicit typed SQL/ORM AST annotations; these are not raw SQL text. */
+    ASTSqlType sql_type;
+    ASTSqlOperator sql_operator;
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;

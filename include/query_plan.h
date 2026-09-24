@@ -105,4 +105,99 @@ MilenaStatus milena_arrow_ipc_execution_plan_build(
 MilenaStatus milena_arrow_ipc_execution_plan_validate(
     const MilenaArrowIpcExecutionPlan *plan, MilenaError *error);
 
+/* Existing native SQL is a bounded raw-SQL compatibility baseline, not a typed
+ * ORM plan. Only parameter literals are represented with typed AST nodes; table,
+ * projection, filter and result schemas are not represented here. The backend
+ * accepts exactly one SQLite statement and binds values without interpolation.
+ * This plan must not be described as a completed SQL/ORM vertical. */
+typedef enum {
+    MILENA_SQL_PLAN_QUERY = 1,
+    MILENA_SQL_PLAN_EXECUTE,
+    MILENA_SQL_PLAN_BEGIN,
+    MILENA_SQL_PLAN_COMMIT,
+    MILENA_SQL_PLAN_ROLLBACK,
+    MILENA_SQL_PLAN_SCHEMA,
+    MILENA_SQL_PLAN_TYPED_SELECT,
+    MILENA_SQL_PLAN_TYPED_INSERT,
+    MILENA_SQL_PLAN_TYPED_UPDATE
+} MilenaSqlPlanOperationKind;
+typedef enum {
+    MILENA_SQL_PLAN_NULL = 0,
+    MILENA_SQL_PLAN_INT64,
+    MILENA_SQL_PLAN_FLOAT64,
+    MILENA_SQL_PLAN_TEXT
+} MilenaSqlPlanParameterKind;
+typedef struct { const char *data; size_t length; } MilenaSqlPlanText;
+typedef struct {
+    MilenaSqlPlanParameterKind kind;
+    union { int64_t i64; double f64; MilenaSqlPlanText text; } value;
+} MilenaSqlPlanParameter;
+typedef struct {
+    const ASTNode *source;
+    const ASTNode *schema_column;
+    const char *name;
+    ASTSqlType type;
+} MilenaSqlTypedProjection;
+typedef struct {
+    const ASTNode *source;
+    const ASTNode *schema_column;
+    const char *name;
+    ASTSqlType type;
+} MilenaSqlTypedInsertColumn;
+typedef struct {
+    const ASTNode *source;
+    const ASTNode *schema_column;
+    ASTSqlType type;
+} MilenaSqlTypedInsertValue;
+typedef struct {
+    const ASTNode *source; /* AST_SQL_UPDATE_ASSIGNMENT */
+    const ASTNode *column_source;
+    const ASTNode *value_source;
+    const ASTNode *schema_column;
+    const char *name;
+    ASTSqlType type;
+} MilenaSqlTypedUpdateAssignment;
+typedef struct {
+    MilenaSqlPlanOperationKind kind;
+    const ASTNode *source;
+    const char *statement;
+    char *owned_statement; /* generated only for a validated typed SQL operation */
+    MilenaSqlPlanParameter *parameters;
+    size_t parameter_count;
+    /* Typed SELECT plan nodes; borrowed from the validated source AST. */
+    const ASTNode *typed_table;
+    const ASTNode *typed_schema;
+    MilenaSqlTypedProjection *projections;
+    size_t projection_count;
+    const ASTNode *filter_column;
+    const ASTNode *filter_operator;
+    const ASTNode *typed_parameter;
+    /* Typed INSERT columns and values resolved against the preceding schema. */
+    MilenaSqlTypedInsertColumn *insert_columns;
+    size_t insert_column_count;
+    MilenaSqlTypedInsertValue *insert_values;
+    size_t insert_value_count;
+    /* Typed UPDATE metadata, separate from raw SQL and typed INSERT. */
+    MilenaSqlTypedUpdateAssignment *update_assignments;
+    size_t update_assignment_count;
+} MilenaSqlPlanOperation;
+typedef struct MilenaSqlExecutionPlan {
+    const ASTNode *source;
+    const char *connection_path;
+    MilenaSqlPlanOperation *operations;
+    size_t operation_count;
+    size_t max_rows;
+    size_t max_bytes;
+    unsigned timeout_ms;
+    bool explicit_limits;
+} MilenaSqlExecutionPlan;
+/* Validates typed SQL declarations/selects/updates without opening a database. */
+MilenaStatus milena_sql_semantic_validate(const ASTNode *program,
+    MilenaError *error);
+MilenaStatus milena_sql_execution_plan_build(const ASTNode *program,
+    MilenaSqlExecutionPlan *plan, MilenaError *error);
+MilenaStatus milena_sql_execution_plan_validate(const MilenaSqlExecutionPlan *plan,
+    MilenaError *error);
+void milena_sql_execution_plan_destroy(MilenaSqlExecutionPlan *plan);
+
 #endif
