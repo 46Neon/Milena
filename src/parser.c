@@ -31,8 +31,6 @@ static void parser_error_at(Parser *parser, const Token *token,
     milena_error_set(&parser->error, MILENA_ERR_PARSE, line, column, 0, msg);
     parser->has_error = true;
 }
-    parser->has_error = true;
-}
 
 void parser_advance(Parser *parser) {
     parser->previous = parser->current;
