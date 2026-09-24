@@ -39,6 +39,8 @@ int main(void) {
           error.message);
     CHECK(input.ast == program.ast && input.table == &table,
           "la vista del compilador no coincide con AST/MilenaTable");
+    CHECK(input.hir == NULL,
+          "el HIR escalar no debe afirmar soporte para operaciones estadísticas heredadas");
 
     /* The table is borrowed; releasing the program must not destroy it. */
     milena_canonical_program_release(&program);
@@ -121,6 +123,57 @@ int main(void) {
     CHECK(local_declaration->resolved_symbol_id != 0 &&
           local_use->resolved_symbol_id == local_declaration->resolved_symbol_id,
           "el uso local debe enlazar a su declaración dentro de la función");
+
+    /* The scalar HIR is program-owned, typed, binding-resolved, and keeps spans. */
+    CHECK(program.hir != NULL && program.hir->function_count == 2,
+          "la ruta canónica debe construir HIR para el subconjunto numérico resuelto");
+    const MilenaHIRFunction *hir_main = &program.hir->functions[0];
+    const MilenaHIRFunction *hir_next = &program.hir->functions[1];
+    CHECK(strcmp(hir_main->name, "principal") == 0 &&
+          hir_main->resolved_symbol_id == main_function->resolved_symbol_id,
+          "la HIR debe poseer el nombre y binding de la función");
+    CHECK(hir_main->body_count == 1 &&
+          hir_main->body[0]->kind == MILENA_HIR_STMT_RETURN &&
+          hir_main->body[0]->as.expression->kind == MILENA_HIR_EXPR_CALL &&
+          hir_main->body[0]->as.expression->resolved_symbol_id ==
+              next_function->resolved_symbol_id,
+          "la llamada adelantada debe preservarse como llamada HIR tipada y enlazada");
+    CHECK(hir_next->parameter_count == 1 &&
+          hir_next->parameters[0].resolved_symbol_id == parameter->resolved_symbol_id &&
+          hir_next->body_count == 2 &&
+          hir_next->body[0]->kind == MILENA_HIR_STMT_DECLARE &&
+          hir_next->body[0]->as.expression->kind == MILENA_HIR_EXPR_BINARY &&
+          hir_next->body[0]->as.expression->value_type == MILENA_HIR_NUMBER &&
+          hir_next->body[0]->as.expression->as.binary.left->resolved_symbol_id ==
+              parameter->resolved_symbol_id &&
+          hir_next->body[1]->as.expression->resolved_symbol_id ==
+              local_declaration->resolved_symbol_id,
+          "las declaraciones, operaciones y usos deben conservar tipos y bindings en HIR");
+    CHECK(hir_main->span.has_source_span &&
+          hir_main->span.start_offset == main_function->start_offset &&
+          hir_main->body[0]->span.end_offset ==
+              main_function->children[1]->children[0]->end_offset,
+          "la HIR debe conservar spans originales por función y sentencia");
+    MilenaCanonicalCompilerInput scalar_input = {0};
+    CHECK(milena_canonical_compiler_input(&program, &scalar_input, &error) == MILENA_OK &&
+          scalar_input.hir == program.hir,
+          "la vista canónica debe exponer la HIR poseída por el programa");
+    milena_canonical_program_release(&program);
+    CHECK(program.hir == NULL && program.ast == NULL,
+          "liberar el programa debe destruir la HIR y el AST poseídos");
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion elegir(x) { si (x > 0) { retornar x; } sino { retornar 0; } }",
+          &error) == MILENA_OK, error.message);
+    CHECK(program.hir && program.hir->function_count == 1 &&
+          program.hir->functions[0].body_count == 1 &&
+          program.hir->functions[0].body[0]->kind == MILENA_HIR_STMT_IF &&
+          program.hir->functions[0].body[0]->as.conditional.condition->value_type ==
+              MILENA_HIR_BOOLEAN &&
+          program.hir->functions[0].body[0]->as.conditional.then_count == 1 &&
+          program.hir->functions[0].body[0]->as.conditional.else_count == 1,
+          "la HIR debe conservar condición booleana y ramas de si/sino");
     milena_canonical_program_release(&program);
 
     /* An unresolved variable is an error with the original identifier span. */

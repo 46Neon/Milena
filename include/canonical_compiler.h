@@ -17,14 +17,110 @@ extern "C" {
  * without linking the unfinished compiler stack.  `table` is borrowed and
  * remains owned by the caller.
  */
+/*
+ * Owned typed HIR for the canonical scalar-function subset only.  The current
+ * HIR is intentionally unavailable for analysis/data-operation programs; those
+ * continue to use the validated AST until their typed data-operation HIR and
+ * column bindings are implemented.  All text and child storage in this HIR is
+ * independently owned, and every node carries the originating AST binding ID
+ * and source span.
+ */
+typedef enum {
+    MILENA_HIR_NUMBER,
+    MILENA_HIR_BOOLEAN
+} MilenaHIRValueType;
+
+typedef enum {
+    MILENA_HIR_EXPR_LITERAL,
+    MILENA_HIR_EXPR_VARIABLE,
+    MILENA_HIR_EXPR_BINARY,
+    MILENA_HIR_EXPR_CALL
+} MilenaHIRExpressionKind;
+
+typedef struct MilenaHIRExpression MilenaHIRExpression;
+typedef struct MilenaHIRStatement MilenaHIRStatement;
+
+typedef struct {
+    size_t line, column, end_line, end_column;
+    size_t start_offset, end_offset;
+    bool has_source_span;
+} MilenaHIRSourceSpan;
+
+struct MilenaHIRExpression {
+    MilenaHIRExpressionKind kind;
+    MilenaHIRValueType value_type;
+    size_t resolved_symbol_id;
+    MilenaHIRSourceSpan span;
+    union {
+        double number;
+        bool boolean;
+        struct {
+            ASTOperatorKind operation;
+            MilenaHIRExpression *left;
+            MilenaHIRExpression *right;
+        } binary;
+        struct {
+            MilenaHIRExpression **arguments;
+            size_t argument_count;
+        } call;
+    } as;
+};
+
+typedef enum {
+    MILENA_HIR_STMT_DECLARE,
+    MILENA_HIR_STMT_ASSIGN,
+    MILENA_HIR_STMT_RETURN,
+    MILENA_HIR_STMT_IF
+} MilenaHIRStatementKind;
+
+struct MilenaHIRStatement {
+    MilenaHIRStatementKind kind;
+    MilenaHIRValueType value_type;
+    size_t resolved_symbol_id;
+    char *name;
+    MilenaHIRSourceSpan span;
+    union {
+        MilenaHIRExpression *expression;
+        struct {
+            MilenaHIRExpression *condition;
+            MilenaHIRStatement **then_body;
+            size_t then_count;
+            MilenaHIRStatement **else_body;
+            size_t else_count;
+        } conditional;
+    } as;
+};
+
+typedef struct {
+    char *name;
+    size_t resolved_symbol_id;
+    MilenaHIRSourceSpan span;
+    struct {
+        char *name;
+        size_t resolved_symbol_id;
+    } *parameters;
+    size_t parameter_count;
+    MilenaHIRStatement **body;
+    size_t body_count;
+} MilenaHIRFunction;
+
+typedef struct {
+    MilenaHIRFunction *functions;
+    size_t function_count;
+    MilenaHIRStatement **statements;
+    size_t statement_count;
+} MilenaScalarHIR;
+
 typedef struct {
     const ASTNode *ast;
     const MilenaTable *table;
+    const MilenaScalarHIR *hir; /* NULL when this AST is outside scalar HIR. */
 } MilenaCanonicalCompilerInput;
 
 typedef struct {
     ASTNode *ast;
     const MilenaTable *table;
+    MilenaScalarHIR *hir; /* Owned; present only for the scalar subset above. */
 } MilenaCanonicalProgram;
 
 void milena_canonical_program_init(MilenaCanonicalProgram *program);
