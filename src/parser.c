@@ -1119,6 +1119,68 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     if (transformar) parser_add_child(parser, node, transformar,
                                                        "Sin memoria para el AST");
                 }
+            } else if (parser_match(parser, TOKEN_KW_FILTRAR)) {
+                Token filter_start = parser->previous;
+                parser_advance(parser);
+                if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
+                if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
+                    ASTNode *filtrar = ast_create(AST_BLOQUE_FILTRAR);
+                    if (!filtrar) parser_error(parser, "Sin memoria para bloque filtrar");
+                    while (filtrar && !parser_match(parser, TOKEN_LLAVE_DER) &&
+                           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                            parser_error(parser, "Comando desconocido en filtrar");
+                            break;
+                        }
+                        parser_advance(parser);
+                        if (!parser_match(parser, TOKEN_KW_CONDICION)) {
+                            parser_error(parser, "Se esperaba #condicion en filtrar");
+                            break;
+                        }
+                        Token condition_start = parser->current;
+                        parser_advance(parser);
+                        if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                                           "Se esperaba '(' después de #condicion")) break;
+                        if (!parser_expect(parser, TOKEN_CADENA,
+                                           "Se esperaba una condición entre comillas")) break;
+                        ASTNode *condition = ast_create_leaf(AST_COMANDO_CONDICION,
+                                                             parser->previous.lexeme);
+                        if (!condition) {
+                            parser_error(parser, "Sin memoria para condición de filtro");
+                            break;
+                        }
+                        if (!ast_set_source_span(condition, &condition_start,
+                                                 &parser->previous)) {
+                            ast_destroy(condition);
+                            parser_error(parser, "No se pudo registrar el origen de la condición");
+                            break;
+                        }
+                        if (!parser_expect(parser, TOKEN_PAR_DER,
+                                           "Se esperaba ')' después de la condición")) {
+                            ast_destroy(condition);
+                            break;
+                        }
+                        if (!parser_add_child(parser, filtrar, condition,
+                                              "Sin memoria para condición de filtro")) break;
+                    }
+                    if (filtrar) {
+                        if (parser->has_error) {
+                            ast_destroy(filtrar);
+                        } else if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
+                            ast_destroy(filtrar);
+                        } else if (filtrar->child_count == 0) {
+                            ast_destroy(filtrar);
+                            parser_error(parser, "El bloque filtrar requiere #condicion");
+                        } else if (!ast_set_source_span(filtrar, &filter_start,
+                                                        &parser->previous)) {
+                            ast_destroy(filtrar);
+                            parser_error(parser, "No se pudo registrar el origen del filtro");
+                        } else if (!parser_add_child(parser, node, filtrar,
+                                                     "Sin memoria para el bloque filtrar")) {
+                            break;
+                        }
+                    }
+                }
             } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
                 parser_advance(parser);
                 if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
