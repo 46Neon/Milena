@@ -639,10 +639,11 @@ static MilenaStatus validate_sst_table_node(const ASTNode *node,
         char spec[512];
         strncpy(spec, node->value, sizeof(spec) - 1);
         spec[sizeof(spec) - 1] = '\0';
-        char *a = strtok(spec, ",");
-        char *b = strtok(NULL, ",");
-        char *c = strtok(NULL, ",");
-        char *d = strtok(NULL, ",");
+        char *spec_state = NULL;
+        char *a = milena_token_next(spec, ",", &spec_state);
+        char *b = milena_token_next(NULL, ",", &spec_state);
+        char *c = milena_token_next(NULL, ",", &spec_state);
+        char *d = milena_token_next(NULL, ",", &spec_state);
         MilenaStatus status = MILENA_OK;
         if (strcmp(node->type_name, "perfil_avanzado") == 0 ||
             strcmp(node->type_name, "histograma") == 0 ||

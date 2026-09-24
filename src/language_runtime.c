@@ -745,9 +745,10 @@ static MilenaStatus runtime_write_sst_rate(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *event_name = runtime_trim(strtok(spec, ","));
-    char *exposure_name = runtime_trim(strtok(NULL, ","));
-    char *factor_text = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *event_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *exposure_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *factor_text = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!event_name || !exposure_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "La tasa requiere evento, exposición y factor");
@@ -834,9 +835,10 @@ static MilenaStatus runtime_write_sst_poisson(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *event_name = runtime_trim(strtok(spec, ","));
-    char *exposure_name = runtime_trim(strtok(NULL, ","));
-    char *factor_text = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *event_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *exposure_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *factor_text = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!event_name || !exposure_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "Poisson requiere evento, exposición y factor");
@@ -921,8 +923,9 @@ static MilenaStatus runtime_write_sst_correlation(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *x_name = runtime_trim(strtok(spec, ","));
-    char *y_name = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *x_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *y_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!x_name || !y_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "La correlación requiere dos columnas");
@@ -982,8 +985,9 @@ static MilenaStatus runtime_write_sst_wilcoxon(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *before_name = runtime_trim(strtok(spec, ","));
-    char *after_name = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *before_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *after_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!before_name || !after_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "Wilcoxon requiere dos columnas");
@@ -1045,8 +1049,9 @@ static MilenaStatus runtime_write_sst_chi_square(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *row_name = runtime_trim(strtok(spec, ","));
-    char *column_name = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *row_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *column_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!row_name || !column_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "Chi cuadrado requiere dos columnas categóricas");
@@ -1135,10 +1140,11 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *exposure_name = runtime_trim(strtok(spec, ","));
-    char *event_name = runtime_trim(strtok(NULL, ","));
-    char *exposure_positive = runtime_trim(strtok(NULL, ","));
-    char *event_positive = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *exposure_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *event_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *exposure_positive = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *event_positive = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!exposure_name || !event_name || !exposure_positive || !event_positive) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "Riesgo requiere columnas y categorías positivas explícitas");
@@ -1241,9 +1247,10 @@ static MilenaStatus runtime_write_finance_simple_interest(const MilenaTable *tab
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *principal_name = runtime_trim(strtok(spec, ","));
-    char *rate_name = runtime_trim(strtok(NULL, ","));
-    char *period_text = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *principal_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *rate_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *period_text = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!principal_name || !rate_name || !period_text) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "interes_simple requiere principal,tasa,periodos");
@@ -1308,9 +1315,10 @@ static MilenaStatus runtime_write_sst_model(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *area_name = runtime_trim(strtok(spec, ","));
-    char *severity_name = runtime_trim(strtok(NULL, ","));
-    char *cargo_name = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *area_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *severity_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *cargo_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!area_name || !severity_name || !cargo_name) {
         runtime_error(error, MILENA_ERR_PARSE, "modelo_sst requiere area,severidad,cargo");
         return MILENA_ERR_PARSE;
@@ -2196,11 +2204,12 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     size_t name_count = 0;
                     if (!list) status = MILENA_ERR_MEMORY;
                     else {
-                        char *item = strtok(list, ",");
+                        char *columns_state = NULL;
+                        char *item = milena_token_next(list, ",", &columns_state);
                         while (item && name_count < 32) {
                             while (*item == ' ') item++;
                             names[name_count++] = item;
-                            item = strtok(NULL, ",");
+                            item = milena_token_next(NULL, ",", &columns_state);
                         }
                         if (name_count == 0 || item != NULL) {
                             runtime_error(error, MILENA_ERR_PARSE,

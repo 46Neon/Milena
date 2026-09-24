@@ -53,25 +53,6 @@ static const char *find_quoted_after(const char *text, const char *needle,
     return end + 1;
 }
 
-static bool get_quoted(const char *line, size_t number, char *out, size_t out_size) {
-    const char *p = line;
-    for (size_t i = 0; i <= number; i++) {
-        p = strchr(p, '"');
-        if (!p) return false;
-        p++;
-        const char *end = strchr(p, '"');
-        if (!end) return false;
-        if (i == number) {
-            if ((size_t)(end - p) + 1 > out_size) return false;
-            memcpy(out, p, (size_t)(end - p));
-            out[end - p] = '\0';
-            return true;
-        }
-        p = end + 1;
-    }
-    return false;
-}
-
 static bool has_text(const char *text, const char *needle) {
     return text && needle && strstr(text, needle) != NULL;
 }
@@ -186,7 +167,8 @@ static MilenaVariableType parse_type(const char *text, bool *valid) {
 static MilenaStatus parse_schema(const char *script, MilenaSchema *schema, MilenaError *error) {
     char *copy = milena_strdup(script);
     if (!copy) return MILENA_ERR_MEMORY;
-    char *line = strtok(copy, "\n\r");
+    char *line_state = NULL;
+    char *line = milena_token_next(copy, "\n\r", &line_state);
     size_t line_number = 0;
     while (line) {
         line_number++;
@@ -228,7 +210,7 @@ static MilenaStatus parse_schema(const char *script, MilenaSchema *schema, Milen
                                            MILENA_ROLE_BINARY_OUTPUT, error);
             if (status != MILENA_OK) { free(copy); return status; }
         }
-        line = strtok(NULL, "\n\r");
+        line = milena_token_next(NULL, "\n\r", &line_state);
     }
     free(copy);
     if (schema->count == 0) {
@@ -253,7 +235,8 @@ static bool command_known(const char *text) {
 static MilenaStatus validate_commands(const char *script, MilenaError *error) {
     char *copy = milena_strdup(script);
     if (!copy) return MILENA_ERR_MEMORY;
-    char *line = strtok(copy, "\n\r");
+    char *line_state = NULL;
+    char *line = milena_token_next(copy, "\n\r", &line_state);
     size_t line_number = 0;
     while (line) {
         line_number++;
@@ -266,7 +249,7 @@ static MilenaStatus validate_commands(const char *script, MilenaError *error) {
                 return MILENA_ERR_UNSUPPORTED;
             }
         }
-        line = strtok(NULL, "\n\r");
+        line = milena_token_next(NULL, "\n\r", &line_state);
     }
     free(copy);
     return MILENA_OK;
@@ -709,7 +692,8 @@ static MilenaStatus run_legacy_array_declarations(const char *script, MilenaErro
         milena_error_set(error, MILENA_ERR_MEMORY, 0, 0, 0, "Sin memoria para operaciones");
         goto array_cleanup_error;
     }
-    char *line = strtok(operation_script, "\n\r");
+    char *line_state = NULL;
+    char *line = milena_token_next(operation_script, "\n\r", &line_state);
     while (line) {
         char left[128] = {0}, right[128] = {0}, operation = '\0';
         if (sscanf(line, " %127s %c %127s", left, &operation, right) == 3 &&
@@ -752,7 +736,7 @@ static MilenaStatus run_legacy_array_declarations(const char *script, MilenaErro
                 milena_array_release(&result);
             }
         }
-        line = strtok(NULL, "\n\r");
+        line = milena_token_next(NULL, "\n\r", &line_state);
     }
     free(operation_script);
     for (size_t i = 0; i < binding_count; i++) milena_array_release(&bindings[i].array);

@@ -6,7 +6,7 @@ static char lexer_current(Lexer *lexer) {
     return lexer->source[lexer->position];
 }
 
-static char lexer_peek_char(Lexer *lexer, int offset) {
+static char lexer_peek_char(Lexer *lexer, size_t offset) {
     size_t pos = lexer->position + offset;
     if (pos >= lexer->length) return '\0';
     return lexer->source[pos];
@@ -32,25 +32,6 @@ static bool is_identifier_start(char c) {
 
 static bool is_identifier_char(char c) {
     return isalnum((unsigned char)c) || c == '_' || (unsigned char)c >= 0x80;
-}
-
-static bool is_keyword(const char *str) {
-    static const char *keywords[] = {
-        "analisis", "datos", "estadistica", "dataset", "limpiar",
-        "transformar", "visualizar", "exportar", "filtrar", "agrupar",
-        "resumir", "cargar", "nulos", "duplicados", "condicion",
-        "extraer", "total", "periodo", "verdadero", "falso",
-        "forma", "dimensiones", "tamaño", "suma", "media", "minimo",
-        "maximo", "varianza", "desviacion_estandar", "mediana", "percentil",
-        "eje", "conservar", "sin", "variable", "funcion", "función", "retornar", "si", "sino",
-        "desde", "procesar", "por", "lotes", "filas", "guardar", "registros", "hasta", "MiB", "contar"
-    };
-    static const int num_keywords = 50;
-    
-    for (int i = 0; i < num_keywords; i++) {
-        if (strcmp(str, keywords[i]) == 0) return true;
-    }
-    return false;
 }
 
 static MilenaTokenType keyword_type(const char *str) {

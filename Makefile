@@ -30,7 +30,13 @@ TEST_SQLITE_OBJECT = third_party/sqlite/sqlite3.o
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
+.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture debug
+
+test-common-tokenizer: tests/test_common_tokenizer
+	./tests/test_common_tokenizer
+
+tests/test_common_tokenizer: tests/test_common_tokenizer.c src/common.c include/common.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< src/common.c $(LDFLAGS) -o $@
 
 test-array: tests/test_array
 	./tests/test_array
@@ -382,7 +388,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints \
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer \
       test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics \
       test-parser-variables test-functions test-script-functions test-user-functions \
       test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
@@ -393,7 +399,7 @@ clean:
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
 		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
-		tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/test_canonical_compiler \
+		tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/test_common_tokenizer tests/test_canonical_compiler \
 		tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream \
 		tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
 
