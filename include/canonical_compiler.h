@@ -4,6 +4,9 @@
 #include "ast.h"
 #include "table.h"
 
+/* Provenance key stamped by the canonical loader before a data-HIR table is bound. */
+#define MILENA_HIR_DATASET_PATH_METADATA "milena.hir.dataset.path"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -109,9 +112,9 @@ typedef struct {
     size_t statement_count;
 } MilenaScalarHIR;
 
-/* Typed table/data HIR. The first executable subset is deliberately closed:
- * one caller-bound dataset source, numeric product, numeric predicate,
- * column projection, and a borrowed-output export boundary. */
+/* Typed table/data HIR. This deliberately closed subset has one program-local
+ * dataset binding with loader-stamped path provenance; numeric product/filter,
+ * column projection, grouping, summary, and a borrowed-output export boundary. */
 typedef enum {
     MILENA_HIR_COLUMN_UNKNOWN,
     MILENA_HIR_COLUMN_NUMERIC,
@@ -171,6 +174,7 @@ typedef enum {
 
 typedef struct {
     MilenaHIRDataOperationKind kind;
+    size_t resolved_dataset_id;
     MilenaHIRSourceSpan span;
     union {
         struct { MilenaHIRColumnRef left, right; char *output_name; } product;
@@ -217,7 +221,10 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
                                              const char *source,
                                              MilenaError *error);
 
-/* Bind a borrowed canonical dataframe and validate SST column contracts. */
+/* Bind a borrowed canonical dataframe and validate SST column contracts.
+ * Data-HIR programs require MILENA_HIR_DATASET_PATH_METADATA to equal the
+ * source path recorded by the HIR; loaders must stamp it only after resolving
+ * and loading that same source. */
 MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program,
                                                  const MilenaTable *table,
                                                  MilenaError *error);

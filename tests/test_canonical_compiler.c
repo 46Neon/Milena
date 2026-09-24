@@ -266,7 +266,9 @@ int main(void) {
           strcmp(program.data_hir->source.path, "entrada.csv") == 0 &&
           program.data_hir->source.resolved_dataset_id != 0 &&
           strcmp(program.data_hir->export_path, "salida.json") == 0 &&
-          program.data_hir->operation_count == 3,
+          program.data_hir->operation_count == 3 &&
+          program.data_hir->operations[0].resolved_dataset_id ==
+              program.data_hir->source.resolved_dataset_id,
           "la HIR debe poseer fuente, transformación, filtro, proyección y destino de exportación");
     MilenaCanonicalCompilerInput data_input = {0};
     CHECK(milena_canonical_compiler_input(&program, &data_input, &error) == MILENA_ERR_DATA &&
@@ -290,6 +292,9 @@ int main(void) {
           milena_table_add_column_copy(&data_table, "cantidad", &quantities, NULL, &error) == MILENA_OK &&
           milena_table_add_string_column_copy(&data_table, "ciudad", city_values, 3, NULL,
                                               &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_table_set_metadata(&data_table, MILENA_HIR_DATASET_PATH_METADATA,
+                                    "entrada.csv", &error) == MILENA_OK,
           error.message);
     CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) == MILENA_OK,
           error.message);
@@ -442,6 +447,19 @@ int main(void) {
     CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) ==
           MILENA_ERR_TYPE && strstr(error.message, "Columna no declarada") != NULL,
           "la clave de agrupación debe resolverse contra el esquema y rechazar faltantes");
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    const char *mismatched_dataset_source =
+        ".analisis ventas { dataset cargar datos(\"otro.csv\") "
+        ".filtrar { #condicion(\"precio > 0\") } }";
+    CHECK(milena_canonical_program_parse(&program, mismatched_dataset_source, &error) ==
+          MILENA_OK, error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) ==
+          MILENA_ERR_DATA && program.table == NULL &&
+          !program.data_hir->schema_bound &&
+          strstr(error.message, "no acredita la ruta") != NULL,
+          "el binder debe rechazar tablas cuya provenance no coincide con el dataset HIR");
     milena_canonical_program_release(&program);
 
     milena_table_destroy(&data_table);

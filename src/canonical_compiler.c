@@ -888,6 +888,16 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
         return HIR_BUILD_UNSUPPORTED;
     }
     if (!load) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
+    /* This closed HIR revision declares one dataset symbol per program. Every
+     * operation is explicitly resolved to that source after the full AST scan. */
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        if (hir->operations[i].resolved_dataset_id != 0 &&
+            hir->operations[i].resolved_dataset_id != hir->source.resolved_dataset_id) {
+            data_hir_release(hir);
+            return HIR_BUILD_UNSUPPORTED;
+        }
+        hir->operations[i].resolved_dataset_id = hir->source.resolved_dataset_id;
+    }
     *output = hir;
     return HIR_BUILD_OK;
 }
@@ -1054,6 +1064,14 @@ static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
                                         const MilenaTable *table,
                                         MilenaError *error) {
     if (!hir || !table) return MILENA_ERR_ARGUMENT;
+    const char *table_source = milena_table_get_metadata(
+        table, MILENA_HIR_DATASET_PATH_METADATA);
+    if (!hir->source.path || !table_source ||
+        strcmp(table_source, hir->source.path) != 0) {
+        canonical_span_error(error, MILENA_ERR_DATA, &hir->source.span,
+            "La tabla no acredita la ruta de fuente de datos declarada por HIR");
+        return MILENA_ERR_DATA;
+    }
     size_t current_columns = table->column_count;
     size_t maximum_columns = table->column_count;
     for (size_t i = 0; i < hir->declared_column_count; ++i) {
@@ -1071,6 +1089,11 @@ static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
         MilenaHIRDataOperation *op = &hir->operations[i];
         MilenaStatus status = MILENA_OK;
         if (!op->span.has_source_span) op->span = hir->source.span;
+        if (op->resolved_dataset_id != hir->source.resolved_dataset_id) {
+            canonical_span_error(error, MILENA_ERR_DATA, &op->span,
+                                 "La operación HIR no está ligada a la fuente declarada");
+            return MILENA_ERR_DATA;
+        }
         if (op->kind == MILENA_HIR_DATA_PRODUCT) {
             if (!op->as.product.left.span.has_source_span)
                 op->as.product.left.span = op->span;

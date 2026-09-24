@@ -1800,13 +1800,36 @@ MilenaStatus milena_run_dataset_program(const char *source,
     bool data_hir_executed = false;
     if (status == MILENA_OK) {
         /* The closed HIR subset is the actual runtime consumer for products,
-         * numeric filters and projections. Unsupported programs continue only
+         * numeric filters, projections and in-memory aggregates. Unsupported programs continue only
          * through this explicitly legacy AST interpreter path. */
         MilenaCanonicalProgram canonical_program;
         milena_canonical_program_init(&canonical_program);
         status = milena_canonical_program_parse(&canonical_program, source, error);
         if (status == MILENA_OK && canonical_program.data_hir) {
-            if (canonical_program.data_hir->export_path)
+            char hir_input[2048];
+            status = dataset_runtime_path(canonical_program.data_hir->source.path,
+                                          script_filename, false, hir_input,
+                                          sizeof(hir_input), error);
+            if (status == MILENA_OK && strcmp(hir_input, input) != 0) {
+                runtime_error(error, MILENA_ERR_DATA,
+                              "La ruta de fuente HIR no coincide con el dataset cargado");
+                status = MILENA_ERR_DATA;
+            }
+            if (status == MILENA_OK) {
+                const char *existing_source = milena_table_get_metadata(
+                    &canonical_table, MILENA_HIR_DATASET_PATH_METADATA);
+                if (existing_source && strcmp(existing_source,
+                    canonical_program.data_hir->source.path) != 0) {
+                    runtime_error(error, MILENA_ERR_DATA,
+                                  "La tabla ya tiene procedencia de otra ruta");
+                    status = MILENA_ERR_DATA;
+                } else if (!existing_source) {
+                    status = milena_table_set_metadata(&canonical_table,
+                        MILENA_HIR_DATASET_PATH_METADATA,
+                        canonical_program.data_hir->source.path, error);
+                }
+            }
+            if (status == MILENA_OK && canonical_program.data_hir->export_path)
                 status = dataset_runtime_path(
                     canonical_program.data_hir->export_path, script_filename, true,
                     output_path, sizeof(output_path), error);
