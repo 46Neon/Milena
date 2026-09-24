@@ -247,8 +247,26 @@ static int run_typed_data_hir_runtime(void) {
     CHECK(strstr(text, "\"filas\": 1") != NULL &&
           strstr(text, "total") != NULL && strstr(text, "precio") == NULL,
           "HIR runtime: la ruta canónica no ejecutó producto/filtro/proyección antes de exportar");
+
+    const char *group_report = "test-hir-group-runtime.json";
+    const char *group_source =
+        ".analisis agrupado {\n"
+        " variable id numerica\n"
+        " variable precio numerica\n"
+        " dataset cargar datos(\"test-hir-data-runtime.csv\")\n"
+        " .agrupar dataset { #por(\"id\") #suma(\"precio\") }\n"
+        " .exportar { (\"test-hir-group-runtime.json\") }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(group_source, "test-hir-group-runtime.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(read_file(group_report, text, sizeof(text)) &&
+          strstr(text, "\"filas\": 3") != NULL &&
+          strstr(text, "precio_suma") != NULL,
+          "HIR runtime: agrupación canónica no llegó al reporte con su agregado");
     remove(csv);
     remove(report);
+    remove(group_report);
     return 0;
 }
 

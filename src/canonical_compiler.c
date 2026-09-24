@@ -572,6 +572,50 @@ static bool hir_parse_selection(const char *text, MilenaHIRDataOperation *op,
     return true;
 }
 
+static HIRBuildResult hir_parse_aggregate(const ASTNode *node,
+                                                  MilenaHIRAggregate *aggregate) {
+    if (!node || node->type != AST_RESUMEN_METRICA || !node->value || !aggregate)
+        return HIR_BUILD_UNSUPPORTED;
+    char metric[32] = {0}, column[128] = {0}, extra;
+    if (sscanf(node->value, "%31[^:]:%127s %c", metric, column, &extra) != 2)
+        return HIR_BUILD_UNSUPPORTED;
+    const char *suffix = NULL;
+    if (strcmp(metric, "suma") == 0) {
+        aggregate->operation = MILENA_AGG_SUM;
+        suffix = "suma";
+    } else if (strcmp(metric, "media") == 0) {
+        aggregate->operation = MILENA_AGG_MEAN;
+        suffix = "media";
+    } else if (strcmp(metric, "minimo") == 0) {
+        aggregate->operation = MILENA_AGG_MIN;
+        suffix = "minimo";
+    } else if (strcmp(metric, "maximo") == 0) {
+        aggregate->operation = MILENA_AGG_MAX;
+        suffix = "maximo";
+    } else if (strcmp(metric, "conteo") == 0) {
+        aggregate->operation = MILENA_AGG_COUNT;
+        suffix = "conteo";
+    } else {
+        return HIR_BUILD_UNSUPPORTED;
+    }
+    aggregate->input = hir_unresolved_column(column, node);
+    if (!aggregate->input.name) return HIR_BUILD_MEMORY;
+    hir_source_span(&aggregate->span, node);
+    size_t column_len = strlen(column), suffix_len = strlen(suffix);
+    if (column_len > SIZE_MAX - suffix_len - 2) {
+        hir_column_ref_release(&aggregate->input);
+        return HIR_BUILD_MEMORY;
+    }
+    size_t name_len = column_len + suffix_len + 2;
+    aggregate->output_name = (char *)malloc(name_len);
+    if (!aggregate->output_name) {
+        hir_column_ref_release(&aggregate->input);
+        return HIR_BUILD_MEMORY;
+    }
+    (void)snprintf(aggregate->output_name, name_len, "%s_%s", column, suffix);
+    return HIR_BUILD_OK;
+}
+
 static bool hir_append_declared_column(MilenaDataHIR *hir,
                                        MilenaHIRColumnRef *column) {
     if (!hir || !column || hir->declared_column_count >=
@@ -599,9 +643,15 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
     hir->resource_policy.max_output_rows = SIZE_MAX;
     hir->resource_policy.max_columns = SIZE_MAX;
     const ASTNode *load = NULL;
+    bool terminal_operation_seen = false;
+    bool export_seen = false;
     for (size_t i = 0; i < analysis->child_count; ++i) {
         const ASTNode *node = analysis->children[i];
-        if (!node) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
+        if (!node || export_seen ||
+            (terminal_operation_seen && node->type != AST_BLOQUE_EXPORTAR)) {
+            data_hir_release(hir);
+            return HIR_BUILD_UNSUPPORTED;
+        }
         if (node->type == AST_LLAMADA_CARGAR) {
             if (load || !node->value || (node->type_name &&
                 strcmp(node->type_name, "flujo") == 0)) {
@@ -701,6 +751,104 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             }
             continue;
         }
+        if (node->type == AST_BLOQUE_AGRUPAR) {
+            MilenaHIRDataOperation op = {0};
+            op.kind = MILENA_HIR_DATA_GROUP;
+            hir_source_span(&op.span, node);
+            if ((node->type_name && strcmp(node->type_name, "flujo") == 0) ||
+                node->child_count == 0 || node->child_count > 17) {
+                data_hir_release(hir);
+                return HIR_BUILD_UNSUPPORTED;
+            }
+            op.as.group.aggregates = (MilenaHIRAggregate *)calloc(
+                node->child_count, sizeof(*op.as.group.aggregates));
+            if (!op.as.group.aggregates) {
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            const ASTNode *key_node = NULL;
+            HIRBuildResult aggregate_result = HIR_BUILD_OK;
+            for (size_t j = 0; j < node->child_count; ++j) {
+                const ASTNode *child = node->children[j];
+                if (!child) {
+                    aggregate_result = HIR_BUILD_UNSUPPORTED;
+                    break;
+                }
+                if (child->type == AST_AGRUPACION_POR && child->value && !key_node) {
+                    key_node = child;
+                } else if (child->type == AST_RESUMEN_METRICA &&
+                           op.as.group.aggregate_count < 16) {
+                    aggregate_result = hir_parse_aggregate(
+                        child, &op.as.group.aggregates[op.as.group.aggregate_count]);
+                    if (aggregate_result != HIR_BUILD_OK) break;
+                    op.as.group.aggregate_count++;
+                } else {
+                    aggregate_result = HIR_BUILD_UNSUPPORTED;
+                    break;
+                }
+            }
+            if (aggregate_result != HIR_BUILD_OK || !key_node ||
+                op.as.group.aggregate_count == 0) {
+                hir_column_ref_release(&op.as.group.key);
+                hir_aggregate_array_release(op.as.group.aggregates,
+                                            op.as.group.aggregate_count);
+                data_hir_release(hir);
+                return aggregate_result == HIR_BUILD_OK ? HIR_BUILD_UNSUPPORTED :
+                                                         aggregate_result;
+            }
+            op.as.group.key = hir_unresolved_column(key_node->value, key_node);
+            if (!op.as.group.key.name) {
+                hir_aggregate_array_release(op.as.group.aggregates,
+                                            op.as.group.aggregate_count);
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            if (!hir_append_data_operation(hir, &op)) {
+                hir_column_ref_release(&op.as.group.key);
+                hir_aggregate_array_release(op.as.group.aggregates,
+                                            op.as.group.aggregate_count);
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            terminal_operation_seen = true;
+            continue;
+        }
+        if (node->type == AST_BLOQUE_RESUMIR) {
+            MilenaHIRDataOperation op = {0};
+            op.kind = MILENA_HIR_DATA_SUMMARIZE;
+            hir_source_span(&op.span, node);
+            if (node->child_count == 0 || node->child_count > 16) {
+                data_hir_release(hir);
+                return HIR_BUILD_UNSUPPORTED;
+            }
+            op.as.summarize.aggregates = (MilenaHIRAggregate *)calloc(
+                node->child_count, sizeof(*op.as.summarize.aggregates));
+            if (!op.as.summarize.aggregates) {
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            HIRBuildResult aggregate_result = HIR_BUILD_OK;
+            for (size_t j = 0; j < node->child_count; ++j) {
+                aggregate_result = hir_parse_aggregate(
+                    node->children[j], &op.as.summarize.aggregates[j]);
+                if (aggregate_result != HIR_BUILD_OK) break;
+                op.as.summarize.aggregate_count++;
+            }
+            if (aggregate_result != HIR_BUILD_OK) {
+                hir_aggregate_array_release(op.as.summarize.aggregates,
+                                            op.as.summarize.aggregate_count);
+                data_hir_release(hir);
+                return aggregate_result;
+            }
+            if (!hir_append_data_operation(hir, &op)) {
+                hir_aggregate_array_release(op.as.summarize.aggregates,
+                                            op.as.summarize.aggregate_count);
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            terminal_operation_seen = true;
+            continue;
+        }
         if (node->type == AST_BLOQUE_SELECCIONAR) {
             if (node->child_count != 1 || !node->children[0] ||
                 node->children[0]->type != AST_COMANDO_COLUMNAS ||
@@ -726,12 +874,14 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
                 data_hir_release(hir);
                 return HIR_BUILD_MEMORY;
             }
+            terminal_operation_seen = true;
             continue;
         }
         if (node->type == AST_BLOQUE_EXPORTAR && node->value) {
             if (hir->export_path) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
             hir->export_path = milena_strdup(node->value);
             if (!hir->export_path) { data_hir_release(hir); return HIR_BUILD_MEMORY; }
+            export_seen = true;
             continue;
         }
         data_hir_release(hir);
@@ -904,7 +1054,8 @@ static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
                                         const MilenaTable *table,
                                         MilenaError *error) {
     if (!hir || !table) return MILENA_ERR_ARGUMENT;
-    size_t output_columns = table->column_count;
+    size_t current_columns = table->column_count;
+    size_t maximum_columns = table->column_count;
     for (size_t i = 0; i < hir->declared_column_count; ++i) {
         MilenaHIRColumnRef *declared = &hir->declared_schema[i];
         if (!declared->span.has_source_span) declared->span = hir->source.span;
@@ -935,8 +1086,9 @@ static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
             if (status == MILENA_OK)
                 status = hir_bind_column(table, hir, &op->as.product.right, i, true, error);
             if (status != MILENA_OK) return status;
-            if (output_columns == SIZE_MAX) return MILENA_ERR_OVERFLOW;
-            output_columns++;
+            if (current_columns == SIZE_MAX) return MILENA_ERR_OVERFLOW;
+            current_columns++;
+            if (current_columns > maximum_columns) maximum_columns = current_columns;
         } else if (op->kind == MILENA_HIR_DATA_FILTER_NUMERIC) {
             if (!op->as.filter.column.span.has_source_span)
                 op->as.filter.column.span = op->span;
@@ -950,11 +1102,38 @@ static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
                                          false, error);
                 if (status != MILENA_OK) return status;
             }
+            current_columns = op->as.select.count;
+        } else if (op->kind == MILENA_HIR_DATA_GROUP) {
+            status = hir_bind_column(table, hir, &op->as.group.key, i, false, error);
+            if (status != MILENA_OK) return status;
+            for (size_t j = 0; j < op->as.group.aggregate_count; ++j) {
+                MilenaHIRAggregate *aggregate = &op->as.group.aggregates[j];
+                if (!aggregate->input.span.has_source_span)
+                    aggregate->input.span = aggregate->span.has_source_span
+                        ? aggregate->span : op->span;
+                status = hir_bind_column(table, hir, &aggregate->input, i,
+                    aggregate->operation != MILENA_AGG_COUNT, error);
+                if (status != MILENA_OK) return status;
+            }
+            if (op->as.group.aggregate_count >= SIZE_MAX) return MILENA_ERR_OVERFLOW;
+            current_columns = op->as.group.aggregate_count + 1;
+        } else if (op->kind == MILENA_HIR_DATA_SUMMARIZE) {
+            for (size_t j = 0; j < op->as.summarize.aggregate_count; ++j) {
+                MilenaHIRAggregate *aggregate = &op->as.summarize.aggregates[j];
+                if (!aggregate->input.span.has_source_span)
+                    aggregate->input.span = aggregate->span.has_source_span
+                        ? aggregate->span : op->span;
+                status = hir_bind_column(table, hir, &aggregate->input, i,
+                    aggregate->operation != MILENA_AGG_COUNT, error);
+                if (status != MILENA_OK) return status;
+            }
+            current_columns = op->as.summarize.aggregate_count;
         }
+        if (current_columns > maximum_columns) maximum_columns = current_columns;
     }
     hir->resource_policy.max_input_rows = table->row_count;
     hir->resource_policy.max_output_rows = table->row_count;
-    hir->resource_policy.max_columns = output_columns;
+    hir->resource_policy.max_columns = maximum_columns;
     hir->schema_bound = true;
     return MILENA_OK;
 }
@@ -1086,6 +1265,44 @@ MilenaStatus milena_canonical_program_execute_data(
                 milena_table_destroy(&selected);
                 free(names);
             }
+        } else if (op->kind == MILENA_HIR_DATA_GROUP ||
+                   op->kind == MILENA_HIR_DATA_SUMMARIZE) {
+            size_t aggregate_count = op->kind == MILENA_HIR_DATA_GROUP
+                ? op->as.group.aggregate_count : op->as.summarize.aggregate_count;
+            MilenaHIRAggregate *aggregates = op->kind == MILENA_HIR_DATA_GROUP
+                ? op->as.group.aggregates : op->as.summarize.aggregates;
+            MilenaAggregateSpec *specifications = aggregate_count
+                ? (MilenaAggregateSpec *)calloc(aggregate_count,
+                                                 sizeof(*specifications)) : NULL;
+            if (!aggregate_count || !specifications) {
+                status = aggregate_count ? MILENA_ERR_MEMORY : MILENA_ERR_ARGUMENT;
+                canonical_span_error(error, status, &op->span,
+                                     "No se pudieron preparar agregados HIR");
+            } else {
+                for (size_t j = 0; j < aggregate_count; ++j) {
+                    specifications[j].value_column = aggregates[j].input.name;
+                    specifications[j].operation = aggregates[j].operation;
+                    specifications[j].output_name = aggregates[j].output_name;
+                }
+                MilenaTable aggregated = {0};
+                milena_table_init(&aggregated);
+                if (op->kind == MILENA_HIR_DATA_GROUP) {
+                    const char *keys[1] = {op->as.group.key.name};
+                    status = milena_table_group_by(&aggregated, &working, keys, 1,
+                                                   specifications, aggregate_count,
+                                                   error);
+                } else {
+                    status = milena_table_summarize(&aggregated, &working,
+                                                    specifications,
+                                                    aggregate_count, error);
+                }
+                if (status == MILENA_OK)
+                    milena_table_swap(&working, &aggregated);
+                else
+                    hir_attach_error_span(error, &op->span);
+                milena_table_destroy(&aggregated);
+                free(specifications);
+            }
         } else {
             status = MILENA_ERR_UNSUPPORTED;
             canonical_span_error(error, status, &op->span,
@@ -1185,6 +1402,10 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_COMANDO_TOTAL:
         case AST_BLOQUE_FILTRAR:
         case AST_COMANDO_CONDICION:
+        case AST_BLOQUE_AGRUPAR:
+        case AST_AGRUPACION_POR:
+        case AST_RESUMEN_METRICA:
+        case AST_BLOQUE_RESUMIR:
         case AST_BLOQUE_SELECCIONAR:
         case AST_COMANDO_COLUMNAS:
         case AST_BLOQUE_EXPORTAR:

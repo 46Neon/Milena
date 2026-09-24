@@ -75,6 +75,44 @@ if eligibility_nodes != represented:
 if "default:" not in eligibility or "return false;" not in eligibility:
     fail("unknown AST kinds must be rejected by the eligibility default")
 
+# The data HIR is a separate closed subset. Keep its builder, strict-entry
+# allowlist, and documented inventory in lockstep as operations are added.
+data_marker = "La matriz de nodos realmente recorridos por el builder de datos es:"
+data_start = HIR_DOC.find(data_marker)
+data_end = HIR_DOC.find("Todo AST restante está fuera de la HIR de datos", data_start)
+if min(data_start, data_end) < 0:
+    fail("documentation must list the exact data-HIR builder inventory")
+data_represented = set(re.findall(
+    r"\bAST_[A-Z0-9_]+\b", HIR_DOC[data_start:data_end]
+))
+if not data_represented <= ast_nodes:
+    fail(f"data-HIR inventory contains unknown AST nodes: {sorted(data_represented - ast_nodes)}")
+data_eligibility = function_body(
+    HIR_SOURCE, "static bool hir_supports_data_ast_node("
+)
+data_eligibility_nodes = set(re.findall(
+    r"\bcase\s+(AST_[A-Z0-9_]+)\s*:", data_eligibility
+))
+if data_eligibility_nodes != data_represented:
+    fail(
+        "documented data-HIR subset differs from its strict-entry allowlist; "
+        f"missing={sorted(data_represented - data_eligibility_nodes)}, "
+        f"extra={sorted(data_eligibility_nodes - data_represented)}"
+    )
+if "default:" not in data_eligibility or "return false;" not in data_eligibility:
+    fail("unknown data AST kinds must be rejected by the eligibility default")
+data_builder = function_body(
+    HIR_SOURCE,
+    "static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output) {",
+)
+data_builder_nodes = set(re.findall(r"\bAST_[A-Z0-9_]+\b", data_builder))
+if data_builder_nodes != data_represented:
+    fail(
+        "documented data-HIR subset differs from AST nodes handled by the builder; "
+        f"missing={sorted(data_represented - data_builder_nodes)}, "
+        f"extra={sorted(data_builder_nodes - data_represented)}"
+    )
+
 expression_builder = function_body(
     HIR_SOURCE, "static MilenaHIRExpression *hir_build_expression(const ASTNode *node,"
 )
@@ -96,6 +134,7 @@ if "MILENA_ERR_UNSUPPORTED" not in hir_entry or "hir_first_unsupported_node" not
 
 print(
     "HIR AST coverage: "
-    f"{len(represented)} represented kinds; {len(rejected)} explicitly rejected kinds; "
-    "all ASTNodeType values classified."
+    f"scalar={len(represented)} represented/{len(rejected)} outside; "
+    f"data={len(data_represented)} represented/{len(ast_nodes - data_represented)} fail-closed; "
+    "all ASTNodeType values classified in both closed subsets."
 )

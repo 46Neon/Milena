@@ -361,21 +361,104 @@ int main(void) {
           error.line > 0 && strstr(error.message, "columna numérica") != NULL,
           "el enlace debe rechazar tipos de filtro incompatibles con span");
     milena_canonical_program_release(&program);
+
+    /* Group and summary lower to typed aggregate HIR and execute transactionally. */
+    milena_canonical_program_init(&program);
+    const char *group_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".agrupar dataset { #por(\"ciudad\") #suma(\"precio\") } }";
+    CHECK(milena_canonical_program_parse(&program, group_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(program.data_hir && program.data_hir->operation_count == 1 &&
+          program.data_hir->operations[0].kind == MILENA_HIR_DATA_GROUP &&
+          program.data_hir->operations[0].as.group.aggregate_count == 1,
+          "la agrupación debe bajar a claves y agregados HIR tipados");
+    CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) == MILENA_OK,
+          error.message);
+    MilenaTable grouped_output;
+    milena_table_init(&grouped_output);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &grouped_output,
+                                                &error) == MILENA_OK,
+          error.message);
+    int grouped_sum = milena_table_column_index(&grouped_output, "precio_suma");
+    CHECK(grouped_output.row_count == 3 && grouped_sum >= 0,
+          "la agrupación HIR debe materializar todas las claves y la suma");
+    CHECK(milena_table_get_array_value(&grouped_output, (size_t)grouped_sum, 0,
+          &cell, &error) == MILENA_OK && *(const double *)cell == 2.0,
+          "el agregado HIR debe conservar el resultado numérico del grupo inicial");
+    MilenaTable grouped_sentinel;
+    milena_table_init(&grouped_sentinel);
+    CHECK(milena_table_clone(&grouped_sentinel, &grouped_output, &error) == MILENA_OK,
+          error.message);
+    MilenaHIRResourcePolicy group_policy = {
+        .max_input_rows = 3, .max_output_rows = 2, .max_columns = 4
+    };
+    CHECK(milena_canonical_program_execute_data(&program, &group_policy,
+          &grouped_sentinel, &error) == MILENA_ERR_OVERFLOW &&
+          grouped_sentinel.row_count == 3 &&
+          milena_table_column_index(&grouped_sentinel, "precio_suma") >= 0,
+          "un límite HIR de grupos debe preservar la salida previa íntegra");
+    milena_canonical_program_release(&program);
+    CHECK(milena_table_validate(&data_table, &error) == MILENA_OK,
+          "liberar la HIR de agrupación no debe destruir la tabla prestada");
+    milena_table_destroy(&grouped_sentinel);
+    milena_table_destroy(&grouped_output);
+
+    milena_canonical_program_init(&program);
+    const char *summary_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".resumir dataset { #suma(\"precio\") #conteo(\"ciudad\") } }";
+    CHECK(milena_canonical_program_parse(&program, summary_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(program.data_hir && program.data_hir->operation_count == 1 &&
+          program.data_hir->operations[0].kind == MILENA_HIR_DATA_SUMMARIZE,
+          "el resumen debe bajar a agregados HIR tipados");
+    CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) == MILENA_OK,
+          error.message);
+    MilenaTable summary_output;
+    milena_table_init(&summary_output);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &summary_output,
+                                                &error) == MILENA_OK,
+          error.message);
+    int summary_sum = milena_table_column_index(&summary_output, "precio_suma");
+    int summary_count = milena_table_column_index(&summary_output, "ciudad_conteo");
+    CHECK(summary_output.row_count == 1 && summary_sum >= 0 && summary_count >= 0,
+          "el resumen HIR debe materializar una fila con nombres estables");
+    CHECK(milena_table_get_array_value(&summary_output, (size_t)summary_sum, 0,
+          &cell, &error) == MILENA_OK && *(const double *)cell == 11.0,
+          "la suma HIR debe calcular el total de la columna");
+    CHECK(milena_table_get_array_value(&summary_output, (size_t)summary_count, 0,
+          &cell, &error) == MILENA_OK && *(const int64_t *)cell == 3,
+          "el conteo HIR debe aceptar columnas de texto enlazadas");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&summary_output);
+
+    milena_canonical_program_init(&program);
+    const char *unknown_group_column =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".agrupar dataset { #por(\"inexistente\") #suma(\"precio\") } }";
+    CHECK(milena_canonical_program_parse(&program, unknown_group_column, &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) ==
+          MILENA_ERR_TYPE && strstr(error.message, "Columna no declarada") != NULL,
+          "la clave de agrupación debe resolverse contra el esquema y rechazar faltantes");
+    milena_canonical_program_release(&program);
+
     milena_table_destroy(&data_table);
     milena_array_release(&ids);
     milena_array_release(&prices);
     milena_array_release(&quantities);
 
     milena_canonical_program_init(&program);
-    const char *unsupported_group_source =
+    const char *unsupported_join_source =
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
-        ".agrupar dataset { #por(\"ciudad\") #suma(\"precio\") } }";
-    CHECK(milena_canonical_program_parse(&program, unsupported_group_source, &error) == MILENA_OK,
+        ".unir { #derecha(\"catalogo.csv\") #clave(\"id\") } }";
+    CHECK(milena_canonical_program_parse(&program, unsupported_join_source, &error) == MILENA_OK,
           error.message);
     CHECK(milena_canonical_compiler_input(&program, &data_input, &error) ==
               MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&
-          strstr(error.message, "BLOQUE_AGRUPAR") != NULL,
-          "una operación todavía no representada debe producir diagnóstico AST explícito y sin vista parcial");
+          strstr(error.message, "BLOQUE_UNIR") != NULL,
+          "una unión todavía no representada debe fallar cerrado con AST y sin vista parcial");
     milena_canonical_program_release(&program);
 
     puts("OK: canonical compiler boundary, typed scalar/data HIR, binding, execution and source diagnostics");
