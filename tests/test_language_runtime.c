@@ -1,5 +1,9 @@
 #include "language_runtime.h"
 #include "language_grouped_spill.h"
+#include "language_semantic.h"
+#include "query_plan.h"
+#include "parser.h"
+#include "lexer.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -479,7 +483,290 @@ static int run_int64_grouped_spill_adapter(void) {
     return 0;
 }
 
+static int run_stream_filter_pipeline(void) {
+    const char *csv = "test-language-runtime-filter.csv";
+    const char *duplicate = "test-language-runtime-filter-duplicate.csv";
+    const char *output = "test-language-runtime-filter.json";
+    const char *unfiltered = "test-language-runtime-filter-unfiltered.json";
+    const char *content =
+        "zona,estado,importe\n"
+        "\"Norte, Este\",ok,5\n"
+        "Sur,ok,10\n"
+        "\"Norte, Este\",ok,7\n"
+        "Sur,no,4\n";
+    CHECK(write_file(csv, content), "filtro: no se pudo crear el CSV");
+    const char *filtered_source =
+        ".analisis filtro_agrupado {\n"
+        "  variable zona texto\n"
+        "  variable estado texto\n"
+        "  variable importe numerica\n"
+        "  datos desde \"test-language-runtime-filter.csv\" con grupos de 10 con filas hasta 100 con tiempo hasta 30000 ms\n"
+        "  filtrar \"zona\" == \"Norte, Este\";\n"
+        "  agrupar por \"zona\" resumir { suma de \"importe\"; }\n"
+        "  guardar resultado en \"test-language-runtime-filter.json\"\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(filtered_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_OK,
+        error.message);
+    char text[8192];
+    CHECK(read_file(output, text, sizeof(text)), "filtro: no se creó el reporte");
+    CHECK(strstr(text, "\"clave\":\"Norte, Este\"") != NULL &&
+          strstr(text, "\"valor\":12") != NULL &&
+          strstr(text, "\"clave\":\"Sur\"") == NULL,
+          "filtro: el CSV citado no llegó al agregado agrupado como igualdad exacta");
+
+    const char *unfiltered_source =
+        ".analisis sin_filtro {\n"
+        "  variable zona texto\n"
+        "  variable importe numerica\n"
+        "  datos desde \"test-language-runtime-filter.csv\" con grupos de 10 con filas hasta 100 con tiempo hasta 30000 ms\n"
+        "  agrupar por \"zona\" resumir { suma de \"importe\"; }\n"
+        "  guardar resultado en \"test-language-runtime-filter-unfiltered.json\"\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(unfiltered_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_OK,
+        error.message);
+    CHECK(read_file(unfiltered, text, sizeof(text)) &&
+          strstr(text, "\"clave\":\"Norte, Este\"") != NULL &&
+          strstr(text, "\"valor\":12") != NULL &&
+          strstr(text, "\"clave\":\"Sur\"") != NULL &&
+          strstr(text, "\"valor\":14") != NULL,
+          "filtro: resultado filtrado no coincide con agregado sin filtro de la clave seleccionada");
+
+    const char *numeric_csv = "test-language-runtime-filter-numeric.csv";
+    const char *numeric_output = "test-language-runtime-filter-numeric.json";
+    const char *numeric_content =
+        "importe,aporte\n"
+        "10,1\n"
+        "10.01,2\n"
+        "11,3\n"
+        ",100\n"
+        "no-numerico,100\n"
+        "10.0,4\n"
+        "nan,99\n"
+        "12x,99\n";
+    CHECK(write_file(numeric_csv, numeric_content),
+          "filtro numérico: no se pudo crear el CSV");
+    const char *numeric_source =
+        ".analisis filtro_numerico {\n"
+        "  variable importe numerica\n"
+        "  variable aporte numerica\n"
+        "  datos desde \"test-language-runtime-filter-numeric.csv\" con filas hasta 100\n"
+        "  filtrar \"importe\" > 10;\n"
+        "  resumir { suma de \"aporte\"; }\n"
+        "  guardar resultado en \"test-language-runtime-filter-numeric.json\"\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(numeric_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_OK,
+        error.message);
+    CHECK(read_file(numeric_output, text, sizeof(text)) &&
+          strstr(text, "\"valor\":5") != NULL &&
+          strstr(text, "\"valores_validos\":2") != NULL,
+          "filtro numérico: > debe excluir límite, nulos, texto inválido y NaN");
+
+    const char *numeric_missing_csv = "test-language-runtime-filter-numeric-missing.csv";
+    CHECK(write_file(numeric_missing_csv, "aporte\n1\n"),
+          "filtro numérico: no se pudo crear CSV sin columna de filtro");
+    const char *numeric_missing_source =
+        ".analisis filtro_numerico_sin_columna {\n"
+        "  variable importe numerica\n"
+        "  variable aporte numerica\n"
+        "  datos desde \"test-language-runtime-filter-numeric-missing.csv\"\n"
+        "  filtrar \"importe\" > 10;\n"
+        "  resumir { suma de \"aporte\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(numeric_missing_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_ERR_DATA,
+        "filtro numérico: una columna tipada ausente de la cabecera debe rechazarse");
+
+    const char *wrong_type_source =
+        ".analisis filtro_tipo_incorrecto {\n"
+        "  variable importe texto\n"
+        "  variable aporte numerica\n"
+        "  datos desde \"test-language-runtime-filter-numeric.csv\"\n"
+        "  filtrar \"importe\" > 10;\n"
+        "  resumir { suma de \"aporte\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(wrong_type_source,
+        "test-language-runtime-filter.milena", NULL, &error) != MILENA_OK,
+        "filtro numérico: columna no numérica debe rechazarse semánticamente");
+
+    const char *undeclared_source =
+        ".analisis filtro_sin_declaracion {\n"
+        "  variable aporte numerica\n"
+        "  datos desde \"test-language-runtime-filter-numeric.csv\"\n"
+        "  filtrar \"importe\" > 10;\n"
+        "  resumir { suma de \"aporte\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(undeclared_source,
+        "test-language-runtime-filter.milena", NULL, &error) != MILENA_OK,
+        "filtro numérico: columna sin declaración tipada debe rechazarse");
+
+    const char *global_output = "test-language-runtime-filter-global.json";
+    const char *global_source =
+        ".analisis filtro_global {\n"
+        "  variable estado texto\n"
+        "  variable importe numerica\n"
+        "  datos desde \"test-language-runtime-filter.csv\" con filas hasta 100 con tiempo hasta 30000 ms\n"
+        "  filtrar \"estado\" == \"ok\";\n"
+        "  resumir { suma de \"importe\"; }\n"
+        "  guardar resultado en \"test-language-runtime-filter-global.json\"\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(global_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_OK,
+        error.message);
+    CHECK(read_file(global_output, text, sizeof(text)) &&
+          strstr(text, "\"valor\":22") != NULL,
+          "filtro: igualdad exacta debe preceder también al resumen global");
+
+    const char *none_source =
+        ".analisis filtro_sin_coincidencias {\n"
+        "  variable zona texto\n"
+        "  variable importe numerica\n"
+        "  datos desde \"test-language-runtime-filter.csv\" con grupos de 10 con filas hasta 100 con tiempo hasta 30000 ms\n"
+        "  filtrar \"zona\" == \"No existe\";\n"
+        "  agrupar por \"zona\" resumir { suma de \"importe\"; }\n"
+        "  guardar resultado en \"test-language-runtime-filter.json\"\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(none_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_OK,
+        error.message);
+    CHECK(read_file(output, text, sizeof(text)) && strstr(text, "\"grupos\":0") != NULL,
+          "filtro: un predicado sin coincidencias debe producir agrupación vacía");
+
+    const char *missing_source =
+        ".analisis filtro_columna_ausente {\n"
+        "  variable no_existe texto\n"
+        "  variable importe numerica\n"
+        "  datos desde \"test-language-runtime-filter.csv\"\n"
+        "  filtrar \"no_existe\" == \"x\";\n"
+        "  resumir { suma de \"importe\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(missing_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_ERR_DATA,
+        "filtro: columna declarada pero ausente en el CSV debe rechazarse");
+
+    CHECK(write_file(duplicate, "zona,zona,importe\na,a,1\n"),
+          "filtro: no se pudo crear CSV con cabecera duplicada");
+    const char *duplicate_source =
+        ".analisis filtro_cabecera_duplicada {\n"
+        "  variable zona texto\n"
+        "  variable importe numerica\n"
+        "  datos desde \"test-language-runtime-filter-duplicate.csv\"\n"
+        "  filtrar \"zona\" == \"a\";\n"
+        "  resumir { suma de \"importe\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(duplicate_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_ERR_DATA,
+        "filtro: cabecera duplicada debe rechazarse");
+
+    const char *invalid_source =
+        ".analisis filtro_no_soportado {\n"
+        "  variable importe numerica\n"
+        "  datos desde \"test-language-runtime-filter.csv\"\n"
+        "  filtrar \"importe\" >= 3;\n"
+        "  resumir { suma de \"importe\"; }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(invalid_source,
+        "test-language-runtime-filter.milena", NULL, &error) == MILENA_ERR_PARSE,
+        "filtro: operadores y expresiones no soportados deben fallar antes de ejecutar");
+    remove(csv); remove(duplicate); remove(output); remove(unfiltered); remove(global_output);
+    remove(numeric_csv); remove(numeric_output); remove(numeric_missing_csv);
+    return 0;
+}
+static int run_typed_sql_semantics(void) {
+    const char *missing_db = "test-sql-typed-semantic-missing.db";
+    const char *valid =
+        "sql desde \"test-sql-typed-semantic-missing.db\" {\n"
+        "  tabla personas (id entero, nombre texto, activo booleano);\n"
+        "  seleccionar id, nombre de personas donde id = 7;\n"
+        "}";
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, valid);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    CHECK(program != NULL && !parser.has_error,
+          "SQL tipado: el parser no construyó el AST válido");
+    parser_release(&parser);
+    CHECK(program->child_count == 1 &&
+          program->children[0]->type == AST_SQL_PROGRAM,
+          "SQL tipado: raíz AST incorrecta");
+    const ASTNode *sql = program->children[0];
+    CHECK(sql->child_count == 2 &&
+          sql->children[0]->type == AST_SQL_TABLE_SCHEMA &&
+          sql->children[0]->child_count == 3 &&
+          sql->children[0]->children[0]->sql_type == AST_SQL_TYPE_INTEGER &&
+          sql->children[0]->children[1]->sql_type == AST_SQL_TYPE_TEXT &&
+          sql->children[0]->children[2]->sql_type == AST_SQL_TYPE_BOOLEAN,
+          "SQL tipado: AST del esquema no preservó nombres/tipos tipados");
+    const ASTNode *select = sql->children[1];
+    CHECK(select->type == AST_SQL_TYPED_SELECT && select->child_count == 3 &&
+          select->children[0]->type == AST_SQL_TABLE_REFERENCE &&
+          select->children[1]->type == AST_SQL_PROJECTION_LIST &&
+          select->children[1]->child_count == 2 &&
+          select->children[2]->type == AST_SQL_FILTER &&
+          select->children[2]->children[1]->sql_operator == AST_SQL_OPERATOR_EQUAL &&
+          select->children[2]->children[2]->sql_type == AST_SQL_TYPE_INTEGER,
+          "SQL tipado: AST de tabla, proyección, operador o parámetro incorrecto");
+    MilenaError error;
+    CHECK(milena_validate_ast(program, &error) == MILENA_OK,
+          "SQL tipado: la validación AST general rechazó el árbol");
+    CHECK(milena_sql_semantic_validate(sql, &error) == MILENA_OK,
+          "SQL tipado: la validación semántica rechazó el esquema y SELECT válidos");
+    MilenaSqlExecutionPlan plan = {0};
+    CHECK(milena_sql_execution_plan_build(sql, &plan, &error) == MILENA_OK,
+          "SQL tipado: no se construyó el plan validado");
+    CHECK(plan.operation_count == 2 &&
+          plan.operations[0].kind == MILENA_SQL_PLAN_SCHEMA &&
+          plan.operations[1].kind == MILENA_SQL_PLAN_TYPED_SELECT &&
+          strcmp(plan.operations[1].statement,
+                 "SELECT \"id\", \"nombre\" FROM \"personas\" WHERE \"id\" = ?") == 0 &&
+          plan.operations[1].parameter_count == 1 &&
+          plan.operations[1].parameters[0].kind == MILENA_SQL_PLAN_INT64 &&
+          plan.operations[1].parameters[0].value.i64 == 7 &&
+          plan.operations[1].projections[0].type == AST_SQL_TYPE_INTEGER,
+          "SQL tipado: plan no contiene SQL con placeholder/AST y binding tipados");
+    milena_sql_execution_plan_destroy(&plan);
+    ast_destroy(program);
+
+    struct {
+        const char *description;
+        const char *statement;
+        MilenaStatus expected;
+    } invalid[] = {
+        {"tabla desconocida", "seleccionar id de fantasma donde id = 7;", MILENA_ERR_TYPE},
+        {"proyección desconocida", "seleccionar ausente de personas donde id = 7;", MILENA_ERR_TYPE},
+        {"filtro desconocido", "seleccionar id de personas donde ausente = 7;", MILENA_ERR_TYPE},
+        {"tipo de parámetro incompatible", "seleccionar id de personas donde id = \"7\";", MILENA_ERR_TYPE},
+        {"operador no admitido", "seleccionar id de personas donde id > 7;", MILENA_ERR_UNSUPPORTED}
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        char source[1024];
+        int written = snprintf(source, sizeof(source),
+            "sql desde \"%s\" { tabla personas (id entero); %s }",
+            missing_db, invalid[i].statement);
+        CHECK(written > 0 && (size_t)written < sizeof(source),
+              "SQL tipado: no se pudo preparar el caso semántico inválido");
+        (void)remove(missing_db);
+        MilenaStatus status = milena_run_dataset_program(source, NULL, NULL,
+                                                         &error);
+        CHECK(status == invalid[i].expected,
+              invalid[i].description);
+        FILE *created = fopen(missing_db, "rb");
+        CHECK(created == NULL,
+              "SQL tipado: un error semántico abrió o creó la base de datos");
+        if (created) fclose(created);
+    }
+    (void)remove(missing_db);
+    return 0;
+}
+
 int main(void) {
+    CHECK(run_typed_sql_semantics() == 0,
+          "falló la fase de AST y semántica SQL tipados");
     CHECK(run_arrays() == 0, "falló la fase de arrays");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
     CHECK(run_inference_pipeline() == 0, "falló la fase de inferencia");
@@ -491,5 +778,9 @@ int main(void) {
     CHECK(run_int64_grouped_spill_adapter() == 0,
           "falló la fase canónica de spill agrupado INT64");
     puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo agrupado OK");
+
+    CHECK(run_stream_filter_pipeline() == 0,
+          "falló la fase de filtro de flujo canónico");
+    puts("language runtime: parser + AST + arrays + datasets + SST + finanzas + flujo agrupado + filtro OK");
     return 0;
 }

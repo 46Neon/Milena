@@ -62,6 +62,8 @@ void milena_error_set(MilenaError *error, MilenaStatus code, size_t line,
 const char *milena_status_name(MilenaStatus status);
 const char *milena_error_category_name(MilenaErrorCategory category);
 char *milena_strdup(const char *text);
+/* Reentrant strtok-style tokenization: skips delimiter runs and keeps state per caller. */
+char *milena_token_next(char *text, const char *delimiters, char **state);
 bool milena_size_add(size_t a, size_t b, size_t *out);
 bool milena_size_mul(size_t a, size_t b, size_t *out);
 MilenaStatus milena_parse_double(const char *text, double *value);

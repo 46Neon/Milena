@@ -1,9 +1,11 @@
 #include "language_runtime.h"
+#include "arrow_ipc.h"
 
 #include "array.h"
 #include "dataset.h"
 #include "stream.h"
 #include "language_grouped_spill.h"
+#include "query_plan.h"
 #include "analysis.h"
 #include "schema.h"
 #include "table.h"
@@ -20,6 +22,7 @@
 #include "ast.h"
 #include "lexer.h"
 #include "parser.h"
+#include "sqlite_backend.h"
 
 #include <float.h>
 #include <ctype.h>
@@ -742,9 +745,10 @@ static MilenaStatus runtime_write_sst_rate(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *event_name = runtime_trim(strtok(spec, ","));
-    char *exposure_name = runtime_trim(strtok(NULL, ","));
-    char *factor_text = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *event_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *exposure_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *factor_text = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!event_name || !exposure_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "La tasa requiere evento, exposición y factor");
@@ -831,9 +835,10 @@ static MilenaStatus runtime_write_sst_poisson(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *event_name = runtime_trim(strtok(spec, ","));
-    char *exposure_name = runtime_trim(strtok(NULL, ","));
-    char *factor_text = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *event_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *exposure_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *factor_text = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!event_name || !exposure_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "Poisson requiere evento, exposición y factor");
@@ -918,8 +923,9 @@ static MilenaStatus runtime_write_sst_correlation(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *x_name = runtime_trim(strtok(spec, ","));
-    char *y_name = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *x_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *y_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!x_name || !y_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "La correlación requiere dos columnas");
@@ -979,8 +985,9 @@ static MilenaStatus runtime_write_sst_wilcoxon(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *before_name = runtime_trim(strtok(spec, ","));
-    char *after_name = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *before_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *after_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!before_name || !after_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "Wilcoxon requiere dos columnas");
@@ -1042,8 +1049,9 @@ static MilenaStatus runtime_write_sst_chi_square(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *row_name = runtime_trim(strtok(spec, ","));
-    char *column_name = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *row_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *column_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!row_name || !column_name) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "Chi cuadrado requiere dos columnas categóricas");
@@ -1132,10 +1140,11 @@ static MilenaStatus runtime_write_sst_risk(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *exposure_name = runtime_trim(strtok(spec, ","));
-    char *event_name = runtime_trim(strtok(NULL, ","));
-    char *exposure_positive = runtime_trim(strtok(NULL, ","));
-    char *event_positive = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *exposure_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *event_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *exposure_positive = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *event_positive = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!exposure_name || !event_name || !exposure_positive || !event_positive) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "Riesgo requiere columnas y categorías positivas explícitas");
@@ -1238,9 +1247,10 @@ static MilenaStatus runtime_write_finance_simple_interest(const MilenaTable *tab
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *principal_name = runtime_trim(strtok(spec, ","));
-    char *rate_name = runtime_trim(strtok(NULL, ","));
-    char *period_text = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *principal_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *rate_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *period_text = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!principal_name || !rate_name || !period_text) {
         runtime_error(error, MILENA_ERR_PARSE,
                       "interes_simple requiere principal,tasa,periodos");
@@ -1305,9 +1315,10 @@ static MilenaStatus runtime_write_sst_model(const MilenaTable *table,
     char spec[512];
     strncpy(spec, specification ? specification : "", sizeof(spec) - 1);
     spec[sizeof(spec) - 1] = '\0';
-    char *area_name = runtime_trim(strtok(spec, ","));
-    char *severity_name = runtime_trim(strtok(NULL, ","));
-    char *cargo_name = runtime_trim(strtok(NULL, ","));
+    char *spec_state = NULL;
+    char *area_name = runtime_trim(milena_token_next(spec, ",", &spec_state));
+    char *severity_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
+    char *cargo_name = runtime_trim(milena_token_next(NULL, ",", &spec_state));
     if (!area_name || !severity_name || !cargo_name) {
         runtime_error(error, MILENA_ERR_PARSE, "modelo_sst requiere area,severidad,cargo");
         return MILENA_ERR_PARSE;
@@ -1410,102 +1421,64 @@ static bool runtime_stream_operation(ASTStreamOperation ast_operation,
     }
 }
 
-static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
+static MilenaStatus run_stream_dataset_with_options(
+                                       const MilenaStreamExecutionPlan *plan,
                                        const char *input_path,
                                        const char *output_path,
                                        const MilenaStreamOptions *options,
                                        FILE *output,
                                        MilenaError *error) {
-    if (!analysis || !input_path || !output_path || !options ||
-        options->chunk_rows == 0)
+    if (!plan || !plan->source || !plan->summary || !input_path ||
+        !output_path || !options || options->chunk_rows == 0)
         return MILENA_ERR_ARGUMENT;
-    const ASTNode *summary_block = NULL;
-    const ASTNode *group_block = NULL;
-    const ASTNode *group_key = NULL;
-    const ASTNode *group_summary = NULL;
-    const ASTNode *spill_policy = NULL;
-    bool has_top_summary = false;
-    for (size_t i = 0; i < analysis->child_count; i++) {
-        const ASTNode *node = analysis->children[i];
-        if (!node) continue;
-        if (node->type == AST_BLOQUE_RESUMIR) {
-            has_top_summary = true;
-            summary_block = node;
-        } else if (node->type == AST_BLOQUE_AGRUPAR) {
-            if (group_block) {
-                runtime_error(error, MILENA_ERR_PARSE,
-                              "El flujo admite una sola agrupación por operación");
-                return MILENA_ERR_PARSE;
-            }
-            group_block = node;
-        } else if (node->type != AST_LLAMADA_CARGAR &&
-                   node->type != AST_DECLARACION_VARIABLE &&
-                   node->type != AST_DECLARACION_ENTRADA &&
-                   node->type != AST_DECLARACION_SALIDA &&
-                   node->type != AST_BLOQUE_EXPORTAR) {
-            runtime_error(error, MILENA_ERR_UNSUPPORTED,
-                          "El modo flujo solo admite resumen o agrupación sin materializar el dataset");
-            return MILENA_ERR_UNSUPPORTED;
-        }
+    const ASTNode *summary_block = plan->summary;
+    const ASTNode *group_block = plan->group;
+    const ASTNode *group_key = plan->group_key;
+    bool spill_grouped = plan->physical_operator ==
+                         MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL;
+    bool grouped = plan->physical_operator == MILENA_PHYSICAL_CSV_STREAM_GROUPED ||
+                   spill_grouped;
+    MilenaLogicalOperator aggregate_operator = grouped
+        ? MILENA_LOGICAL_GROUP_AGGREGATE : MILENA_LOGICAL_GLOBAL_AGGREGATE;
+    bool valid_logical_shape = plan->filter
+        ? plan->logical_operator_count == 4 &&
+          plan->logical_operators[1] == MILENA_LOGICAL_FILTER &&
+          plan->logical_operators[2] == aggregate_operator &&
+          plan->logical_operators[3] == MILENA_LOGICAL_JSON_REPORT
+        : plan->logical_operator_count == 3 &&
+          plan->logical_operators[1] == aggregate_operator &&
+          plan->logical_operators[2] == MILENA_LOGICAL_JSON_REPORT;
+    if ((!grouped && plan->physical_operator != MILENA_PHYSICAL_CSV_STREAM_SUMMARY) ||
+        grouped != (group_block != NULL) || (grouped && !group_key) ||
+        (grouped && (plan->group_key_count == 0 || plan->group_key_count > 2)) ||
+        (grouped && plan->group_key_count > 1 && !spill_grouped) ||
+        spill_grouped != (plan->spill_policy != NULL) ||
+        plan->logical_operators[0] != MILENA_LOGICAL_CSV_SCAN ||
+        !valid_logical_shape) {
+        runtime_error(error, MILENA_ERR_INTERNAL,
+                      "El plan físico del flujo no coincide con su contrato lógico");
+        return MILENA_ERR_INTERNAL;
     }
-    if (group_block) {
-        if (has_top_summary) {
-            runtime_error(error, MILENA_ERR_PARSE,
-                          "El flujo agrupado no puede mezclar resumen global y agrupación");
-            return MILENA_ERR_PARSE;
-        }
-        for (size_t i = 0; i < group_block->child_count; i++) {
-            const ASTNode *child = group_block->children[i];
-            if (!child) continue;
-            if (child->type == AST_AGRUPACION_POR) {
-                if (group_key) {
-                    runtime_error(error, MILENA_ERR_PARSE,
-                                  "La agrupación de flujo solo admite una clave");
-                    return MILENA_ERR_PARSE;
-                }
-                group_key = child;
-            } else if (child->type == AST_BLOQUE_RESUMIR) {
-                if (group_summary) {
-                    runtime_error(error, MILENA_ERR_PARSE,
-                                  "La agrupación de flujo solo admite un bloque resumir");
-                    return MILENA_ERR_PARSE;
-                }
-                group_summary = child;
-            } else if (child->type == AST_AGRUPACION_SPILL) {
-                if (spill_policy) {
-                    runtime_error(error, MILENA_ERR_PARSE,
-                                  "La agrupación de flujo solo admite una política #spill");
-                    return MILENA_ERR_PARSE;
-                }
-                spill_policy = child;
-            } else {
-                runtime_error(error, MILENA_ERR_PARSE,
-                              "La agrupación de flujo contiene un nodo no compatible");
-                return MILENA_ERR_PARSE;
-            }
-        }
-        if (!group_key || !group_key->value || !group_summary) {
-            runtime_error(error, MILENA_ERR_PARSE,
-                          "La agrupación de flujo requiere clave y métricas");
-            return MILENA_ERR_PARSE;
-        }
-        summary_block = group_summary;
+    if (grouped && plan->logical_operators[plan->filter ? 2 : 1] !=
+                   MILENA_LOGICAL_GROUP_AGGREGATE) {
+        runtime_error(error, MILENA_ERR_INTERNAL,
+                      "El operador agrupado no coincide con el plan lógico");
+        return MILENA_ERR_INTERNAL;
     }
-    if (!summary_block || summary_block->child_count == 0 ||
-        summary_block->child_count > 64) {
-        runtime_error(error, MILENA_ERR_PARSE,
-                      "El flujo necesita entre 1 y 64 métricas en resumir");
-        return MILENA_ERR_PARSE;
+    if (!grouped && plan->logical_operators[plan->filter ? 2 : 1] !=
+                    MILENA_LOGICAL_GLOBAL_AGGREGATE) {
+        runtime_error(error, MILENA_ERR_INTERNAL,
+                      "El resumen global no coincide con el plan lógico");
+        return MILENA_ERR_INTERNAL;
     }
-
-    MilenaStreamMetric metrics[64];
-    char columns[64][128];
-    char operations[64][32];
-    char metric_names[64][160];
+    MilenaStreamMetric metrics[MILENA_STREAM_MAX_METRICS];
+    char columns[MILENA_STREAM_MAX_METRICS][128];
+    char operations[MILENA_STREAM_MAX_METRICS][32];
+    char metric_names[MILENA_STREAM_MAX_METRICS][160];
     size_t metric_count = 0;
     for (size_t j = 0; j < summary_block->child_count; j++) {
         const ASTNode *summary = summary_block->children[j];
-        if (!summary || !summary->value || metric_count >= 64) {
+        if (!summary || !summary->value || metric_count >= MILENA_STREAM_MAX_METRICS) {
             runtime_error(error, MILENA_ERR_PARSE,
                           "El resumen en modo flujo tiene una métrica inválida");
             return MILENA_ERR_PARSE;
@@ -1584,32 +1557,38 @@ static MilenaStatus run_stream_dataset_with_options(const ASTNode *analysis,
     }
     MilenaStreamReport report = {0};
     MilenaStatus status;
-    MilenaStreamSpillPolicy policy = {0};
-    const MilenaStreamSpillPolicy *policy_ptr = NULL;
-    if (group_block && spill_policy) {
-        if (metric_count != 1) {
-            runtime_error(error, MILENA_ERR_UNSUPPORTED,
-                          "#spill de flujo admite exactamente una métrica");
-            return MILENA_ERR_UNSUPPORTED;
-        }
-        policy = (MilenaStreamSpillPolicy){
-            spill_policy->value,
-            spill_policy->group_memory_budget_bytes,
-            spill_policy->group_spill_quota_bytes,
-            spill_policy->group_max_key_bytes,
-            spill_policy->group_max_output_groups,
-            spill_policy->group_max_output_bytes,
-            spill_policy->group_max_runs
+    if (spill_grouped) {
+        const ASTNode *ast_policy = plan->spill_policy;
+        MilenaStreamSpillPolicy policy = {
+            ast_policy->value,
+            ast_policy->group_memory_budget_bytes,
+            ast_policy->group_spill_quota_bytes,
+            ast_policy->group_max_key_bytes,
+            ast_policy->group_max_output_groups,
+            ast_policy->group_max_output_bytes,
+            ast_policy->group_max_runs
         };
-        policy_ptr = &policy;
+        MilenaStreamGroupKeyDescriptor group_keys[2];
+        for (size_t key_index = 0; key_index < plan->group_key_count; ++key_index) {
+            const ASTNode *key_node = plan->group_keys[key_index];
+            if (!key_node || !key_node->value || !key_node->value[0]) {
+                runtime_error(error, MILENA_ERR_PARSE,
+                              "El plan spill contiene una clave inválida");
+                return MILENA_ERR_PARSE;
+            }
+            group_keys[key_index].name = key_node->value;
+            group_keys[key_index].type = MILENA_STREAM_GROUP_KEY_TEXT;
+        }
+        status = milena_stream_csv_grouped_spill_with_keys_and_options(
+            input_path, output_path, group_keys, plan->group_key_count,
+            metrics, metric_count, options, &policy, &report, error);
+    } else if (grouped) {
+        status = milena_stream_csv_grouped_with_options(input_path, output_path,
+            group_key->value, metrics, metric_count, options, &report, error);
+    } else {
+        status = milena_stream_csv_summary_with_options(input_path, output_path,
+            metrics, metric_count, options, &report, error);
     }
-    MilenaStreamExecutionPlan plan;
-    status = milena_stream_plan_build_csv(group_block != NULL,
-                                          spill_policy != NULL, &plan, error);
-    if (status == MILENA_OK)
-        status = milena_stream_execute_csv_plan(&plan, input_path, output_path,
-            group_key ? group_key->value : NULL, metrics, metric_count, options,
-            policy_ptr, &report, error);
     if (status == MILENA_OK && output) {
         fprintf(output, "Programa de flujo ejecutado: %s\n", input_path);
         fprintf(output, "Filas: %zu | Válidas: %zu | Malformadas: %zu | Lote: %zu | Registro máximo observado: %zu bytes | Tiempo medido: %.3f ms\n",
@@ -1653,6 +1632,25 @@ MilenaStatus milena_run_dataset_program(const char *source,
         return semantic_status;
     }
 
+    if (program->child_count == 1 &&
+        program->children[0]->type == AST_SQL_PROGRAM) {
+        MilenaSqlExecutionPlan sql_plan = {0};
+        MilenaStatus sql_status = milena_sql_semantic_validate(
+            program->children[0], error);
+        if (sql_status == MILENA_OK)
+            sql_status = milena_sql_execution_plan_build(
+                program->children[0], &sql_plan, error);
+        if (sql_status == MILENA_OK)
+            sql_status = milena_sql_execution_plan_validate(&sql_plan, error);
+        if (sql_status == MILENA_OK)
+            sql_status = milena_sql_run_plan(&sql_plan, output, error);
+        milena_sql_execution_plan_destroy(&sql_plan);
+        ast_destroy(program);
+        parser_release(&parser);
+        (void)script_filename;
+        return sql_status;
+    }
+
     const ASTNode *analysis = NULL;
     for (size_t i = 0; i < program->child_count; i++) {
         if (program->children[i]->type == AST_BLOQUE_ANALISIS) {
@@ -1669,6 +1667,31 @@ MilenaStatus milena_run_dataset_program(const char *source,
         return MILENA_ERR_PARSE;
     }
 
+    MilenaStreamExecutionPlan stream_plan = {0};
+    MilenaArrowIpcExecutionPlan arrow_plan = {0};
+    bool arrow_stream = load->type_name &&
+        strcmp(load->type_name, "arrow_ipc_stream") == 0;
+    bool streaming = load->type_name && strcmp(load->type_name, "flujo") == 0;
+    if (arrow_stream) {
+        MilenaStatus plan_status = milena_arrow_ipc_execution_plan_build(
+            analysis, &arrow_plan, error);
+        if (plan_status != MILENA_OK) {
+            ast_destroy(program);
+            parser_release(&parser);
+            return plan_status;
+        }
+        load = arrow_plan.source;
+    } else if (streaming) {
+        MilenaStatus plan_status = milena_stream_execution_plan_build(
+            analysis, &stream_plan, error);
+        if (plan_status != MILENA_OK) {
+            ast_destroy(program);
+            parser_release(&parser);
+            return plan_status;
+        }
+        load = stream_plan.source;
+    }
+
     char input[2048];
     MilenaStatus status = dataset_runtime_path(load->value, script_filename, false,
                                                input, sizeof(input), error);
@@ -1678,10 +1701,79 @@ MilenaStatus milena_run_dataset_program(const char *source,
         return status;
     }
 
-    if (load->type_name && strcmp(load->type_name, "flujo") == 0) {
+    if (arrow_stream) {
         char output_path[2048];
-        const ASTNode *export_node = dataset_runtime_find_child(analysis,
-                                                                  AST_BLOQUE_EXPORTAR);
+        const ASTNode *export_node = arrow_plan.sink;
+        status = dataset_runtime_path(export_node->value, script_filename, true,
+                                      output_path, sizeof(output_path), error);
+        if (status == MILENA_OK) {
+            const char *projection[MILENA_ARROW_PLAN_MAX_COLUMNS];
+            MilenaArrowValueType projection_types[MILENA_ARROW_PLAN_MAX_COLUMNS];
+            for (size_t i = 0; i < arrow_plan.projection->child_count; ++i) {
+                projection[i] = arrow_plan.projection->children[i]->value;
+                const ASTNode *declaration = arrow_plan.projection_declarations[i];
+                if (declaration && declaration->type_name &&
+                    strcmp(declaration->type_name, "numerica") == 0)
+                    projection_types[i] = MILENA_ARROW_VALUE_NUMERICA;
+                else if (declaration && declaration->type_name &&
+                         strcmp(declaration->type_name, "texto") == 0)
+                    projection_types[i] = MILENA_ARROW_VALUE_TEXTO;
+                else {
+                    runtime_error(error, MILENA_ERR_TYPE,
+                                  "Tipo de columna proyectada Arrow no admitido");
+                    status = MILENA_ERR_TYPE;
+                    break;
+                }
+            }
+            MilenaArrowIpcOptions options = {0};
+            options.input_path = input;
+            options.output_path = output_path;
+            options.projection = projection;
+            options.projection_types = projection_types;
+            options.projection_count = arrow_plan.projection->child_count;
+            options.max_batch_rows = load->stream_chunk_rows;
+            options.max_rows = load->stream_row_limit;
+            options.max_batch_bytes = load->stream_batch_limit_bytes;
+            options.max_columns = load->stream_column_limit;
+            options.max_input_bytes = load->stream_input_limit_bytes;
+            options.max_output_bytes = load->stream_output_limit_bytes;
+            options.max_elapsed_milliseconds = load->stream_time_limit_ms;
+            if (arrow_plan.filter) {
+                options.filter_column = arrow_plan.filter->value;
+                if (arrow_plan.filter->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+                    options.filter_kind = MILENA_ARROW_FILTER_TEXT_EQUAL;
+                    options.filter_column_type = MILENA_ARROW_VALUE_TEXTO;
+                    options.filter_text = arrow_plan.filter->type_name;
+                } else if (arrow_plan.filter->stream_filter_kind ==
+                           AST_STREAM_FILTER_NUMERIC_GREATER) {
+                    options.filter_kind = MILENA_ARROW_FILTER_NUMERIC_GREATER;
+                    options.filter_column_type = MILENA_ARROW_VALUE_NUMERICA;
+                    options.filter_number = arrow_plan.filter->number_value;
+                } else {
+                    runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                  "Predicado de Arrow IPC no registrado en el planner");
+                    status = MILENA_ERR_UNSUPPORTED;
+                }
+            }
+            MilenaArrowIpcReport report = {0};
+            if (status == MILENA_OK)
+                status = milena_arrow_ipc_stream_transform(&options, &report, error);
+            if (status == MILENA_OK && output) {
+                fprintf(output, "Arrow IPC STREAM ejecutado: %s\n", input);
+                fprintf(output, "Lotes: %zu | Filas leídas: %zu | Filas escritas: %zu\n",
+                        report.input_batches, report.input_rows, report.output_rows);
+                fprintf(output, "Bytes entrada: %zu | Bytes salida: %zu | Destino: %s\n",
+                        report.input_bytes, report.output_bytes, output_path);
+            }
+        }
+        ast_destroy(program);
+        parser_release(&parser);
+        return status;
+    }
+
+    if (streaming) {
+        char output_path[2048];
+        const ASTNode *export_node = stream_plan.sink;
         const char *requested_output = export_node && export_node->value
             ? export_node->value : "reporte_flujo.json";
         status = dataset_runtime_path(requested_output, script_filename, true,
@@ -1704,7 +1796,18 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 options.max_rows = load->stream_row_limit;
             if (load->stream_time_limit_ms > 0.0)
                 options.max_elapsed_milliseconds = load->stream_time_limit_ms;
-            status = run_stream_dataset_with_options(analysis, input, output_path,
+            if (stream_plan.filter) {
+                options.filter_column = stream_plan.filter->value;
+                if (stream_plan.filter->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+                    options.filter_kind = MILENA_STREAM_FILTER_TEXT_EQUAL;
+                    options.filter_value = stream_plan.filter->type_name;
+                } else if (stream_plan.filter->stream_filter_kind ==
+                           AST_STREAM_FILTER_NUMERIC_GREATER) {
+                    options.filter_kind = MILENA_STREAM_FILTER_NUMERIC_GREATER;
+                    options.filter_number = stream_plan.filter->number_value;
+                }
+            }
+            status = run_stream_dataset_with_options(&stream_plan, input, output_path,
                                                      &options, output, error);
         }
         ast_destroy(program);
@@ -1900,9 +2003,15 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     MilenaTable grouped = {0};
                     milena_table_init(&grouped);
                     if (spill_policy) {
-                        status = milena_language_group_by_spill(&grouped,
-                            &canonical_table, group_key->value,
-                            &specifications[0], spill_policy, error);
+                        if (summary_count != 1) {
+                            runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                                "#spill agrupado admite exactamente una métrica");
+                            status = MILENA_ERR_UNSUPPORTED;
+                        } else {
+                            status = milena_language_group_by_spill(&grouped,
+                                &canonical_table, group_key->value,
+                                &specifications[0], spill_policy, error);
+                        }
                     } else {
                         status = milena_table_group_by(&grouped, &canonical_table,
                             key_names, 1, specifications, summary_count, error);
@@ -2095,11 +2204,12 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     size_t name_count = 0;
                     if (!list) status = MILENA_ERR_MEMORY;
                     else {
-                        char *item = strtok(list, ",");
+                        char *columns_state = NULL;
+                        char *item = milena_token_next(list, ",", &columns_state);
                         while (item && name_count < 32) {
                             while (*item == ' ') item++;
                             names[name_count++] = item;
-                            item = strtok(NULL, ",");
+                            item = milena_token_next(NULL, ",", &columns_state);
                         }
                         if (name_count == 0 || item != NULL) {
                             runtime_error(error, MILENA_ERR_PARSE,

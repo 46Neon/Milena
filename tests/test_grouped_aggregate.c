@@ -51,6 +51,62 @@ static MilenaStatus capture_result(const MilenaGroupedAggregateResult *result,
     return MILENA_OK;
 }
 
+typedef struct {
+    unsigned char previous[16];
+    size_t previous_length;
+    unsigned char group[8];
+    size_t group_length;
+    size_t next_metric;
+    size_t callbacks;
+} CompositeMetricCheck;
+
+static MilenaStatus check_composite_metrics(
+    const MilenaGroupedAggregateResult *result, void *context,
+    MilenaError *error) {
+    (void)error;
+    CompositeMetricCheck *check = context;
+    assert(result && result->key && result->key_length == 5u);
+    assert(result->key[0] == 1u && result->key[3] == 0u);
+    size_t metric = result->key[4];
+    assert(metric < 3u);
+    if (check->callbacks != 0) {
+        size_t common = check->previous_length < result->key_length ?
+            check->previous_length : result->key_length;
+        int order = memcmp(check->previous, result->key, common);
+        assert(order < 0 || (order == 0 &&
+                             check->previous_length < result->key_length));
+    }
+    bool same_group = check->callbacks != 0 && check->group_length == 2u &&
+        memcmp(check->group, result->key + 1u, 2u) == 0;
+    if (!same_group) {
+        if (check->callbacks != 0) assert(check->next_metric == 3u);
+        assert(metric == 0u);
+        memcpy(check->group, result->key + 1u, 2u);
+        check->group_length = 2u;
+        check->next_metric = 0;
+    }
+    assert(metric == check->next_metric);
+    unsigned group = (unsigned)(result->key[2] - (unsigned char)'0');
+    assert(group < 6u);
+    if (metric == 0u) {
+        assert(result->aggregate.count == 10u);
+        assert(result->aggregate.sum == 280.0 + 10.0 * (double)group);
+    } else if (metric == 1u) {
+        assert(result->aggregate.count == 10u);
+        assert(result->aggregate.sum == 10.0);
+    } else {
+        assert(result->aggregate.count == 8u);
+        assert(result->aggregate.null_count == 1u);
+        assert(result->aggregate.invalid_count == 1u);
+        assert(result->aggregate.sum == 236.0 + 8.0 * (double)group);
+    }
+    memcpy(check->previous, result->key, result->key_length);
+    check->previous_length = result->key_length;
+    check->next_metric++;
+    check->callbacks++;
+    return MILENA_OK;
+}
+
 int main(void) {
     const char *path = "tests/grouped-aggregate.spill";
     remove(path);
@@ -152,6 +208,41 @@ int main(void) {
     assert(emitted == 120 && order.count == 120);
     CHECK_OK(milena_grouped_aggregate_close(&grouped, &error));
     assert(remove(path) == 0);
+
+    /* Composite (group, metric) keys recur across map flushes and sorted runs.
+     * Each run must coalesce duplicate partial states before pairwise merge. */
+    const char *multi_path = "tests/grouped-aggregate.multimetric.spill";
+    (void)remove(multi_path);
+    CHECK_OK(milena_grouped_aggregate_open(multi_path, 2048, 64,
+        1024u * 1024u, &grouped, &error));
+    assert(grouped.group_capacity < 18u);
+    for (size_t i = 0; i < 60u; ++i) {
+        size_t group = i % 6u;
+        unsigned char key[5] = {1u, 'g', (unsigned char)('0' + group), 0u, 0u};
+        key[4] = 0u;
+        CHECK_OK(milena_grouped_aggregate_add(&grouped, key, sizeof(key),
+                                               (double)(i + 1u), &error));
+        key[4] = 1u;
+        CHECK_OK(milena_grouped_aggregate_add(&grouped, key, sizeof(key),
+                                               1.0, &error));
+        key[4] = 2u;
+        if (i / 6u == 2u)
+            CHECK_OK(milena_grouped_aggregate_add_null(&grouped, key,
+                sizeof(key), &error));
+        else if (i / 6u == 5u)
+            CHECK_OK(milena_grouped_aggregate_add_invalid(&grouped, key,
+                sizeof(key), &error));
+        else
+            CHECK_OK(milena_grouped_aggregate_add(&grouped, key,
+                sizeof(key), (double)(i + 1u), &error));
+    }
+    CompositeMetricCheck composite = {0};
+    CHECK_OK(milena_grouped_aggregate_finalize(&grouped,
+        check_composite_metrics, &composite, &emitted, &error));
+    assert(emitted == 18u && composite.callbacks == 18u);
+    assert(composite.next_metric == 3u && grouped.sorted_runs > 1u);
+    CHECK_OK(milena_grouped_aggregate_close(&grouped, &error));
+    assert(remove(multi_path) == 0);
 
     /* A tiny spill quota must fail instead of exceeding its configured limit. */
     CHECK_OK(milena_grouped_aggregate_open(path, 2048, 64, 150,

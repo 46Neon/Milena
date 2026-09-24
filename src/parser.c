@@ -17,8 +17,9 @@ void parser_release(Parser *parser) {
 }
 
 void parser_error(Parser *parser, const char *msg) {
-    milena_error_set(&parser->error, MILENA_ERR_PARSE,
-                     parser->current.line, parser->current.column, 0, msg);
+    size_t line = parser->current.line > 0 ? (size_t)parser->current.line : 0;
+    size_t column = parser->current.column > 0 ? (size_t)parser->current.column : 0;
+    milena_error_set(&parser->error, MILENA_ERR_PARSE, line, column, 0, msg);
     parser->has_error = true;
 }
 
@@ -27,7 +28,7 @@ void parser_advance(Parser *parser) {
     parser->current = lexer_next_token(parser->lexer);
 }
 
-bool parser_match(Parser *parser, TokenType type) {
+bool parser_match(Parser *parser, MilenaTokenType type) {
     return parser->current.type == type;
 }
 
@@ -37,7 +38,7 @@ static bool parser_is_identifier(Parser *parser) {
            parser_match(parser, TOKEN_KW_TOTAL);
 }
 
-bool parser_expect(Parser *parser, TokenType type, const char *msg) {
+bool parser_expect(Parser *parser, MilenaTokenType type, const char *msg) {
     if (!parser_match(parser, type)) {
         parser_error(parser, msg);
         return false;
@@ -243,7 +244,7 @@ static ASTNode *parse_expression(Parser *parser) {
     }
 
     while (parser_match(parser, TOKEN_MAS) || parser_match(parser, TOKEN_MENOS)) {
-        TokenType operator_type = parser->current.type;
+        MilenaTokenType operator_type = parser->current.type;
         parser_advance(parser);
         ASTNode *right = NULL;
         if (parser_match(parser, TOKEN_NUMERO)) {
@@ -386,7 +387,7 @@ static ASTNode *parse_assignment(Parser *parser) {
     return node;
 }
 
-static bool parser_is_statistical_token(TokenType type) {
+static bool parser_is_statistical_token(MilenaTokenType type) {
     return type == TOKEN_FUNCION_SUMA ||
            type == TOKEN_FUNCION_MEDIA ||
            type == TOKEN_FUNCION_MINIMO ||
@@ -397,7 +398,7 @@ static bool parser_is_statistical_token(TokenType type) {
            type == TOKEN_FUNCION_PERCENTIL;
 }
 
-static ASTStatOperation parser_statistical_operation(TokenType type) {
+static ASTStatOperation parser_statistical_operation(MilenaTokenType type) {
     switch (type) {
         case TOKEN_FUNCION_SUMA: return AST_ESTADISTICA_SUMA;
         case TOKEN_FUNCION_MEDIA: return AST_ESTADISTICA_MEDIA;
@@ -668,6 +669,8 @@ static ASTNode *parse_stream_group(Parser *parser) {
     if (!parser_expect(parser, TOKEN_CADENA,
                        "Se esperaba el nombre de la columna de agrupación entre comillas"))
         return NULL;
+    /* Copy each lexeme into the AST before advancing: lexer token storage is
+     * transient and a comma/next key may overwrite the previous token text. */
     ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
     if (!group) {
         parser_error(parser, "Sin memoria para crear la agrupación de flujo");
@@ -685,6 +688,31 @@ static ASTNode *parse_stream_group(Parser *parser) {
                           "Sin memoria para la clave de agrupación")) {
         ast_destroy(group);
         return NULL;
+    }
+    if (parser_match(parser, TOKEN_COMA)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "Se esperaba la segunda columna de agrupación entre comillas")) {
+            ast_destroy(group);
+            return NULL;
+        }
+        key = ast_create_leaf(AST_AGRUPACION_POR, parser->previous.lexeme);
+        if (!key) {
+            ast_destroy(group);
+            parser_error(parser, "Sin memoria para la segunda clave de agrupación");
+            return NULL;
+        }
+        if (!parser_add_child(parser, group, key,
+                              "Sin memoria para la segunda clave de agrupación")) {
+            ast_destroy(group);
+            return NULL;
+        }
+        if (parser_match(parser, TOKEN_COMA)) {
+            ast_destroy(group);
+            parser_error(parser,
+                "#agrupar admite como máximo dos claves de texto con #spill");
+            return NULL;
+        }
     }
     if (parser_match(parser, TOKEN_NUMERAL)) {
         ASTNode *policy = parse_spill_policy_node(parser);
@@ -717,6 +745,17 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
     load->type_name = milena_strdup("flujo");
     load->stream_chunk_rows = 4096u;
     if (!load->type_name) { ast_destroy(load); parser_error(parser, "Sin memoria para modo flujo"); return NULL; }
+    if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "formato") == 0) {
+        parser_advance(parser);
+        if (!parser_expect_word(parser, "arrow_stream",
+                                "El primer formato columnar admitido es arrow_stream")) goto fail;
+        free(load->type_name);
+        load->type_name = milena_strdup("arrow_ipc_stream");
+        if (!load->type_name) {
+            parser_error(parser, "Sin memoria para modo Arrow IPC STREAM");
+            goto fail;
+        }
+    }
     if (parser_match(parser, TOKEN_KW_PROCESAR)) {
         parser_advance(parser);
         if (!parser_expect(parser, TOKEN_KW_POR, "Se esperaba 'por' en 'procesar por lotes'")) goto fail;
@@ -754,6 +793,16 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
                 parser_error(parser, "El límite de grupos debe ser un entero entre 1 y 100000"); goto fail;
             }
             load->stream_group_limit = (size_t)groups;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "lote") == 0) {
+            if (strcmp(load->type_name, "arrow_ipc_stream") != 0) {
+                parser_error(parser, "El límite de bytes de lote solo se admite con formato arrow_stream"); goto fail;
+            }
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de lote")) goto fail;
+            if (!parser_spill_size(parser, 1u, 67108864u,
+                                  &load->stream_batch_limit_bytes,
+                                  "El límite del lote debe ser 1..67108864 bytes")) goto fail;
+            if (!parser_expect_word(parser, "bytes", "Se esperaba la unidad 'bytes'")) goto fail;
         } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "columnas") == 0) {
             parser_advance(parser);
             if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de columnas")) goto fail;
@@ -782,8 +831,25 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
             }
             if (!parser_expect_word(parser, "ms", "Se esperaba la unidad 'ms'")) goto fail;
             load->stream_time_limit_ms = milliseconds;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "bytes") == 0) {
+            if (strcmp(load->type_name, "arrow_ipc_stream") != 0) {
+                parser_error(parser, "El límite de bytes de Arrow solo se admite con formato arrow_stream"); goto fail;
+            }
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de bytes")) goto fail;
+            if (!parser_spill_size(parser, 1u, 67108864u, &load->stream_input_limit_bytes,
+                                  "El límite de entrada Arrow debe ser 1..67108864 bytes")) goto fail;
+        } else if (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "salida") == 0) {
+            if (strcmp(load->type_name, "arrow_ipc_stream") != 0) {
+                parser_error(parser, "El límite de salida de Arrow solo se admite con formato arrow_stream"); goto fail;
+            }
+            parser_advance(parser);
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de salida")) goto fail;
+            if (!parser_spill_size(parser, 1u, 67108864u, &load->stream_output_limit_bytes,
+                                  "El límite de salida Arrow debe ser 1..67108864 bytes")) goto fail;
+            if (!parser_expect_word(parser, "bytes", "Se esperaba 'bytes' después del límite de salida")) goto fail;
         } else {
-            parser_error(parser, "Se esperaba 'registros', 'grupos', 'columnas', 'filas' o 'tiempo' después de 'con'"); goto fail;
+            parser_error(parser, "Se esperaba 'registros', 'grupos', 'lote', 'columnas', 'filas', 'tiempo' o un límite Arrow después de 'con'"); goto fail;
         }
     }
     if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
@@ -791,6 +857,97 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
 fail:
     ast_destroy(load);
     return NULL;
+}
+
+static ASTNode *parse_human_stream_filter(Parser *parser) {
+    if (!parser_expect(parser, TOKEN_KW_FILTRAR, "Se esperaba 'filtrar'")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA,
+                       "Se esperaba el nombre de columna entre comillas")) return NULL;
+    char column[MAX_TOKEN_LEN];
+    strncpy(column, parser->previous.lexeme, sizeof(column) - 1);
+    column[sizeof(column) - 1] = '\0';
+
+    ASTStreamFilterKind filter_kind;
+    char text_value[MAX_TOKEN_LEN] = {0};
+    double number_value = 0.0;
+    if (parser_match(parser, TOKEN_IGUAL_IGUAL)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "El filtro == requiere un valor de texto entre comillas")) return NULL;
+        strncpy(text_value, parser->previous.lexeme, sizeof(text_value) - 1);
+        text_value[sizeof(text_value) - 1] = '\0';
+        filter_kind = AST_STREAM_FILTER_TEXT_EQUAL;
+    } else if (parser_match(parser, TOKEN_MAYOR)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_NUMERO,
+                           "El filtro > requiere un literal numérico")) return NULL;
+        number_value = parser->previous.number_value;
+        if (!isfinite(number_value)) {
+            parser_error(parser, "El límite numérico del filtro debe ser finito");
+            return NULL;
+        }
+        filter_kind = AST_STREAM_FILTER_NUMERIC_GREATER;
+    } else {
+        parser_error(parser,
+            "El filtro de flujo solo admite igualdad textual == o comparación numérica >");
+        return NULL;
+    }
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después del filtro de flujo")) return NULL;
+    ASTNode *filter = ast_create_leaf(AST_STREAM_FILTER, column);
+    if (!filter) {
+        parser_error(parser, "Sin memoria para el filtro de flujo");
+        return NULL;
+    }
+    filter->stream_filter_kind = filter_kind;
+    if (filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+        filter->type_name = milena_strdup(text_value);
+        if (!filter->type_name) {
+            ast_destroy(filter);
+            parser_error(parser, "Sin memoria para el valor del filtro de flujo");
+            return NULL;
+        }
+    } else {
+        filter->number_value = number_value;
+    }
+    return filter;
+}
+
+static ASTNode *parse_arrow_projection(Parser *parser) {
+    if (!parser || !parser_expect_word(parser, "proyectar",
+                                        "Se esperaba proyectar")) return NULL;
+    if (!parser_expect(parser, TOKEN_LLAVE_IZQ,
+                       "Se esperaba '{' después de proyectar")) return NULL;
+    ASTNode *projection = ast_create(AST_COLUMNAR_PROJECT);
+    if (!projection) {
+        parser_error(parser, "Sin memoria para la proyección Arrow");
+        return NULL;
+    }
+    while (!parser_match(parser, TOKEN_LLAVE_DER) &&
+           !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+        if (!parser_expect(parser, TOKEN_CADENA,
+                           "La proyección Arrow requiere nombres de campo entre comillas")) break;
+        ASTNode *field = ast_create_leaf(AST_COLUMNAR_FIELD, parser->previous.lexeme);
+        if (!field || !parser_add_child(parser, projection, field,
+                                        "Sin memoria para campo proyectado")) {
+            if (!parser->has_error) parser_error(parser, "Sin memoria para campo proyectado");
+            break;
+        }
+        if (parser_match(parser, TOKEN_COMA)) parser_advance(parser);
+        else if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+        else if (!parser_match(parser, TOKEN_LLAVE_DER)) {
+            parser_error(parser, "Se esperaba ',' o ';' entre campos proyectados");
+            break;
+        }
+    }
+    if (!parser_expect(parser, TOKEN_LLAVE_DER,
+                       "Se esperaba '}' después de la proyección") ||
+        projection->child_count == 0) {
+        if (!parser->has_error) parser_error(parser, "La proyección Arrow no puede estar vacía");
+        ast_destroy(projection);
+        return NULL;
+    }
+    return projection;
 }
 
 static ASTNode *parse_human_stream_export(Parser *parser) {
@@ -825,6 +982,15 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
             ASTNode *load = parse_human_stream_load(parser);
             if (load && !parser_add_child(parser, node, load,
                                            "Sin memoria para cargar datos")) break;
+        } else if (parser_match(parser, TOKEN_KW_FILTRAR)) {
+            ASTNode *filter = parse_human_stream_filter(parser);
+            if (filter && !parser_add_child(parser, node, filter,
+                                             "Sin memoria para el filtro de flujo")) break;
+        } else if (parser_is_identifier(parser) &&
+                   strcmp(parser->current.lexeme, "proyectar") == 0) {
+            ASTNode *projection = parse_arrow_projection(parser);
+            if (projection && !parser_add_child(parser, node, projection,
+                                                 "Sin memoria para la proyección Arrow")) break;
         } else if (parser_match(parser, TOKEN_KW_AGRUPAR)) {
             ASTNode *group = parse_stream_group(parser);
             if (group && !parser_add_child(parser, node, group,
@@ -1403,7 +1569,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
 
 /* User-defined numeric functions. Expressions use numeric booleans (0/1). */
 static ASTNode *fn_expr(Parser *p);
-static int fn_precedence(TokenType t) {
+static int fn_precedence(MilenaTokenType t) {
     switch (t) {
     case TOKEN_IGUAL_IGUAL: case TOKEN_DISTINTO: case TOKEN_MAYOR:
     case TOKEN_MAYOR_IGUAL: case TOKEN_MENOR: case TOKEN_MENOR_IGUAL: return 1;
@@ -1412,7 +1578,7 @@ static int fn_precedence(TokenType t) {
     default: return 0;
     }
 }
-static const char *fn_operator(TokenType t) {
+static const char *fn_operator(MilenaTokenType t) {
     switch (t) { case TOKEN_IGUAL_IGUAL:return "=="; case TOKEN_DISTINTO:return "!=";
     case TOKEN_MAYOR:return ">"; case TOKEN_MAYOR_IGUAL:return ">="; case TOKEN_MENOR:return "<";
     case TOKEN_MENOR_IGUAL:return "<="; case TOKEN_MAS:return "+"; case TOKEN_MENOS:return "-";
@@ -1480,7 +1646,7 @@ static ASTNode *fn_expr_prec(Parser *p, int min_prec) {
     for (;;) {
         int prec = fn_precedence(p->current.type);
         if (prec < min_prec) break;
-        TokenType token = p->current.type;
+        MilenaTokenType token = p->current.type;
         parser_advance(p);
         ASTNode *right = fn_expr_prec(p, prec + 1);
         if (!right) { ast_destroy(left); return NULL; }
@@ -1695,8 +1861,637 @@ static ASTNode *parse_user_program(Parser *p) {
     return program;
 }
 
+static ASTNode *parse_sql_parameter(Parser *parser) {
+    ASTNode *parameter = NULL;
+    if (parser_match(parser, TOKEN_CADENA)) {
+        parameter = ast_create_leaf(AST_SQL_PARAMETER, parser->current.lexeme);
+        if (parameter) parameter->type_name = milena_strdup("texto");
+    } else if (parser_match(parser, TOKEN_NUMERO)) {
+        const char *lexeme = parser->current.lexeme;
+        bool real = strchr(lexeme, '.') || strchr(lexeme, 'e') || strchr(lexeme, 'E');
+        parameter = ast_create_leaf(AST_SQL_PARAMETER, lexeme);
+        if (parameter) parameter->type_name = milena_strdup(real ? "real" : "entero");
+    } else if (parser_match(parser, TOKEN_BOOLEANO)) {
+        parameter = ast_create_leaf(AST_SQL_PARAMETER, parser->current.lexeme);
+        if (parameter) parameter->type_name = milena_strdup("booleano");
+    } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+               strcmp(parser->current.lexeme, "nulo") == 0) {
+        parameter = ast_create_leaf(AST_SQL_PARAMETER, "nulo");
+        if (parameter) parameter->type_name = milena_strdup("nulo");
+    } else {
+        parser_error(parser, "Parámetro SQL no soportado; use texto, número, booleano o nulo");
+        return NULL;
+    }
+    if (!parameter || !parameter->type_name) {
+        ast_destroy(parameter);
+        parser_error(parser, "No se pudo crear el parámetro SQL tipado");
+        return NULL;
+    }
+    if (strcmp(parameter->type_name, "entero") == 0)
+        parameter->sql_type = AST_SQL_TYPE_INTEGER;
+    else if (strcmp(parameter->type_name, "real") == 0)
+        parameter->sql_type = AST_SQL_TYPE_REAL;
+    else if (strcmp(parameter->type_name, "texto") == 0)
+        parameter->sql_type = AST_SQL_TYPE_TEXT;
+    else if (strcmp(parameter->type_name, "booleano") == 0)
+        parameter->sql_type = AST_SQL_TYPE_BOOLEAN;
+    parser_advance(parser);
+    return parameter;
+}
+
+static bool parser_sql_identifier(Parser *parser) {
+    return parser_match(parser, TOKEN_IDENTIFICADOR) ||
+           parser_match(parser, TOKEN_KW_REGISTROS) ||
+           parser_match(parser, TOKEN_KW_TOTAL);
+}
+
+static ASTSqlType sql_type_from_word(const char *word) {
+    if (!word) return AST_SQL_TYPE_UNSPECIFIED;
+    if (strcmp(word, "entero") == 0) return AST_SQL_TYPE_INTEGER;
+    if (strcmp(word, "real") == 0) return AST_SQL_TYPE_REAL;
+    if (strcmp(word, "texto") == 0) return AST_SQL_TYPE_TEXT;
+    if (strcmp(word, "booleano") == 0) return AST_SQL_TYPE_BOOLEAN;
+    return AST_SQL_TYPE_UNSPECIFIED;
+}
+
+static ASTNode *parse_sql_table_schema(Parser *parser) {
+    parser_advance(parser); /* tabla */
+    if (!parser_sql_identifier(parser)) {
+        parser_error(parser, "Se esperaba un nombre de tabla después de 'tabla'");
+        return NULL;
+    }
+    ASTNode *schema = ast_create_leaf(AST_SQL_TABLE_SCHEMA, parser->current.lexeme);
+    if (!schema) { parser_error(parser, "Sin memoria para esquema SQL"); return NULL; }
+    parser_advance(parser);
+    if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                       "Se esperaba '(' después del nombre de tabla")) {
+        ast_destroy(schema); return NULL;
+    }
+    for (;;) {
+        if (!parser_sql_identifier(parser)) {
+            parser_error(parser, "Se esperaba nombre de columna en el esquema SQL");
+            ast_destroy(schema); return NULL;
+        }
+        ASTNode *column = ast_create_leaf(AST_SQL_SCHEMA_COLUMN,
+                                          parser->current.lexeme);
+        if (!column) {
+            parser_error(parser, "Sin memoria para columna del esquema SQL");
+            ast_destroy(schema); return NULL;
+        }
+        parser_advance(parser);
+        if (!parser_match(parser, TOKEN_IDENTIFICADOR)) {
+            parser_error(parser, "Se esperaba tipo entero, real, texto o booleano");
+            ast_destroy(column); ast_destroy(schema); return NULL;
+        }
+        column->sql_type = sql_type_from_word(parser->current.lexeme);
+        if (column->sql_type == AST_SQL_TYPE_UNSPECIFIED) {
+            parser_error(parser, "Tipo de columna SQL no admitido; use entero, real, texto o booleano");
+            ast_destroy(column); ast_destroy(schema); return NULL;
+        }
+        column->type_name = milena_strdup(parser->current.lexeme);
+        if (!column->type_name) {
+            parser_error(parser, "Sin memoria para tipo de columna SQL");
+            ast_destroy(column); ast_destroy(schema); return NULL;
+        }
+        parser_advance(parser);
+        if (!parser_add_child(parser, schema, column,
+                              "Sin memoria para columna del esquema SQL")) {
+            ast_destroy(schema); return NULL;
+        }
+        if (parser_match(parser, TOKEN_PAR_DER)) break;
+        if (!parser_expect(parser, TOKEN_COMA,
+                           "Se esperaba ',' entre columnas del esquema SQL")) {
+            ast_destroy(schema); return NULL;
+        }
+    }
+    parser_advance(parser); /* ) */
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después del esquema SQL")) {
+        ast_destroy(schema); return NULL;
+    }
+    return schema;
+}
+
+static ASTNode *parse_sql_typed_select(Parser *parser) {
+    parser_advance(parser); /* seleccionar */
+    ASTNode *select = ast_create(AST_SQL_TYPED_SELECT);
+    ASTNode *projection = ast_create(AST_SQL_PROJECTION_LIST);
+    if (!select || !projection) {
+        parser_error(parser, "Sin memoria para SELECT tipado SQL");
+        ast_destroy(select); ast_destroy(projection); return NULL;
+    }
+    for (;;) {
+        if (!parser_sql_identifier(parser)) {
+            parser_error(parser, "Se esperaba nombre de columna en la proyección SQL");
+            ast_destroy(projection); ast_destroy(select); return NULL;
+        }
+        ASTNode *field = ast_create_leaf(AST_SQL_PROJECTED_COLUMN,
+                                         parser->current.lexeme);
+        if (!field) {
+            parser_error(parser, "Sin memoria para proyección SQL");
+            ast_destroy(projection); ast_destroy(select); return NULL;
+        }
+        if (!parser_add_child(parser, projection, field,
+                              "Sin memoria para proyección SQL")) {
+            ast_destroy(projection); ast_destroy(select); return NULL;
+        }
+        parser_advance(parser);
+        if (!parser_match(parser, TOKEN_COMA)) break;
+        parser_advance(parser);
+    }
+    if (parser_match(parser, TOKEN_KW_DE)) {
+        parser_advance(parser);
+    } else if (parser_is_identifier(parser) &&
+               strcmp(parser->current.lexeme, "de") == 0) {
+        parser_advance(parser);
+    } else {
+        parser_error(parser, "Se esperaba 'de' antes de la tabla del SELECT");
+        ast_destroy(projection); ast_destroy(select); return NULL;
+    }
+    if (!parser_sql_identifier(parser)) {
+        parser_error(parser, "Se esperaba nombre de tabla en el SELECT SQL");
+        ast_destroy(projection); ast_destroy(select); return NULL;
+    }
+    ASTNode *table = ast_create_leaf(AST_SQL_TABLE_REFERENCE,
+                                     parser->current.lexeme);
+    if (!table) {
+        parser_error(parser, "Sin memoria para referencia de tabla SQL");
+        ast_destroy(projection); ast_destroy(select); return NULL;
+    }
+    if (!parser_add_child(parser, select, table,
+                          "Sin memoria para referencia de tabla SQL")) {
+        ast_destroy(projection); ast_destroy(select); return NULL;
+    }
+    parser_advance(parser);
+    if (!parser_add_child(parser, select, projection,
+                          "Sin memoria para lista de proyección SQL")) {
+        ast_destroy(select); return NULL;
+    }
+    if (!parser_is_identifier(parser) || strcmp(parser->current.lexeme, "donde") != 0) {
+        parser_error(parser, "Se esperaba 'donde' y un predicado de igualdad");
+        ast_destroy(select); return NULL;
+    }
+    parser_advance(parser);
+    ASTNode *filter = ast_create(AST_SQL_FILTER);
+    if (!filter) { parser_error(parser, "Sin memoria para filtro SQL"); ast_destroy(select); return NULL; }
+    if (!parser_sql_identifier(parser)) {
+        parser_error(parser, "Se esperaba nombre de columna en el filtro SQL");
+        ast_destroy(filter); ast_destroy(select); return NULL;
+    }
+    ASTNode *filter_column = ast_create_leaf(AST_SQL_FILTER_COLUMN,
+                                              parser->current.lexeme);
+    if (!filter_column) {
+        parser_error(parser, "Sin memoria para columna del filtro SQL");
+        ast_destroy(filter); ast_destroy(select); return NULL;
+    }
+    if (!parser_add_child(parser, filter, filter_column,
+                          "Sin memoria para columna del filtro SQL")) {
+        ast_destroy(filter); ast_destroy(select); return NULL;
+    }
+    parser_advance(parser);
+    ASTSqlOperator sql_operator = AST_SQL_OPERATOR_UNSPECIFIED;
+    switch (parser->current.type) {
+        case TOKEN_IGUAL: case TOKEN_IGUAL_IGUAL: sql_operator = AST_SQL_OPERATOR_EQUAL; break;
+        case TOKEN_DISTINTO: sql_operator = AST_SQL_OPERATOR_NOT_EQUAL; break;
+        case TOKEN_MENOR: sql_operator = AST_SQL_OPERATOR_LESS; break;
+        case TOKEN_MENOR_IGUAL: sql_operator = AST_SQL_OPERATOR_LESS_EQUAL; break;
+        case TOKEN_MAYOR: sql_operator = AST_SQL_OPERATOR_GREATER; break;
+        case TOKEN_MAYOR_IGUAL: sql_operator = AST_SQL_OPERATOR_GREATER_EQUAL; break;
+        default: break;
+    }
+    if (sql_operator == AST_SQL_OPERATOR_UNSPECIFIED) {
+        parser_error(parser, "Operador de filtro SQL no admitido");
+        ast_destroy(filter); ast_destroy(select); return NULL;
+    }
+    ASTNode *operator_node = ast_create(AST_SQL_FILTER_OPERATOR);
+    if (!operator_node) {
+        parser_error(parser, "Sin memoria para operador del filtro SQL");
+        ast_destroy(filter); ast_destroy(select); return NULL;
+    }
+    operator_node->sql_operator = sql_operator;
+    if (!parser_add_child(parser, filter, operator_node,
+                          "Sin memoria para operador del filtro SQL")) {
+        ast_destroy(filter); ast_destroy(select); return NULL;
+    }
+    parser_advance(parser);
+    ASTNode *parameter = parse_sql_parameter(parser);
+    if (!parameter) { ast_destroy(filter); ast_destroy(select); return NULL; }
+    if (!parser_add_child(parser, filter, parameter,
+                          "Sin memoria para parámetro del filtro SQL")) {
+        ast_destroy(filter); ast_destroy(select); return NULL;
+    }
+    if (!parser_add_child(parser, select, filter, "Sin memoria para filtro SQL")) {
+        ast_destroy(select); return NULL;
+    }
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después del SELECT tipado")) {
+        ast_destroy(select); return NULL;
+    }
+    return select;
+}
+
+static ASTNode *parse_sql_typed_insert(Parser *parser) {
+    parser_advance(parser); /* insertar */
+    if (parser_match(parser, TOKEN_KW_EN)) {
+        parser_advance(parser);
+    } else if (parser_is_identifier(parser) &&
+               strcmp(parser->current.lexeme, "en") == 0) {
+        parser_advance(parser);
+    } else {
+        parser_error(parser, "Se esperaba 'en' después de 'insertar'");
+        return NULL;
+    }
+    if (!parser_sql_identifier(parser)) {
+        parser_error(parser, "Se esperaba nombre de tabla después de 'insertar en'");
+        return NULL;
+    }
+    ASTNode *insert = ast_create(AST_SQL_TYPED_INSERT);
+    ASTNode *table = ast_create_leaf(AST_SQL_TABLE_REFERENCE, parser->current.lexeme);
+    if (!insert || !table) {
+        parser_error(parser, "Sin memoria para INSERT tipado SQL");
+        ast_destroy(insert); ast_destroy(table); return NULL;
+    }
+    parser_advance(parser);
+    if (!parser_add_child(parser, insert, table,
+                          "Sin memoria para referencia de tabla INSERT")) {
+        ast_destroy(insert); return NULL;
+    }
+    ASTNode *columns = ast_create(AST_SQL_INSERT_COLUMN_LIST);
+    if (!columns) {
+        parser_error(parser, "Sin memoria para columnas INSERT SQL");
+        ast_destroy(insert); return NULL;
+    }
+    if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                       "Se esperaba '(' antes de las columnas INSERT")) {
+        ast_destroy(columns); ast_destroy(insert); return NULL;
+    }
+    for (;;) {
+        if (!parser_sql_identifier(parser)) {
+            parser_error(parser, "Se esperaba nombre de columna en INSERT SQL");
+            ast_destroy(columns); ast_destroy(insert); return NULL;
+        }
+        ASTNode *column = ast_create_leaf(AST_SQL_INSERT_COLUMN,
+                                          parser->current.lexeme);
+        if (!column || !parser_add_child(parser, columns, column,
+                                         "Sin memoria para columna INSERT SQL")) {
+            if (!column) parser_error(parser, "Sin memoria para columna INSERT SQL");
+            ast_destroy(columns); ast_destroy(insert); return NULL;
+        }
+        parser_advance(parser);
+        if (!parser_match(parser, TOKEN_COMA)) break;
+        parser_advance(parser);
+    }
+    if (!parser_expect(parser, TOKEN_PAR_DER,
+                       "Se esperaba ')' después de las columnas INSERT")) {
+        ast_destroy(columns); ast_destroy(insert); return NULL;
+    }
+    if (!parser_is_identifier(parser) ||
+        strcmp(parser->current.lexeme, "valores") != 0) {
+        parser_error(parser, "Se esperaba 'valores' antes de los literales INSERT");
+        ast_destroy(columns); ast_destroy(insert); return NULL;
+    }
+    parser_advance(parser);
+    ASTNode *values = ast_create(AST_SQL_INSERT_VALUE_LIST);
+    if (!values) {
+        parser_error(parser, "Sin memoria para valores INSERT SQL");
+        ast_destroy(columns); ast_destroy(insert); return NULL;
+    }
+    if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                       "Se esperaba '(' antes de los valores INSERT")) {
+        ast_destroy(values); ast_destroy(columns); ast_destroy(insert); return NULL;
+    }
+    for (;;) {
+        ASTNode *value = parse_sql_parameter(parser);
+        if (!value || !parser_add_child(parser, values, value,
+                                        "Sin memoria para valor INSERT SQL")) {
+            ast_destroy(values); ast_destroy(columns); ast_destroy(insert); return NULL;
+        }
+        if (!parser_match(parser, TOKEN_COMA)) break;
+        parser_advance(parser);
+    }
+    if (!parser_expect(parser, TOKEN_PAR_DER,
+                       "Se esperaba ')' después de los valores INSERT") ||
+        !parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después del INSERT tipado")) {
+        ast_destroy(values); ast_destroy(columns); ast_destroy(insert); return NULL;
+    }
+    if (!parser_add_child(parser, insert, columns,
+                          "Sin memoria para lista de columnas INSERT")) {
+        ast_destroy(values); ast_destroy(insert); return NULL;
+    }
+    if (!parser_add_child(parser, insert, values,
+                          "Sin memoria para lista de valores INSERT")) {
+        ast_destroy(insert); return NULL;
+    }
+    return insert;
+}
+
+static ASTSqlOperator parse_sql_comparison_operator(MilenaTokenType type) {
+    switch (type) {
+        case TOKEN_IGUAL: case TOKEN_IGUAL_IGUAL: return AST_SQL_OPERATOR_EQUAL;
+        case TOKEN_DISTINTO: return AST_SQL_OPERATOR_NOT_EQUAL;
+        case TOKEN_MENOR: return AST_SQL_OPERATOR_LESS;
+        case TOKEN_MENOR_IGUAL: return AST_SQL_OPERATOR_LESS_EQUAL;
+        case TOKEN_MAYOR: return AST_SQL_OPERATOR_GREATER;
+        case TOKEN_MAYOR_IGUAL: return AST_SQL_OPERATOR_GREATER_EQUAL;
+        default: return AST_SQL_OPERATOR_UNSPECIFIED;
+    }
+}
+
+static ASTNode *parse_sql_typed_update(Parser *parser) {
+    parser_advance(parser); /* actualizar */
+    if (!parser_sql_identifier(parser)) {
+        parser_error(parser, "Se esperaba nombre de tabla después de 'actualizar'");
+        return NULL;
+    }
+    ASTNode *update = ast_create(AST_SQL_TYPED_UPDATE);
+    ASTNode *table = ast_create_leaf(AST_SQL_TABLE_REFERENCE, parser->current.lexeme);
+    if (!update || !table) {
+        parser_error(parser, "Sin memoria para UPDATE tipado SQL");
+        ast_destroy(update); ast_destroy(table); return NULL;
+    }
+    parser_advance(parser);
+    if (!parser_add_child(parser, update, table,
+                          "Sin memoria para referencia de tabla UPDATE")) {
+        ast_destroy(update); return NULL;
+    }
+    if (!parser_is_identifier(parser) || strcmp(parser->current.lexeme, "establecer") != 0) {
+        parser_error(parser, "Se esperaba 'establecer' en UPDATE tipado");
+        ast_destroy(update); return NULL;
+    }
+    parser_advance(parser);
+    ASTNode *assignments = ast_create(AST_SQL_UPDATE_ASSIGNMENT_LIST);
+    if (!assignments) {
+        parser_error(parser, "Sin memoria para asignaciones UPDATE SQL");
+        ast_destroy(update); return NULL;
+    }
+    for (;;) {
+        if (assignments->child_count >= 128u) {
+            parser_error(parser, "UPDATE admite como máximo 128 asignaciones");
+            ast_destroy(assignments); ast_destroy(update); return NULL;
+        }
+        if (!parser_sql_identifier(parser)) {
+            parser_error(parser, "Se esperaba nombre de columna en asignación UPDATE");
+            ast_destroy(assignments); ast_destroy(update); return NULL;
+        }
+        ASTNode *assignment = ast_create(AST_SQL_UPDATE_ASSIGNMENT);
+        ASTNode *column = ast_create_leaf(AST_SQL_UPDATE_COLUMN, parser->current.lexeme);
+        if (!assignment || !column) {
+            parser_error(parser, "Sin memoria para asignación UPDATE SQL");
+            ast_destroy(assignment); ast_destroy(column);
+            ast_destroy(assignments); ast_destroy(update); return NULL;
+        }
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_IGUAL,
+                           "Se esperaba '=' en asignación UPDATE")) {
+            ast_destroy(assignment); ast_destroy(column);
+            ast_destroy(assignments); ast_destroy(update); return NULL;
+        }
+        ASTNode *value = parse_sql_parameter(parser);
+        if (!value) {
+            ast_destroy(assignment); ast_destroy(column);
+            ast_destroy(assignments); ast_destroy(update); return NULL;
+        }
+        if (!parser_add_child(parser, assignment, column,
+                              "Sin memoria para columna UPDATE")) {
+            ast_destroy(value); ast_destroy(assignment);
+            ast_destroy(assignments); ast_destroy(update); return NULL;
+        }
+        if (!parser_add_child(parser, assignment, value,
+                              "Sin memoria para valor UPDATE")) {
+            ast_destroy(assignment); ast_destroy(assignments); ast_destroy(update);
+            return NULL;
+        }
+        if (!parser_add_child(parser, assignments, assignment,
+                              "Sin memoria para lista de asignaciones UPDATE")) {
+            ast_destroy(assignments); ast_destroy(update); return NULL;
+        }
+        if (!parser_match(parser, TOKEN_COMA)) break;
+        parser_advance(parser);
+    }
+    if (!parser_add_child(parser, update, assignments,
+                          "Sin memoria para lista de asignaciones UPDATE")) {
+        ast_destroy(update); return NULL;
+    }
+    if (!parser_is_identifier(parser) || strcmp(parser->current.lexeme, "donde") != 0) {
+        parser_error(parser, "Se esperaba 'donde' y un predicado para UPDATE");
+        ast_destroy(update); return NULL;
+    }
+    parser_advance(parser);
+    ASTNode *filter = ast_create(AST_SQL_UPDATE_FILTER);
+    if (!filter) {
+        parser_error(parser, "Sin memoria para filtro UPDATE SQL");
+        ast_destroy(update); return NULL;
+    }
+    if (!parser_sql_identifier(parser)) {
+        parser_error(parser, "Se esperaba columna en el filtro UPDATE");
+        ast_destroy(filter); ast_destroy(update); return NULL;
+    }
+    ASTNode *filter_column = ast_create_leaf(AST_SQL_FILTER_COLUMN,
+                                              parser->current.lexeme);
+    if (!filter_column || !parser_add_child(parser, filter, filter_column,
+                                            "Sin memoria para columna del filtro UPDATE")) {
+        if (!filter_column) parser_error(parser, "Sin memoria para columna del filtro UPDATE");
+        ast_destroy(filter); ast_destroy(update); return NULL;
+    }
+    parser_advance(parser);
+    ASTSqlOperator op = parse_sql_comparison_operator(parser->current.type);
+    if (op == AST_SQL_OPERATOR_UNSPECIFIED) {
+        parser_error(parser, "Operador de filtro UPDATE SQL no admitido");
+        ast_destroy(filter); ast_destroy(update); return NULL;
+    }
+    ASTNode *operator_node = ast_create(AST_SQL_FILTER_OPERATOR);
+    if (!operator_node) {
+        parser_error(parser, "Sin memoria para operador del filtro UPDATE");
+        ast_destroy(filter); ast_destroy(update); return NULL;
+    }
+    operator_node->sql_operator = op;
+    if (!parser_add_child(parser, filter, operator_node,
+                          "Sin memoria para operador del filtro UPDATE")) {
+        ast_destroy(filter); ast_destroy(update); return NULL;
+    }
+    parser_advance(parser);
+    ASTNode *parameter = parse_sql_parameter(parser);
+    if (!parameter) {
+        ast_destroy(filter); ast_destroy(update); return NULL;
+    }
+    if (!parser_add_child(parser, filter, parameter,
+                          "Sin memoria para parámetro del filtro UPDATE")) {
+        ast_destroy(filter); ast_destroy(update); return NULL;
+    }
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después del UPDATE tipado")) {
+        ast_destroy(filter); ast_destroy(update); return NULL;
+    }
+    if (!parser_add_child(parser, update, filter,
+                          "Sin memoria para filtro UPDATE SQL")) {
+        ast_destroy(update); return NULL;
+    }
+    return update;
+}
+
+static ASTNode *parse_sql_statement(Parser *parser, ASTNodeType type) {
+    parser_advance(parser);
+    if (!parser_expect(parser, TOKEN_CADENA,
+                       "Se esperaba la sentencia SQL entre comillas")) return NULL;
+    ASTNode *statement = ast_create_leaf(type, parser->previous.lexeme);
+    if (!statement) { parser_error(parser, "Sin memoria para sentencia SQL"); return NULL; }
+    if (parser_match(parser, TOKEN_KW_CON) ||
+        (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "con") == 0)) {
+        parser_advance(parser);
+        if (!parser_expect(parser, TOKEN_PAR_IZQ,
+                           "Se esperaba '(' antes de los parámetros SQL")) {
+            ast_destroy(statement); return NULL;
+        }
+        if (!parser_match(parser, TOKEN_PAR_DER)) {
+            for (;;) {
+                if (statement->child_count >= 999u) {
+                    parser_error(parser, "Una sentencia SQL admite como máximo 999 parámetros");
+                    ast_destroy(statement); return NULL;
+                }
+                ASTNode *parameter = parse_sql_parameter(parser);
+                if (!parameter || !parser_add_child(parser, statement, parameter,
+                                      "Sin memoria para parámetro SQL")) {
+                    ast_destroy(parameter); ast_destroy(statement); return NULL;
+                }
+                if (parser_match(parser, TOKEN_PAR_DER)) break;
+                if (!parser_expect(parser, TOKEN_COMA,
+                                   "Se esperaba ',' entre parámetros SQL")) {
+                    ast_destroy(statement); return NULL;
+                }
+            }
+        }
+        if (!parser_expect(parser, TOKEN_PAR_DER,
+                           "Se esperaba ')' después de los parámetros SQL")) {
+            ast_destroy(statement); return NULL;
+        }
+    }
+    if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA,
+                       "Se esperaba ';' después de la sentencia SQL")) {
+        ast_destroy(statement); return NULL;
+    }
+    return statement;
+}
+
+static ASTNode *parse_sql_program(Parser *parser) {
+    parser_advance(parser); /* sql */
+    if (!parser_expect(parser, TOKEN_KW_DESDE,
+                       "Se esperaba 'desde' y la ruta de SQLite")) return NULL;
+    if (!parser_expect(parser, TOKEN_CADENA,
+                       "Se esperaba la ruta SQLite entre comillas")) return NULL;
+    ASTNode *program = ast_create_leaf(AST_SQL_PROGRAM, parser->previous.lexeme);
+    if (!program) { parser_error(parser, "Sin memoria para programa SQL"); return NULL; }
+    if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+        strcmp(parser->current.lexeme, "limites") == 0) {
+        size_t rows = 0, bytes = 0, time_ms = 0;
+        parser_advance(parser);
+        if (!parser_is_identifier(parser) && parser->current.type != TOKEN_KW_FILAS) {
+            parser_error(parser, "Se esperaba 'filas' en los límites SQL");
+            ast_destroy(program); return NULL;
+        }
+        if (strcmp(parser->current.lexeme, "filas") != 0) {
+            parser_error(parser, "Se esperaba 'filas' en los límites SQL");
+            ast_destroy(program); return NULL;
+        }
+        parser_advance(parser);
+        if (!parser_spill_size(parser, 1, 100000, &rows, "Límite SQL de filas inválido") ||
+            !parser_is_identifier(parser) || strcmp(parser->current.lexeme, "bytes") != 0) {
+            if (!parser->has_error) parser_error(parser, "Se esperaba 'bytes' en los límites SQL");
+            ast_destroy(program); return NULL;
+        }
+        parser_advance(parser);
+        if (!parser_spill_size(parser, 1, 64u * 1024u * 1024u, &bytes,
+                               "Límite SQL de bytes inválido") ||
+            !parser_is_identifier(parser) || strcmp(parser->current.lexeme, "tiempo") != 0) {
+            if (!parser->has_error) parser_error(parser, "Se esperaba 'tiempo' en los límites SQL");
+            ast_destroy(program); return NULL;
+        }
+        parser_advance(parser);
+        if (!parser_spill_size(parser, 1, 30000, &time_ms,
+                               "Límite SQL de tiempo inválido")) {
+            ast_destroy(program); return NULL;
+        }
+        program->sql_max_rows = rows;
+        program->sql_max_bytes = bytes;
+        program->sql_timeout_ms = time_ms;
+        program->sql_limits_explicit = true;
+    }
+    if (!parser_expect(parser, TOKEN_LLAVE_IZQ,
+                       "Se esperaba '{' después de la ruta SQLite")) {
+        ast_destroy(program); return NULL;
+    }
+    while (!parser_match(parser, TOKEN_LLAVE_DER) && !parser_match(parser, TOKEN_EOF)) {
+        ASTNode *statement = NULL;
+        if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+            strcmp(parser->current.lexeme, "tabla") == 0) {
+            statement = parse_sql_table_schema(parser);
+        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                   strcmp(parser->current.lexeme, "seleccionar") == 0) {
+            statement = parse_sql_typed_select(parser);
+        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                   strcmp(parser->current.lexeme, "insertar") == 0) {
+            statement = parse_sql_typed_insert(parser);
+        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                   strcmp(parser->current.lexeme, "actualizar") == 0) {
+            statement = parse_sql_typed_update(parser);
+        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+            strcmp(parser->current.lexeme, "consulta") == 0) {
+            statement = parse_sql_statement(parser, AST_SQL_QUERY);
+        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                   strcmp(parser->current.lexeme, "ejecutar") == 0) {
+            statement = parse_sql_statement(parser, AST_SQL_EXECUTE);
+        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                   strcmp(parser->current.lexeme, "iniciar") == 0) {
+            parser_advance(parser);
+            statement = ast_create(AST_SQL_BEGIN);
+            if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de iniciar")) {
+                ast_destroy(statement); statement = NULL;
+            }
+        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                   strcmp(parser->current.lexeme, "confirmar") == 0) {
+            parser_advance(parser);
+            statement = ast_create(AST_SQL_COMMIT);
+            if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de confirmar")) {
+                ast_destroy(statement); statement = NULL;
+            }
+        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                   strcmp(parser->current.lexeme, "revertir") == 0) {
+            parser_advance(parser);
+            statement = ast_create(AST_SQL_ROLLBACK);
+            if (!parser_expect(parser, TOKEN_PUNTO_Y_COMA, "Se esperaba ';' después de revertir")) {
+                ast_destroy(statement); statement = NULL;
+            }
+        } else {
+            parser_error(parser, "Se esperaba consulta, ejecutar, seleccionar, insertar, actualizar, iniciar, confirmar o revertir");
+        }
+        if (!statement || !parser_add_child(parser, program, statement,
+                                             "Sin memoria para sentencia del programa SQL")) {
+            ast_destroy(statement); ast_destroy(program); return NULL;
+        }
+    }
+    if (!parser_expect(parser, TOKEN_LLAVE_DER,
+                       "Se esperaba '}' para cerrar el programa SQL") ||
+        !parser_match(parser, TOKEN_EOF)) {
+        if (!parser->has_error) parser_error(parser, "Se esperaba fin del programa SQL");
+        ast_destroy(program); return NULL;
+    }
+    return program;
+}
+
 ASTNode* parser_parse(Parser *parser) {
     if (!parser || parser->has_error) return NULL;
+    if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+        strcmp(parser->current.lexeme, "sql") == 0) {
+        ASTNode *sql = parse_sql_program(parser);
+        ASTNode *program = sql ? ast_create(AST_PROGRAMA) : NULL;
+        if (!sql) return NULL;
+        if (!program || !ast_add_child(program, sql)) {
+            ast_destroy(sql); ast_destroy(program);
+            parser_error(parser, "No se pudo crear la raíz AST del programa SQL");
+            return NULL;
+        }
+        return program;
+    }
     if (parser->current.type == TOKEN_KW_FUNCION) {
         return parse_user_program(parser);
     }

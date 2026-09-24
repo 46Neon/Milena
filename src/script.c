@@ -53,25 +53,6 @@ static const char *find_quoted_after(const char *text, const char *needle,
     return end + 1;
 }
 
-static bool get_quoted(const char *line, size_t number, char *out, size_t out_size) {
-    const char *p = line;
-    for (size_t i = 0; i <= number; i++) {
-        p = strchr(p, '"');
-        if (!p) return false;
-        p++;
-        const char *end = strchr(p, '"');
-        if (!end) return false;
-        if (i == number) {
-            if ((size_t)(end - p) + 1 > out_size) return false;
-            memcpy(out, p, (size_t)(end - p));
-            out[end - p] = '\0';
-            return true;
-        }
-        p = end + 1;
-    }
-    return false;
-}
-
 static bool has_text(const char *text, const char *needle) {
     return text && needle && strstr(text, needle) != NULL;
 }
@@ -186,7 +167,8 @@ static MilenaVariableType parse_type(const char *text, bool *valid) {
 static MilenaStatus parse_schema(const char *script, MilenaSchema *schema, MilenaError *error) {
     char *copy = milena_strdup(script);
     if (!copy) return MILENA_ERR_MEMORY;
-    char *line = strtok(copy, "\n\r");
+    char *line_state = NULL;
+    char *line = milena_token_next(copy, "\n\r", &line_state);
     size_t line_number = 0;
     while (line) {
         line_number++;
@@ -228,7 +210,7 @@ static MilenaStatus parse_schema(const char *script, MilenaSchema *schema, Milen
                                            MILENA_ROLE_BINARY_OUTPUT, error);
             if (status != MILENA_OK) { free(copy); return status; }
         }
-        line = strtok(NULL, "\n\r");
+        line = milena_token_next(NULL, "\n\r", &line_state);
     }
     free(copy);
     if (schema->count == 0) {
@@ -253,7 +235,8 @@ static bool command_known(const char *text) {
 static MilenaStatus validate_commands(const char *script, MilenaError *error) {
     char *copy = milena_strdup(script);
     if (!copy) return MILENA_ERR_MEMORY;
-    char *line = strtok(copy, "\n\r");
+    char *line_state = NULL;
+    char *line = milena_token_next(copy, "\n\r", &line_state);
     size_t line_number = 0;
     while (line) {
         line_number++;
@@ -266,7 +249,7 @@ static MilenaStatus validate_commands(const char *script, MilenaError *error) {
                 return MILENA_ERR_UNSUPPORTED;
             }
         }
-        line = strtok(NULL, "\n\r");
+        line = milena_token_next(NULL, "\n\r", &line_state);
     }
     free(copy);
     return MILENA_OK;
@@ -709,7 +692,8 @@ static MilenaStatus run_legacy_array_declarations(const char *script, MilenaErro
         milena_error_set(error, MILENA_ERR_MEMORY, 0, 0, 0, "Sin memoria para operaciones");
         goto array_cleanup_error;
     }
-    char *line = strtok(operation_script, "\n\r");
+    char *line_state = NULL;
+    char *line = milena_token_next(operation_script, "\n\r", &line_state);
     while (line) {
         char left[128] = {0}, right[128] = {0}, operation = '\0';
         if (sscanf(line, " %127s %c %127s", left, &operation, right) == 3 &&
@@ -752,7 +736,7 @@ static MilenaStatus run_legacy_array_declarations(const char *script, MilenaErro
                 milena_array_release(&result);
             }
         }
-        line = strtok(NULL, "\n\r");
+        line = milena_token_next(NULL, "\n\r", &line_state);
     }
     free(operation_script);
     for (size_t i = 0; i < binding_count; i++) milena_array_release(&bindings[i].array);
@@ -773,6 +757,7 @@ typedef enum {
     SCRIPT_PIPELINE_CANONICAL_ARRAY,
     SCRIPT_PIPELINE_CANONICAL_DATASET,
     SCRIPT_PIPELINE_CANONICAL_FUNCTION,
+    SCRIPT_PIPELINE_CANONICAL_SQL,
     SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS,
     SCRIPT_PIPELINE_LEGACY_ARRAY,
     SCRIPT_PIPELINE_LEGACY_DATASET,
@@ -787,21 +772,25 @@ typedef enum {
 static void script_scan_canonical_ast(const ASTNode *node,
                                       bool *has_dataset,
                                       bool *has_array,
-                                      bool *has_function) {
+                                      bool *has_function,
+                                      bool *has_sql) {
     if (!node) return;
     if (node->type == AST_LLAMADA_CARGAR) *has_dataset = true;
     if (node->type == AST_DECLARACION_ARRAY ||
         node->type == AST_EXPRESION_ARRAY) *has_array = true;
     if (node->type == AST_DECLARACION_FUNCION) *has_function = true;
+    if (node->type == AST_SQL_PROGRAM) *has_sql = true;
     for (size_t i = 0; i < node->child_count; i++)
         script_scan_canonical_ast(node->children[i], has_dataset, has_array,
-                                  has_function);
+                                  has_function, has_sql);
 }
 
 static bool script_has_canonical_marker(const char *script) {
     if (!script) return false;
     return strstr(script, "array") != NULL || strstr(script, "arreglo") != NULL ||
+           strstr(script, "sql desde") != NULL ||
            strstr(script, "dataset cargar") != NULL ||
+           strstr(script, ".analisis") != NULL ||
            strstr(script, ".limpiar") != NULL || strstr(script, ".transformar") != NULL;
 }
 
@@ -841,12 +830,13 @@ static ScriptPipeline script_pipeline_from_ast(const char *script,
     lexer_init(&lexer, script);
     parser_init(&parser, &lexer);
     ASTNode *program = parser_parse(&parser);
-    bool has_dataset = false, has_array = false, has_function = false;
+    bool has_dataset = false, has_array = false, has_function = false, has_sql = false;
     if (program && !parser.has_error)
-        script_scan_canonical_ast(program, &has_dataset, &has_array, &has_function);
+        script_scan_canonical_ast(program, &has_dataset, &has_array, &has_function, &has_sql);
     if (parser.has_error && parse_error != NULL) *parse_error = parser.error;
     ast_destroy(program);
     parser_release(&parser);
+    if (has_sql) return SCRIPT_PIPELINE_CANONICAL_SQL;
     if (has_dataset) return SCRIPT_PIPELINE_CANONICAL_DATASET;
     if (has_array) return SCRIPT_PIPELINE_CANONICAL_ARRAY;
     if (has_function) return SCRIPT_PIPELINE_CANONICAL_FUNCTION;
@@ -863,12 +853,15 @@ static ScriptPipeline script_pipeline_for_source(const char *script,
     if (parse_error != NULL && parse_error->code != MILENA_OK &&
         script_has_canonical_marker(script) &&
         (script_has_unbalanced_delimiters(script) ||
+         strstr(script, "sql desde") != NULL ||
          strstr(script, "dataset cargar") != NULL ||
+         strstr(script, ".analisis") != NULL ||
          strstr(script, ".limpiar") != NULL ||
          strstr(script, ".transformar") != NULL))
         return SCRIPT_PIPELINE_PARSE_ERROR;
     if (parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
-        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY) return parsed_pipeline;
+        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY ||
+        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_SQL) return parsed_pipeline;
     if (strstr(script, "funcion") != NULL) {
         return SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS;
     }
@@ -964,7 +957,8 @@ MilenaStatus milena_run_script(const char *filename, MilenaError *error) {
         free(script);
         return canonical_status;
     }
-    if (pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET) {
+    if (pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
+        pipeline == SCRIPT_PIPELINE_CANONICAL_SQL) {
         MilenaStatus canonical_status = milena_run_dataset_program(script, filename,
                                                                     stdout, error);
         free(script);

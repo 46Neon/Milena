@@ -5,7 +5,7 @@
 
 TERMUX_PKG_HOMEPAGE=https://github.com/46Neon/Milena
 TERMUX_PKG_DESCRIPTION="Milena programming language for data analysis"
-TERMUX_PKG_LICENSE="MIT"
+TERMUX_PKG_LICENSE="MIT, Apache-2.0, Public-Domain"
 TERMUX_PKG_MAINTAINER="Milena contributors"
 TERMUX_PKG_VERSION=0.2.0
 TERMUX_PKG_SRCURL="https://github.com/46Neon/Milena/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"
@@ -29,4 +29,9 @@ termux_step_make() {
 termux_step_make_install() {
     install -Dm755 milena "$TERMUX_PREFIX/bin/milena"
     install -Dm644 README.md "$TERMUX_PREFIX/share/doc/milena/README.md"
+    install -Dm644 LICENSE "$TERMUX_PREFIX/share/licenses/milena/LICENSE"
+    install -Dm644 third_party/nanoarrow/LICENSE.txt "$TERMUX_PREFIX/share/licenses/milena/nanoarrow-LICENSE.txt"
+    install -Dm644 third_party/nanoarrow/NOTICE.txt "$TERMUX_PREFIX/share/licenses/milena/nanoarrow-NOTICE.txt"
+    install -Dm644 third_party/nanoarrow/FLATCC-LICENSE.txt "$TERMUX_PREFIX/share/licenses/milena/flatcc-LICENSE.txt"
+    install -Dm644 third_party/sqlite/README.md "$TERMUX_PREFIX/share/licenses/milena/sqlite-PROVENANCE-LICENSE.md"
 }

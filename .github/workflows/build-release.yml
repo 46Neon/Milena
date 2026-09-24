@@ -175,6 +175,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $portable | Out-Null
           Copy-Item dist/windows/milena.exe $portable
           Copy-Item dist/windows/milena.exe.sha256 $portable
+          Copy-Item dist/windows/licenses $portable -Recurse -Force
           "Milena $version Windows x64 portable" | Set-Content -Encoding utf8 (Join-Path $portable 'README.txt')
           $zip = Join-Path $env:GITHUB_WORKSPACE "dist/windows/milena-$version-win-x64.zip"
           Compress-Archive -Path $portable -DestinationPath $zip -Force
@@ -187,6 +188,7 @@ jobs:
           path: |
             dist/windows/milena.exe
             dist/windows/milena.exe.sha256
+            dist/windows/licenses/**
             dist/windows/milena-*-win-x64.zip
             dist/windows/milena-*-win-x64.zip.sha256
           if-no-files-found: error

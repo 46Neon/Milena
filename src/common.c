@@ -69,6 +69,29 @@ char *milena_strdup(const char *text) {
     return copy;
 }
 
+char *milena_token_next(char *text, const char *delimiters, char **state) {
+    if (!delimiters || !state) return NULL;
+    char *cursor = text ? text : *state;
+    if (!cursor) return NULL;
+
+    cursor += strspn(cursor, delimiters);
+    if (*cursor == '\0') {
+        *state = NULL;
+        return NULL;
+    }
+
+    char *token = cursor;
+    cursor += strcspn(cursor, delimiters);
+    if (*cursor == '\0') {
+        *state = NULL;
+        return token;
+    }
+
+    *cursor = '\0';
+    *state = cursor + 1;
+    return token;
+}
+
 bool milena_size_add(size_t a, size_t b, size_t *out) {
     if (!out || b > SIZE_MAX - a) return false;
     *out = a + b;

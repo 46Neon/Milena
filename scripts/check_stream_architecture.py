@@ -7,7 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 ast = (ROOT / "include/ast.h").read_text()
 parser = (ROOT / "src/parser.c").read_text()
 runtime = (ROOT / "src/language_runtime.c").read_text()
+planner = (ROOT / "src/query_plan.c").read_text()
+plan_header = (ROOT / "include/query_plan.h").read_text()
 make = (ROOT / "Makefile").read_text()
+windows_build = (ROOT / "packaging/windows/build.ps1").read_text()
 manifest = (ROOT / "scripts/check_source_manifest.py").read_text()
 stream = (ROOT / "src/stream.c").read_text()
 stream_header = (ROOT / "include/stream.h").read_text()
@@ -25,31 +28,49 @@ for marker in required:
         raise SystemExit(f"missing typed AST contract: {marker}")
 if "milena_validate_ast(program, error)" not in runtime:
     raise SystemExit("runtime bypasses semantic validation")
-if "run_stream_dataset_with_options" not in runtime or "milena_stream_execute_csv_plan" not in runtime:
-    raise SystemExit("typed CSV plan is not invoked by the canonical runtime")
-if "milena_stream_csv_summary_with_options" not in stream:
-    raise SystemExit("CSV summary backend is not dispatched by the stream planner")
+if "run_stream_dataset_with_options" not in runtime or "milena_stream_csv_summary_with_options" not in runtime:
+    raise SystemExit("stream backend is not invoked by the canonical runtime")
 # The natural syntax branch must consume typed AST operations, not scan text.
 start = runtime.index("static MilenaStatus run_stream_dataset_with_options")
 end = runtime.index("MilenaStatus milena_run_dataset_program", start)
 stream_runtime = runtime[start:end]
 if "summary->stream_operation" not in stream_runtime:
     raise SystemExit("natural stream metrics do not use typed AST operations")
-if "milena_stream_execute_csv_plan" not in stream_runtime:
-    raise SystemExit("canonical runtime bypasses typed CSV plan execution")
-if "milena_stream_csv_grouped_with_options" not in stream:
-    raise SystemExit("grouped streaming is not dispatched by the stream planner")
-if "milena_stream_csv_grouped_spill_with_options" not in stream:
-    raise SystemExit("streaming spill is not dispatched by the stream planner")
-if "milena_stream_csv_grouped_spill_with_options" not in stream_header or \
+if "milena_stream_csv_grouped_with_options" not in stream_runtime:
+    raise SystemExit("grouped streaming is not invoked by the canonical runtime")
+if "milena_stream_csv_grouped_spill_with_keys_and_options" not in stream_runtime:
+    raise SystemExit("streaming spill is not invoked by the canonical runtime")
+if "milena_stream_csv_grouped_spill_with_keys_and_options" not in stream_header or \
    "milena_grouped_aggregate_finalize" not in stream:
     raise SystemExit("streaming spill does not use the canonical reducer callback")
-if "AST_AGRUPACION_POR" not in stream_runtime or "group_key->value" not in stream_runtime:
-    raise SystemExit("grouping key bypasses typed AST execution")
+if "group_key_count" not in stream_runtime or "group_keys[2]" not in (ROOT / "include/query_plan.h").read_text():
+    raise SystemExit("composite group keys bypass the typed plan")
+if ("AST_AGRUPACION_POR" not in planner or "plan->group_key" not in stream_runtime or
+        "group_key->value" not in stream_runtime or
+        "MILENA_PHYSICAL_CSV_STREAM_GROUPED" not in stream_runtime):
+    raise SystemExit("grouping key bypasses the typed logical/physical plan")
+if "milena_stream_execution_plan_build" not in runtime:
+    raise SystemExit("canonical runtime bypasses the typed streaming plan")
+for marker in ("physical_operators", "partition_count", "worker_count",
+               "csv_record_safe", "parallel_enabled"):
+    if marker not in plan_header:
+        raise SystemExit(f"typed query plan omits physical safety field: {marker}")
+for marker in ("MILENA_STREAM_PLAN_SCAN_CSV_RECORDS",
+               "MILENA_STREAM_PLAN_REDUCE_PARTIAL_STATES",
+               "MILENA_STREAM_PLAN_ORDER_BY_KEY", "MILENA_STREAM_PLAN_JSON_SINK",
+               "plan->parallel_enabled = false", "plan->csv_record_safe = true"):
+    if marker not in planner:
+        raise SystemExit(f"physical plan omits its record-safe contract: {marker}")
+if "milena_stream_execution_plan_validate" not in planner:
+    raise SystemExit("planner does not validate the sequential record-safe pipeline")
+if ("AST_AGRUPACION_SPILL" not in planner or
+        "MILENA_PHYSICAL_CSV_STREAM_GROUPED_SPILL" not in planner or
+        "plan->spill_policy" not in runtime):
+    raise SystemExit("spill resource AST is not carried by the typed physical plan")
 if "milena_stream_csv_grouped_with_options" not in stream_header:
     raise SystemExit("grouped streaming API is not declared in the canonical contract")
-# The bounded CSV spill path uses the same AST/runtime and CSV record parser,
-# and does not route through Dataset/Table materialization.
+# The bounded CSV spill path uses the same AST/runtime and the local source-reader
+# interface for CSV records; it does not route through Dataset/Table materialization.
 if "src/spill.c" in make:
     raise SystemExit("unplanned legacy spill module entered product SOURCES")
 if "src/spill_store.c" in make and (
@@ -72,14 +93,25 @@ for marker in ("STREAM_HARD_MAX_GROUPS", "STREAM_GROUP_STATE_BUDGET", "qsort(gro
         raise SystemExit(f"bounded/deterministic grouping guard missing: {marker}")
 if "sscanf(summary->value" in stream_runtime:
     raise SystemExit("natural stream metrics still use textual scanning")
-spill_stream_start = stream.index("MilenaStatus milena_stream_csv_grouped_spill_with_options")
+spill_stream_start = stream.index("MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options")
 spill_stream = stream[spill_stream_start:]
-if "stream_read_record" not in spill_stream or "stream_split" not in spill_stream:
-    raise SystemExit("streaming spill bypasses the existing bounded CSV parser")
+if ("milena_source_reader_read_record" not in spill_stream or "stream_split" not in spill_stream or
+        "milena_source_reader_open_local_csv" not in spill_stream):
+    raise SystemExit("streaming spill bypasses the bounded local source-reader/CSV parser")
+if ("src/source_reader.c" not in make or '"source_reader.c"' not in manifest or
+        'source_reader.c' not in windows_build or "source_reader.h" not in stream):
+    raise SystemExit("local source reader is not classified and linked as product code")
 if "Dataset" in spill_stream or "MilenaTable" in spill_stream:
     raise SystemExit("streaming spill materializes Dataset/MilenaTable")
 if "src/stream.c" not in make or '"stream.c"' not in manifest:
     raise SystemExit("stream.c is not classified as official product")
+if ("src/group_key_codec.c" not in make or '"group_key_codec.c"' not in manifest or
+        "group_key_codec.c" not in windows_build or "group_key_codec.h" not in stream or
+        (ROOT / "tests/support/group_key_codec.c").exists()):
+    raise SystemExit("group key codec must be a single linked product source")
+if "milena_stream_csv_grouped_spill_with_options" not in stream_header or \
+   "milena_stream_csv_grouped_spill_with_keys_and_options" not in stream_header:
+    raise SystemExit("single-key compatibility API and composite-key spill API must both remain available")
 # Related analysis, SST, and finance remain language-runtime capabilities.
 for marker in ("AST_COMANDO_SST", "runtime_write_sst", "milena_simple_interest", "src/finance.c"):
     if marker not in runtime + make:
