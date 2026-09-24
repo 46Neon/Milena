@@ -208,10 +208,16 @@ test-parser-array: tests/test_parser_array
 tests/test_parser_array: tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
 	$(CC) $(CFLAGS) tests/test_parser_array.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c $(LDFLAGS) -o $@
 
-.PHONY: test-parser-variables
+.PHONY: test-parser-variables test-ast-validation
 
 test-parser-variables: tests/test_parser_variables
 	./tests/test_parser_variables
+
+test-ast-validation: tests/test_ast_validation
+	./tests/test_ast_validation
+
+tests/test_ast_validation: tests/test_ast_validation.c src/parser.c src/lexer.c src/ast.c src/common.c src/symbol_table.c
+	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 test-functions: tests/test_functions
 	./tests/test_functions
@@ -332,14 +338,14 @@ debug:
 
 test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-entrypoints \
       test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics \
-      test-parser-variables test-functions test-script-functions test-user-functions
+      test-parser-variables test-ast-validation test-functions test-script-functions test-user-functions
 	./tests/run_tests.sh
 
 clean:
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array \
-		tests/test_parser_statistics tests/test_parser_variables tests/test_functions \
+		tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions \
 		tests/test_script_functions tests/test_user_functions tests/test_canonical_compiler reporte.json resultado.json
 
 

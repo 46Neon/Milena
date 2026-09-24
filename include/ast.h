@@ -120,6 +120,8 @@ typedef struct ASTNode {
 } ASTNode;
 
 ASTNode* ast_create(ASTNodeType type);
+/* Validate ownership, parent links, child storage, types and source-span containment. */
+bool ast_validate(const ASTNode *root, MilenaError *error);
 bool ast_set_source_span(ASTNode *node, const Token *start, const Token *end);
 bool ast_set_source_span_from_nodes(ASTNode *node, const ASTNode *first,
                                     const ASTNode *last);

@@ -1,6 +1,6 @@
 # Plan industrial del compilador de Milena
 
-**Estado de esta rama:** fundamento de la fase 1 en revisión de CI; las ocho fases no están completadas y no hay backend promovido al producto. Este documento define alcance y criterios; no declara capacidades ausentes.
+**Estado de esta rama:** fase 1 completada y verificada en su SHA correspondiente; fase 2 tiene un primer incremento estructural, sin satisfacer aún su gate de salida. Las ocho fases no están completadas y no hay backend promovido al producto. Este documento define alcance y criterios; no declara capacidades ausentes.
 
 ## Principios y límites
 
@@ -29,3 +29,9 @@ Los números admiten dígitos, una fracción decimal y un exponente decimal opci
 Los nodos AST que se construyen desde esos tokens exponen `has_source_span`, offsets semiabiertos y coordenadas de inicio/final exclusivo. Esta pasada fija rangos en expresiones numéricas/identificadores y operaciones aritméticas, declaraciones/asignaciones de variables, llamadas estadísticas, bloque de análisis y funciones numéricas; los nodos contenedores también agregan los rangos de sus hijos. Los diagnósticos de símbolos estadísticos inexistentes apuntan al argumento original, aunque el parser ya haya avanzado al delimitador.
 
 La fase 1 no rediseña el AST genérico ni implementa HIR; eso es alcance de la fase 2. La validación de ejecución se realiza en el CI asociado al SHA exacto (GCC, Clang, parser y ASan/UBSan), no mediante afirmaciones basadas en la compilación local inexistente.
+
+## Fase 2 — incremento estructural inicial (incompleta)
+
+`ast_validate` ofrece ahora una comprobación explícita y no mutante de un árbol AST ya construido: tipo de nodo dentro del enum, padre correcto (incluido el padre nulo de la raíz), almacenamiento coherente de hijos, ausencia de nodos nulos o compartidos/ciclos, consistencia básica de spans y contención de los spans hijos. Usa una pila iterativa y un conjunto de identidad para detectar estructuras repetidas sin depender de recursión del validador; un fallo de asignación se devuelve como error, no se interpreta como AST válido. La función no toma ownership y no sustituye validación sintáctica ni semántica.
+
+Este incremento preserva las estructuras genéricas y los campos heredados del AST, y agrega pruebas de árbol válido, spans, enlaces padre-hijo, tipos fuera de rango, almacenamiento de hijos, nodos repetidos y raíz nula; el test del parser recorre la misma API pública. Está deliberadamente marcado **incompleto**: aún no introduce nodos tipados/estructurados, reglas de semántica tipada ni una HIR, ni satisface el gate de salida de fase 2. Es una base para identificar invariantes antes de migrar consumidores.
