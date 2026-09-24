@@ -553,7 +553,7 @@ static bool hir_parse_selection(const char *text, MilenaHIRDataOperation *op,
     char *cursor = copy;
     for (size_t i = 0; i < count; ++i) {
         char *comma = strchr(cursor, ',');
-        if (comma) *comma = '\\0';
+        if (comma) *comma = '\0';
         char *name = hir_trim(cursor);
         if (!name || !*name || strlen(name) >= 128) { free(copy); return false; }
         for (size_t j = 0; j < i; ++j)
@@ -1241,9 +1241,12 @@ MilenaStatus milena_canonical_hir_input(
                        "El backend HIR no representa todavía el nodo %s; "
                        "el AST se conserva y este programa no debe compilarse por HIR",
                        ast_type_name(unsupported->type));
+        const ASTNode *location = unsupported;
+        while (location && !location->has_source_span && location->line <= 0)
+            location = location->parent;
         milena_error_set(error, MILENA_ERR_UNSUPPORTED,
-                         unsupported->line > 0 ? (size_t)unsupported->line : 0,
-                         unsupported->column > 0 ? (size_t)unsupported->column : 0,
+                         location && location->line > 0 ? (size_t)location->line : 0,
+                         location && location->column > 0 ? (size_t)location->column : 0,
                          0, message);
         return MILENA_ERR_UNSUPPORTED;
     }
