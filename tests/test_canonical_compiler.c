@@ -35,26 +35,26 @@ int main(void) {
           error.message);
 
     MilenaCanonicalCompilerInput input = {0};
-    CHECK(milena_canonical_compiler_input(&program, &input, &error) == MILENA_OK,
-          error.message);
-    CHECK(input.ast == program.ast && input.table == &table,
-          "la vista del compilador no coincide con AST/MilenaTable");
-    CHECK(input.hir == NULL,
-          "el HIR escalar no debe afirmar soporte para operaciones estadísticas heredadas");
-    MilenaCanonicalCompilerInput hir_only_input = input;
-    CHECK(milena_canonical_hir_input(&program, &hir_only_input, &error) ==
+    CHECK(milena_canonical_compiler_input(&program, &input, &error) ==
               MILENA_ERR_UNSUPPORTED,
-          "un backend HIR debe fallar cerrado para análisis sin HIR tipada");
-    CHECK(hir_only_input.ast == NULL && hir_only_input.table == NULL &&
-          hir_only_input.hir == NULL,
-          "un rechazo HIR no debe publicar una vista parcial o heredada");
+          "la entrada predeterminada del compilador debe fallar cerrado sin HIR completa");
+    CHECK(input.ast == NULL && input.table == NULL && input.hir == NULL,
+          "un rechazo del límite predeterminado no debe publicar una vista parcial");
     CHECK(error.code == MILENA_ERR_UNSUPPORTED && error.line == 1 &&
           error.column == 1 && strstr(error.message, "BLOQUE_ANALISIS") != NULL,
           "el rechazo HIR debe nombrar el nodo no representado y conservar su span");
+    CHECK(milena_canonical_hir_input(&program, &input, &error) ==
+              MILENA_ERR_UNSUPPORTED &&
+          input.ast == NULL && input.table == NULL && input.hir == NULL,
+          "el alias explícito HIR también debe fallar cerrado");
     CHECK(program.ast != NULL &&
-          milena_canonical_compiler_input(&program, &input, &error) == MILENA_OK &&
+          milena_canonical_compatibility_input(&program, &input, &error) == MILENA_OK &&
+          input.ast == program.ast && input.table == &table && input.hir == NULL,
+          "la compatibilidad debe requerir opt-in y preservar la vista AST completa");
+    CHECK(program.ast != NULL &&
+          milena_canonical_compatibility_input(&program, &input, &error) == MILENA_OK &&
           input.ast == program.ast && input.hir == NULL,
-          "el rechazo HIR debe preservar la vista AST de compatibilidad sin pérdida");
+          "el rechazo HIR no debe destruir la vista AST de compatibilidad");
 
     /* The table is borrowed; releasing the program must not destroy it. */
     milena_canonical_program_release(&program);

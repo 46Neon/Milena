@@ -503,13 +503,19 @@ MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program
     return MILENA_OK;
 }
 
-MilenaStatus milena_canonical_compiler_input(
+MilenaStatus milena_canonical_compatibility_input(
     const MilenaCanonicalProgram *program,
     MilenaCanonicalCompilerInput *input,
     MilenaError *error) {
+    if (input) {
+        input->ast = NULL;
+        input->table = NULL;
+        input->hir = NULL;
+    }
+    if (error) milena_error_clear(error);
     if (!program || !program->ast || !input) {
         canonical_error(error, MILENA_ERR_ARGUMENT,
-                        "La entrada del compilador canónico es inválida");
+                        "La entrada de compatibilidad canónica es inválida");
         return MILENA_ERR_ARGUMENT;
     }
     input->ast = program->ast;
@@ -581,5 +587,12 @@ MilenaStatus milena_canonical_hir_input(
                          0, message);
         return MILENA_ERR_UNSUPPORTED;
     }
-    return milena_canonical_compiler_input(program, input, error);
+    return milena_canonical_compatibility_input(program, input, error);
+}
+
+MilenaStatus milena_canonical_compiler_input(
+    const MilenaCanonicalProgram *program,
+    MilenaCanonicalCompilerInput *input,
+    MilenaError *error) {
+    return milena_canonical_hir_input(program, input, error);
 }

@@ -136,15 +136,22 @@ MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program
                                                  const MilenaTable *table,
                                                  MilenaError *error);
 
-/* Export the only input shape a future compiler backend may consume. */
+/* Default compiler boundary. This is fail-closed: a backend cannot receive an
+ * AST-only program as if it were compilable. */
 MilenaStatus milena_canonical_compiler_input(
     const MilenaCanonicalProgram *program,
     MilenaCanonicalCompilerInput *input,
     MilenaError *error);
 
-/* Fail-closed compiler route: reject ASTs without a complete HIR and report the
- * first unsupported AST node at its source location. The legacy AST/runtime
- * view above remains available for compatibility. */
+/* Explicit compatibility-only AST/runtime view. Consumers of this function
+ * must not treat a NULL HIR as compiler input. */
+MilenaStatus milena_canonical_compatibility_input(
+    const MilenaCanonicalProgram *program,
+    MilenaCanonicalCompilerInput *input,
+    MilenaError *error);
+
+/* Named strict alias retained for callers that want to make the HIR requirement
+ * explicit at the call site. Rejects incomplete HIR with source diagnostics. */
 MilenaStatus milena_canonical_hir_input(
     const MilenaCanonicalProgram *program,
     MilenaCanonicalCompilerInput *input,
