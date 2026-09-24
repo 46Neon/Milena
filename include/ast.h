@@ -107,6 +107,8 @@ typedef struct ASTNode {
     ASTStatOperation statistical_operation;
     /* Semantic annotation; unresolved until the typed frontend pass. */
     ASTValueType value_type;
+    /* Nonzero ID assigned by canonical script name resolution; never an owner. */
+    size_t resolved_symbol_id;
     /* Structured scalar-expression operator, independent of legacy value text. */
     ASTOperatorKind operator_kind;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */

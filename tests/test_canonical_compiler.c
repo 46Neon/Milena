@@ -97,6 +97,88 @@ int main(void) {
           "un fallo semántico debe liberar el AST no publicado");
     milena_canonical_program_release(&program);
 
-    puts("OK: canonical compiler boundary, typed scalar AST and source diagnostics");
+    /* Canonical function scripts now resolve bindings instead of assuming that
+       every identifier or call denotes a numeric value. */
+    milena_canonical_program_init(&program);
+    const char *resolved_source =
+        "funcion principal() { retornar siguiente(4); } "
+        "funcion siguiente(x) { variable local = x + 1; retornar local; }";
+    CHECK(milena_canonical_program_parse(&program, resolved_source, &error) == MILENA_OK,
+          error.message);
+    ASTNode *main_function = program.ast->children[0];
+    ASTNode *forward_call = main_function->children[1]->children[0]->children[0];
+    ASTNode *next_function = program.ast->children[1];
+    ASTNode *parameter = next_function->children[0]->children[0];
+    ASTNode *local_declaration = next_function->children[1]->children[0];
+    ASTNode *parameter_use = local_declaration->children[0]->left_operand;
+    ASTNode *local_use = next_function->children[1]->children[1]->children[0];
+    CHECK(main_function->resolved_symbol_id != 0 &&
+          forward_call->resolved_symbol_id == next_function->resolved_symbol_id,
+          "la llamada adelantada debe enlazar a la declaración de función");
+    CHECK(parameter->resolved_symbol_id != 0 &&
+          parameter_use->resolved_symbol_id == parameter->resolved_symbol_id,
+          "el uso debe enlazar al parámetro numérico visible");
+    CHECK(local_declaration->resolved_symbol_id != 0 &&
+          local_use->resolved_symbol_id == local_declaration->resolved_symbol_id,
+          "el uso local debe enlazar a su declaración dentro de la función");
+    milena_canonical_program_release(&program);
+
+    /* An unresolved variable is an error with the original identifier span. */
+    milena_canonical_program_init(&program);
+    const char *unknown_name =
+        "funcion invalida() { retornar perdida; }";
+    CHECK(milena_canonical_program_parse(&program, unknown_name, &error) == MILENA_ERR_TYPE,
+          "un identificador libre no debe asumirse numérico");
+    CHECK(strstr(error.message, "no declarado") != NULL && error.line == 1 &&
+          error.column == (size_t)(strstr(unknown_name, "perdida") - unknown_name + 1),
+          "el error de nombre debe señalar el identificador de origen");
+    CHECK(program.ast == NULL, "el AST debe liberarse si falla la resolución");
+    milena_canonical_program_release(&program);
+
+    /* Unknown function names and call arity are checked before publication. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion invalida() { retornar fantasma(1); }", &error) == MILENA_ERR_TYPE &&
+          strstr(error.message, "Función no declarada") != NULL,
+          "la llamada a una función inexistente debe rechazarse");
+    CHECK(program.ast == NULL, "la falla de llamada debe limpiar el AST parcial");
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion uno(x) { retornar x; } "
+          "funcion invalida() { retornar uno(1, 2); }", &error) == MILENA_ERR_TYPE &&
+          strstr(error.message, "Cantidad de argumentos") != NULL,
+          "la aridad de una llamada debe coincidir con la firma resuelta");
+    CHECK(program.ast == NULL, "la falla de aridad debe limpiar el AST parcial");
+    milena_canonical_program_release(&program);
+
+    /* Lexical scopes and assignment types are enforced for numeric scripts. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion invalida() { si (verdadero) { variable temporal = 1; } "
+          "retornar temporal; }", &error) == MILENA_ERR_TYPE,
+          "una variable local del bloque no debe escapar de su ámbito");
+    CHECK(program.ast == NULL, "la falla de ámbito debe limpiar el AST parcial");
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion invalida() { variable x = 1; x = verdadero; retornar x; }",
+          &error) == MILENA_ERR_TYPE &&
+          strstr(error.message, "asignación incompatible") != NULL,
+          "una asignación no debe cambiar silenciosamente el tipo de la variable");
+    CHECK(program.ast == NULL, "la falla de tipo de asignación debe limpiar el AST parcial");
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion f(x) { retornar x; } "
+          "funcion invalida() { retornar f(verdadero); }", &error) == MILENA_ERR_TYPE,
+          "la ABI numérica de parámetros no debe aceptar booleanos sin coerción definida");
+    CHECK(program.ast == NULL, "la falla de tipo de argumento debe limpiar el AST parcial");
+    milena_canonical_program_release(&program);
+
+    puts("OK: canonical compiler boundary, typed AST, binding resolution and source diagnostics");
     return 0;
 }
