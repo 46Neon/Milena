@@ -142,6 +142,14 @@ MilenaStatus milena_canonical_compiler_input(
     MilenaCanonicalCompilerInput *input,
     MilenaError *error);
 
+/* Fail-closed compiler route: reject ASTs without a complete HIR and report the
+ * first unsupported AST node at its source location. The legacy AST/runtime
+ * view above remains available for compatibility. */
+MilenaStatus milena_canonical_hir_input(
+    const MilenaCanonicalProgram *program,
+    MilenaCanonicalCompilerInput *input,
+    MilenaError *error);
+
 #ifdef __cplusplus
 }
 #endif

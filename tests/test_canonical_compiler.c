@@ -41,6 +41,20 @@ int main(void) {
           "la vista del compilador no coincide con AST/MilenaTable");
     CHECK(input.hir == NULL,
           "el HIR escalar no debe afirmar soporte para operaciones estadísticas heredadas");
+    MilenaCanonicalCompilerInput hir_only_input = input;
+    CHECK(milena_canonical_hir_input(&program, &hir_only_input, &error) ==
+              MILENA_ERR_UNSUPPORTED,
+          "un backend HIR debe fallar cerrado para análisis sin HIR tipada");
+    CHECK(hir_only_input.ast == NULL && hir_only_input.table == NULL &&
+          hir_only_input.hir == NULL,
+          "un rechazo HIR no debe publicar una vista parcial o heredada");
+    CHECK(error.code == MILENA_ERR_UNSUPPORTED && error.line == 1 &&
+          error.column == 1 && strstr(error.message, "BLOQUE_ANALISIS") != NULL,
+          "el rechazo HIR debe nombrar el nodo no representado y conservar su span");
+    CHECK(program.ast != NULL &&
+          milena_canonical_compiler_input(&program, &input, &error) == MILENA_OK &&
+          input.ast == program.ast && input.hir == NULL,
+          "el rechazo HIR debe preservar la vista AST de compatibilidad sin pérdida");
 
     /* The table is borrowed; releasing the program must not destroy it. */
     milena_canonical_program_release(&program);
@@ -158,6 +172,9 @@ int main(void) {
     CHECK(milena_canonical_compiler_input(&program, &scalar_input, &error) == MILENA_OK &&
           scalar_input.hir == program.hir,
           "la vista canónica debe exponer la HIR poseída por el programa");
+    CHECK(milena_canonical_hir_input(&program, &scalar_input, &error) == MILENA_OK &&
+          scalar_input.ast == program.ast && scalar_input.hir == program.hir,
+          "la entrada HIR fail-closed debe admitir y preservar el subconjunto tipado");
     milena_canonical_program_release(&program);
     CHECK(program.hir == NULL && program.ast == NULL,
           "liberar el programa debe destruir la HIR y el AST poseídos");

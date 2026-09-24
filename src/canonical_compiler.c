@@ -4,6 +4,7 @@
 #include "lexer.h"
 #include "parser.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -515,4 +516,70 @@ MilenaStatus milena_canonical_compiler_input(
     input->table = program->table;
     input->hir = program->hir;
     return MILENA_OK;
+}
+
+static bool hir_supports_ast_node(const ASTNode *node) {
+    if (!node) return false;
+    switch (node->type) {
+        case AST_PROGRAMA:
+        case AST_BLOQUE_FUNCION:
+        case AST_CONDICION_SI:
+        case AST_DECLARACION_FUNCION:
+            return true;
+        case AST_EXPRESION_OPERACION:
+        case AST_EXPRESION_LITERAL:
+        case AST_EXPRESION_IDENTIFICADOR:
+        case AST_EXPRESION_FUNCION:
+        case AST_EXPRESION_LLAMADA:
+        case AST_COMANDO_RETORNAR:
+        case AST_DECLARACION_VARIABLE:
+        case AST_ASIGNACION_VARIABLE: {
+            MilenaHIRValueType type;
+            return hir_value_type(node->value_type, &type);
+        }
+        default:
+            return false;
+    }
+}
+
+static const ASTNode *hir_first_unsupported_node(const ASTNode *node) {
+    if (!node) return NULL;
+    if (!hir_supports_ast_node(node)) return node;
+    for (size_t i = 0; i < node->child_count; ++i) {
+        const ASTNode *unsupported = hir_first_unsupported_node(node->children[i]);
+        if (unsupported) return unsupported;
+    }
+    return NULL;
+}
+
+MilenaStatus milena_canonical_hir_input(
+    const MilenaCanonicalProgram *program,
+    MilenaCanonicalCompilerInput *input,
+    MilenaError *error) {
+    if (input) {
+        input->ast = NULL;
+        input->table = NULL;
+        input->hir = NULL;
+    }
+    if (error) milena_error_clear(error);
+    if (!program || !program->ast || !input) {
+        canonical_error(error, MILENA_ERR_ARGUMENT,
+                        "La entrada HIR del compilador canónico es inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (!program->hir) {
+        const ASTNode *unsupported = hir_first_unsupported_node(program->ast);
+        if (!unsupported) unsupported = program->ast;
+        char message[MILENA_ERROR_TEXT];
+        (void)snprintf(message, sizeof(message),
+                       "El backend HIR no representa todavía el nodo %s; "
+                       "el AST se conserva y este programa no debe compilarse por HIR",
+                       ast_type_name(unsupported->type));
+        milena_error_set(error, MILENA_ERR_UNSUPPORTED,
+                         unsupported->line > 0 ? (size_t)unsupported->line : 0,
+                         unsupported->column > 0 ? (size_t)unsupported->column : 0,
+                         0, message);
+        return MILENA_ERR_UNSUPPORTED;
+    }
+    return milena_canonical_compiler_input(program, input, error);
 }
