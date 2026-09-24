@@ -1049,38 +1049,59 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
         } else if (parser_match(parser, TOKEN_PUNTO)) {
             parser_advance(parser);
             if (parser_match(parser, TOKEN_KW_LIMPIAR)) {
+                Token cleaning_start = parser->current;
                 parser_advance(parser);
                 if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
                     ASTNode *limpiar = ast_create(AST_BLOQUE_LIMPIAR);
+                    if (!limpiar) parser_error(parser, "Sin memoria para bloque limpiar");
                     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                         if (parser_match(parser, TOKEN_NUMERAL)) {
+                            Token command_start = parser->current;
                             parser_advance(parser);
-                            if (parser_match(parser, TOKEN_KW_NULOS)) {
-                                parser_advance(parser);
-                                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                                    if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
-                                        if (!parser_add_child(parser, limpiar, ast_create_leaf(AST_COMANDO_NULOS, parser->previous.lexeme), "Sin memoria para comando nulos")) break;
-                                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
-                                    }
-                                }
-                            } else if (parser_match(parser, TOKEN_KW_DUPLICADOS)) {
-                                parser_advance(parser);
-                                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                                    if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
-                                        if (!parser_add_child(parser, limpiar, ast_create_leaf(AST_COMANDO_DUPLICADOS, parser->previous.lexeme), "Sin memoria para comando duplicados")) break;
-                                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
-                                    }
-                                }
+                            ASTNodeType command_type;
+                            if (parser_match(parser, TOKEN_KW_NULOS))
+                                command_type = AST_COMANDO_NULOS;
+                            else if (parser_match(parser, TOKEN_KW_DUPLICADOS))
+                                command_type = AST_COMANDO_DUPLICADOS;
+                            else {
+                                parser_error(parser, "Comando desconocido en limpiar");
+                                break;
                             }
+                            parser_advance(parser);
+                            if (!parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) break;
+                            if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) break;
+                            ASTNode *command = ast_create_leaf(command_type,
+                                                               parser->previous.lexeme);
+                            if (!command) {
+                                parser_error(parser, "Sin memoria para comando de limpieza");
+                                break;
+                            }
+                            if (!ast_set_source_span(command, &command_start,
+                                                     &parser->previous)) {
+                                ast_destroy(command);
+                                parser_error(parser, "No se pudo registrar el origen del comando de limpieza");
+                                break;
+                            }
+                            if (!parser_add_child(parser, limpiar, command,
+                                                  "Sin memoria para comando de limpieza")) break;
+                            if (!parser_expect(parser, TOKEN_PAR_DER,
+                                               "Se esperaba ')'")) break;
                         } else {
                             parser_error(parser, "Comando desconocido en limpiar");
                         }
                     }
-                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-                    if (limpiar) parser_add_child(parser, node, limpiar,
-                                                   "Sin memoria para el AST");
+                    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'"))
+                        ast_destroy(limpiar);
+                    else if (limpiar && !ast_set_source_span(limpiar,
+                                &cleaning_start, &parser->previous)) {
+                        ast_destroy(limpiar);
+                        parser_error(parser, "No se pudo registrar el origen del bloque limpiar");
+                    } else if (limpiar && !parser_add_child(parser, node, limpiar,
+                                                   "Sin memoria para el AST")) {
+                        break;
+                    }
                 }
             } else if (parser_match(parser, TOKEN_KW_TRANSFORMAR)) {
                 parser_advance(parser);

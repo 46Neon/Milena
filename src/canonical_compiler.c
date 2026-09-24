@@ -462,6 +462,9 @@ static void data_hir_release(MilenaDataHIR *hir) {
                 hir_aggregate_array_release(op->as.summarize.aggregates,
                                             op->as.summarize.aggregate_count);
                 break;
+            case MILENA_HIR_DATA_DROP_NULLS:
+            case MILENA_HIR_DATA_DROP_DUPLICATES:
+                break;
             case MILENA_HIR_DATA_JOIN:
                 free(op->as.join.right_source);
                 hir_column_ref_release(&op->as.join.left_key);
@@ -847,6 +850,35 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
                 return HIR_BUILD_MEMORY;
             }
             terminal_operation_seen = true;
+            continue;
+        }
+        if (node->type == AST_BLOQUE_LIMPIAR) {
+            if (node->child_count == 0) {
+                data_hir_release(hir);
+                return HIR_BUILD_UNSUPPORTED;
+            }
+            for (size_t j = 0; j < node->child_count; ++j) {
+                const ASTNode *command = node->children[j];
+                MilenaHIRDataOperation op = {0};
+                if (!command || !command->value ||
+                    strcmp(command->value, "eliminar") != 0) {
+                    data_hir_release(hir);
+                    return HIR_BUILD_UNSUPPORTED;
+                }
+                if (command->type == AST_COMANDO_NULOS)
+                    op.kind = MILENA_HIR_DATA_DROP_NULLS;
+                else if (command->type == AST_COMANDO_DUPLICADOS)
+                    op.kind = MILENA_HIR_DATA_DROP_DUPLICATES;
+                else {
+                    data_hir_release(hir);
+                    return HIR_BUILD_UNSUPPORTED;
+                }
+                hir_source_span(&op.span, command->has_source_span ? command : node);
+                if (!hir_append_data_operation(hir, &op)) {
+                    data_hir_release(hir);
+                    return HIR_BUILD_MEMORY;
+                }
+            }
             continue;
         }
         if (node->type == AST_BLOQUE_UNIR) {
@@ -1460,6 +1492,17 @@ MilenaStatus milena_canonical_program_execute_data(
                 milena_table_destroy(&aggregated);
                 free(specifications);
             }
+        } else if (op->kind == MILENA_HIR_DATA_DROP_NULLS ||
+                   op->kind == MILENA_HIR_DATA_DROP_DUPLICATES) {
+            MilenaTable cleaned = {0};
+            milena_table_init(&cleaned);
+            if (op->kind == MILENA_HIR_DATA_DROP_NULLS)
+                status = milena_table_drop_null(&cleaned, &working, error);
+            else
+                status = milena_table_drop_duplicates(&cleaned, &working, error);
+            if (status == MILENA_OK) milena_table_swap(&working, &cleaned);
+            else hir_attach_error_span(error, &op->span);
+            milena_table_destroy(&cleaned);
         } else if (op->kind == MILENA_HIR_DATA_JOIN) {
             if (!program->right_table || !op->as.join.right_source) {
                 status = MILENA_ERR_DATA;
@@ -1592,6 +1635,9 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_DECLARACION_VARIABLE:
         case AST_BLOQUE_TRANSFORMAR:
         case AST_COMANDO_TOTAL:
+        case AST_BLOQUE_LIMPIAR:
+        case AST_COMANDO_NULOS:
+        case AST_COMANDO_DUPLICADOS:
         case AST_BLOQUE_FILTRAR:
         case AST_COMANDO_CONDICION:
         case AST_BLOQUE_AGRUPAR:

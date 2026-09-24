@@ -114,7 +114,8 @@ typedef struct {
 
 /* Typed table/data HIR. This deliberately closed subset has one program-local
  * dataset binding with loader-stamped path provenance; numeric product/filter,
- * column projection, grouping, summary, and a borrowed-output export boundary. */
+ * null/duplicate cleaning, column projection, grouping, summary, and a
+ * borrowed-output export boundary. */
 typedef enum {
     MILENA_HIR_COLUMN_UNKNOWN,
     MILENA_HIR_COLUMN_NUMERIC,
@@ -167,6 +168,8 @@ typedef enum {
     MILENA_HIR_DATA_SELECT_COLUMNS,
     MILENA_HIR_DATA_GROUP,
     MILENA_HIR_DATA_SUMMARIZE,
+    MILENA_HIR_DATA_DROP_NULLS,
+    MILENA_HIR_DATA_DROP_DUPLICATES,
     MILENA_HIR_DATA_JOIN,
     MILENA_HIR_DATA_SST,
     MILENA_HIR_DATA_EXPORT

@@ -563,21 +563,78 @@ int main(void) {
     milena_table_destroy(&catalog_table);
     milena_array_release(&right_ids);
 
+    /* Canonical cleaning preserves command order and executes transactionally. */
+    MilenaArray cleanup_ids = {0};
+    int64_t cleanup_id_values[] = {1, 1, 2};
+    const char *cleanup_names[] = {"A", "A", NULL};
+    bool cleanup_name_valid[] = {true, true, false};
+    CHECK(milena_array_from_i64(&cleanup_ids, 1, data_shape,
+                                cleanup_id_values, &error) == MILENA_OK,
+          error.message);
+    MilenaTable cleanup_table;
+    milena_table_init(&cleanup_table);
+    CHECK(milena_table_add_column_copy(&cleanup_table, "id", &cleanup_ids,
+                NULL, &error) == MILENA_OK &&
+          milena_table_add_string_column_copy(&cleanup_table, "name",
+                cleanup_names, 3, cleanup_name_valid, &error) == MILENA_OK &&
+          milena_table_set_metadata(&cleanup_table,
+                MILENA_HIR_DATASET_PATH_METADATA, "limpieza.csv",
+                &error) == MILENA_OK, error.message);
+    milena_canonical_program_init(&program);
+    const char *cleanup_source =
+        ".analisis limpieza { dataset cargar datos(\"limpieza.csv\") "
+        ".limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") } }";
+    CHECK(milena_canonical_program_parse(&program, cleanup_source, &error) ==
+          MILENA_OK, error.message);
+    CHECK(program.data_hir && program.data_hir->operation_count == 2 &&
+          program.data_hir->operations[0].kind == MILENA_HIR_DATA_DROP_NULLS &&
+          program.data_hir->operations[1].kind == MILENA_HIR_DATA_DROP_DUPLICATES &&
+          program.data_hir->operations[0].span.has_source_span &&
+          program.data_hir->operations[1].span.has_source_span,
+          "la limpieza debe bajar comandos ordenados con spans locales a HIR tipada");
+    CHECK(milena_canonical_program_bind_table(&program, &cleanup_table,
+                                               &error) == MILENA_OK,
+          error.message);
+    MilenaTable cleanup_output;
+    milena_table_init(&cleanup_output);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &cleanup_output,
+                                                 &error) == MILENA_OK,
+          error.message);
+    CHECK(cleanup_output.row_count == 1 && cleanup_output.column_count == 2,
+          "el HIR debe eliminar primero nulos y luego duplicados");
+    MilenaTable cleanup_sentinel;
+    milena_table_init(&cleanup_sentinel);
+    CHECK(milena_table_clone(&cleanup_sentinel, &cleanup_output, &error) ==
+          MILENA_OK, error.message);
+    MilenaHIRResourcePolicy cleanup_limit = {
+        .max_input_rows = 3, .max_output_rows = 0, .max_columns = 2
+    };
+    CHECK(milena_canonical_program_execute_data(&program, &cleanup_limit,
+          &cleanup_sentinel, &error) == MILENA_ERR_OVERFLOW &&
+          cleanup_sentinel.row_count == 1,
+          "el error de límite tras limpiar debe conservar intacta la salida previa");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&cleanup_sentinel);
+    milena_table_destroy(&cleanup_output);
+    milena_table_destroy(&cleanup_table);
+    milena_array_release(&cleanup_ids);
+
     milena_table_destroy(&data_table);
     milena_array_release(&ids);
     milena_array_release(&prices);
     milena_array_release(&quantities);
 
     milena_canonical_program_init(&program);
-    const char *unsupported_cleaning_source =
+    const char *unsupported_cleaning_action =
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
-        ".limpiar dataset { #nulos(\"eliminar\") } }";
-    CHECK(milena_canonical_program_parse(&program, unsupported_cleaning_source, &error) == MILENA_OK,
-          error.message);
-    CHECK(milena_canonical_compiler_input(&program, &data_input, &error) ==
+        ".limpiar dataset { #nulos(\"rellenar\") } }";
+    CHECK(milena_canonical_program_parse(&program, unsupported_cleaning_action,
+                                         &error) == MILENA_OK, error.message);
+    CHECK(program.data_hir == NULL &&
+          milena_canonical_compiler_input(&program, &data_input, &error) ==
               MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&
-          strstr(error.message, "BLOQUE_LIMPIAR") != NULL,
-          "una limpieza no representada debe fallar cerrado con AST y sin vista parcial");
+          data_input.data_hir == NULL,
+          "una acción de limpieza no implementada debe fallar cerrado y sin vista parcial");
     milena_canonical_program_release(&program);
 
     puts("OK: canonical compiler boundary, typed scalar/data HIR, binding, execution and source diagnostics");

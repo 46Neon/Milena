@@ -265,6 +265,23 @@ static int run_typed_data_hir_runtime(void) {
           strstr(text, "precio_suma") != NULL,
           "HIR runtime: agrupación canónica no llegó al reporte con su agregado");
 
+    const char *clean_csv = "test-hir-clean-runtime.csv";
+    const char *clean_report = "test-hir-clean-runtime.json";
+    CHECK(write_file(clean_csv, "id,name\n1,A\n1,A\n2,B\n"),
+          "HIR cleaning runtime: no se pudo escribir el CSV de prueba");
+    const char *clean_source =
+        ".analisis limpieza_canonica {\n"
+        " dataset cargar datos(\"test-hir-clean-runtime.csv\")\n"
+        " .limpiar dataset { #duplicados(\"eliminar\") }\n"
+        " .exportar { (\"test-hir-clean-runtime.json\") }\n"
+        "}\n";
+    CHECK(milena_run_dataset_program(clean_source,
+          "test-hir-clean-runtime.milena", NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(read_file(clean_report, text, sizeof(text)) &&
+          strstr(text, "\"filas\": 2") != NULL,
+          "HIR cleaning runtime: la deduplicación no llegó a la salida canónica");
+
     const char *right_csv = "test-hir-join-runtime-right.csv";
     const char *join_report = "test-hir-join-runtime.json";
     CHECK(write_file(right_csv, "id,region\n1,Norte\n2,Centro\n3,Sur\n"),
@@ -303,6 +320,8 @@ static int run_typed_data_hir_runtime(void) {
     remove(csv);
     remove(report);
     remove(group_report);
+    remove(clean_csv);
+    remove(clean_report);
     remove(right_csv);
     remove(join_report);
     remove(missing_report);
