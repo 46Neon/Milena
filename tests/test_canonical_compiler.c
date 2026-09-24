@@ -41,7 +41,7 @@ int main(void) {
     CHECK(input.ast == NULL && input.table == NULL && input.hir == NULL,
           "un rechazo del límite predeterminado no debe publicar una vista parcial");
     CHECK(error.code == MILENA_ERR_UNSUPPORTED && error.line == 1 &&
-          error.column == 1 && strstr(error.message, "BLOQUE_ANALISIS") != NULL,
+          error.column == 1 && strstr(error.message, "COMANDO_SST") != NULL,
           "el rechazo HIR debe nombrar el nodo no representado y conservar su span");
     CHECK(milena_canonical_hir_input(&program, &input, &error) ==
               MILENA_ERR_UNSUPPORTED &&
@@ -249,6 +249,135 @@ int main(void) {
     CHECK(program.ast == NULL, "la falla de tipo de argumento debe limpiar el AST parcial");
     milena_canonical_program_release(&program);
 
-    puts("OK: canonical compiler boundary, typed AST, binding resolution and source diagnostics");
+    /* Canonical data HIR: source identity, typed product/filter/projection,
+       schema binding, strict consumption, execution and transactional cleanup. */
+    milena_canonical_program_init(&program);
+    const char *data_source =
+        ".analisis ventas {\n"
+        " dataset cargar datos(\"entrada.csv\")\n"
+        " .transformar dataset { #total(\"precio * cantidad\") }\n"
+        " .filtrar { #condicion(\"total >= 10\") }\n"
+        " .seleccionar { #columnas(\"id,total,ciudad\") }\n"
+        " .exportar { (\"salida.json\") }\n"
+        "}\n";
+    CHECK(milena_canonical_program_parse(&program, data_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(program.data_hir != NULL && program.hir == NULL &&
+          strcmp(program.data_hir->source.path, "entrada.csv") == 0 &&
+          program.data_hir->source.resolved_dataset_id != 0 &&
+          strcmp(program.data_hir->export_path, "salida.json") == 0 &&
+          program.data_hir->operation_count == 3,
+          "la HIR debe poseer fuente, transformación, filtro, proyección y destino de exportación");
+    MilenaCanonicalCompilerInput data_input = {0};
+    CHECK(milena_canonical_compiler_input(&program, &data_input, &error) == MILENA_ERR_DATA &&
+          data_input.ast == NULL && data_input.data_hir == NULL,
+          "la HIR de datos no debe consumirse antes de enlazar el esquema");
+
+    MilenaArray ids = {0}, prices = {0}, quantities = {0};
+    size_t data_shape[] = {3};
+    int64_t id_values[] = {1, 2, 3};
+    int64_t quantity_values[] = {3, 2, 1};
+    double price_values[] = {2.0, 5.0, 4.0};
+    const char *city_values[] = {"Caracas", "Maracaibo", "Mérida"};
+    CHECK(milena_array_from_i64(&ids, 1, data_shape, id_values, &error) == MILENA_OK &&
+          milena_array_from_f64(&prices, 1, data_shape, price_values, &error) == MILENA_OK &&
+          milena_array_from_i64(&quantities, 1, data_shape, quantity_values, &error) == MILENA_OK,
+          error.message);
+    MilenaTable data_table;
+    milena_table_init(&data_table);
+    CHECK(milena_table_add_column_copy(&data_table, "id", &ids, NULL, &error) == MILENA_OK &&
+          milena_table_add_column_copy(&data_table, "precio", &prices, NULL, &error) == MILENA_OK &&
+          milena_table_add_column_copy(&data_table, "cantidad", &quantities, NULL, &error) == MILENA_OK &&
+          milena_table_add_string_column_copy(&data_table, "ciudad", city_values, 3, NULL,
+                                              &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) == MILENA_OK,
+          error.message);
+    CHECK(program.data_hir->schema_bound &&
+          program.data_hir->operations[0].as.product.left.resolved_column_index == 1 &&
+          program.data_hir->operations[0].as.product.left.type == MILENA_HIR_COLUMN_NUMERIC &&
+          program.data_hir->operations[2].as.select.columns[1].resolved_column_index == 4 &&
+          program.data_hir->operations[2].as.select.columns[2].type == MILENA_HIR_COLUMN_TEXT,
+          "el binder debe resolver columnas, tipos, formas e identidades estables");
+    CHECK(milena_canonical_compiler_input(&program, &data_input, &error) == MILENA_OK &&
+          data_input.data_hir == program.data_hir && data_input.table == &data_table,
+          "la entrada estricta debe exponer la HIR de datos ligada");
+    MilenaTable data_output;
+    milena_table_init(&data_output);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &data_output, &error) == MILENA_OK,
+          error.message);
+    CHECK(data_output.row_count == 1 && data_output.column_count == 3 &&
+          milena_table_column_index(&data_output, "ciudad") == 2 &&
+          milena_table_column_index(&data_output, "total") == 1,
+          "la ruta de ejecución HIR debe ejecutar producto, filtro y selección");
+    const void *cell = NULL;
+    CHECK(milena_table_get_array_value(&data_output,
+          (size_t)milena_table_column_index(&data_output, "id"), 0, &cell, &error) == MILENA_OK &&
+          *(const int64_t *)cell == 2,
+          "el filtro HIR debe conservar solo la fila que cumple la condición enlazada");
+    CHECK(milena_table_get_array_value(&data_output,
+          (size_t)milena_table_column_index(&data_output, "total"), 0, &cell, &error) == MILENA_OK &&
+          *(const double *)cell == 10.0,
+          "el HIR debe materializar el producto numérico en la tabla canónica");
+
+    MilenaTable sentinel;
+    milena_table_init(&sentinel);
+    CHECK(milena_table_clone(&sentinel, &data_output, &error) == MILENA_OK,
+          error.message);
+    MilenaHIRResourcePolicy tiny_policy = {
+        .max_input_rows = 3, .max_output_rows = 0, .max_columns = 5
+    };
+    CHECK(milena_canonical_program_execute_data(&program, &tiny_policy,
+          &sentinel, &error) == MILENA_ERR_OVERFLOW && sentinel.row_count == 1 &&
+          milena_table_column_index(&sentinel, "total") >= 0,
+          "el límite de filas debe fallar sin publicar ni filtrar parcialmente la salida previa");
+
+    milena_canonical_program_release(&program);
+    CHECK(milena_table_validate(&data_table, &error) == MILENA_OK,
+          "liberar la HIR no debe destruir la tabla prestada");
+    milena_table_destroy(&sentinel);
+    milena_table_destroy(&data_output);
+
+    /* Schema binding rejects unknown columns and type mismatches with spans. */
+    milena_canonical_program_init(&program);
+    const char *unknown_column_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".filtrar { #condicion(\"inexistente > 0\") } }";
+    CHECK(milena_canonical_program_parse(&program, unknown_column_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) == MILENA_ERR_TYPE &&
+          error.line > 0 && error.column > 0 && strstr(error.message, "Columna no declarada") != NULL &&
+          program.table == NULL,
+          "el enlace debe rechazar nombres de columna desconocidos con ubicación y limpieza");
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    const char *wrong_type_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".filtrar { #condicion(\"ciudad > 0\") } }";
+    CHECK(milena_canonical_program_parse(&program, wrong_type_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) == MILENA_ERR_TYPE &&
+          error.line > 0 && strstr(error.message, "columna numérica") != NULL,
+          "el enlace debe rechazar tipos de filtro incompatibles con span");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&data_table);
+    milena_array_release(&ids);
+    milena_array_release(&prices);
+    milena_array_release(&quantities);
+
+    milena_canonical_program_init(&program);
+    const char *unsupported_group_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".agrupar dataset { #por(\"ciudad\") #suma(\"precio\") } }";
+    CHECK(milena_canonical_program_parse(&program, unsupported_group_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_compiler_input(&program, &data_input, &error) ==
+              MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&
+          strstr(error.message, "BLOQUE_AGRUPAR") != NULL,
+          "una operación todavía no representada debe producir diagnóstico AST explícito y sin vista parcial");
+    milena_canonical_program_release(&program);
+
+    puts("OK: canonical compiler boundary, typed scalar/data HIR, binding, execution and source diagnostics");
     return 0;
 }

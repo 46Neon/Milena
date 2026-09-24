@@ -413,17 +413,349 @@ static HIRBuildResult scalar_hir_build(const ASTNode *ast,
     return HIR_BUILD_OK;
 }
 
+static void hir_column_ref_release(MilenaHIRColumnRef *column) {
+    if (!column) return;
+    free(column->name);
+    memset(column, 0, sizeof(*column));
+    column->resolved_column_index = SIZE_MAX;
+}
+
+static void hir_aggregate_array_release(MilenaHIRAggregate *aggregates,
+                                        size_t count) {
+    if (!aggregates) return;
+    for (size_t i = 0; i < count; ++i) {
+        hir_column_ref_release(&aggregates[i].input);
+        free(aggregates[i].output_name);
+    }
+    free(aggregates);
+}
+
+static void data_hir_release(MilenaDataHIR *hir) {
+    if (!hir) return;
+    free(hir->source.path);
+    free(hir->export_path);
+    for (size_t i = 0; i < hir->declared_column_count; ++i)
+        hir_column_ref_release(&hir->declared_schema[i]);
+    free(hir->declared_schema);
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        MilenaHIRDataOperation *op = &hir->operations[i];
+        switch (op->kind) {
+            case MILENA_HIR_DATA_PRODUCT:
+                hir_column_ref_release(&op->as.product.left);
+                hir_column_ref_release(&op->as.product.right);
+                free(op->as.product.output_name);
+                break;
+            case MILENA_HIR_DATA_FILTER_NUMERIC:
+                hir_column_ref_release(&op->as.filter.column);
+                break;
+            case MILENA_HIR_DATA_SELECT_COLUMNS:
+                for (size_t j = 0; j < op->as.select.count; ++j)
+                    hir_column_ref_release(&op->as.select.columns[j]);
+                free(op->as.select.columns);
+                break;
+            case MILENA_HIR_DATA_GROUP:
+                hir_column_ref_release(&op->as.group.key);
+                hir_aggregate_array_release(op->as.group.aggregates,
+                                            op->as.group.aggregate_count);
+                break;
+            case MILENA_HIR_DATA_SUMMARIZE:
+                hir_aggregate_array_release(op->as.summarize.aggregates,
+                                            op->as.summarize.aggregate_count);
+                break;
+            case MILENA_HIR_DATA_JOIN:
+                free(op->as.join.right_source);
+                hir_column_ref_release(&op->as.join.left_key);
+                hir_column_ref_release(&op->as.join.right_key);
+                break;
+            case MILENA_HIR_DATA_SST:
+                free(op->as.sst.name);
+                for (size_t j = 0; j < op->as.sst.column_count; ++j)
+                    hir_column_ref_release(&op->as.sst.columns[j]);
+                free(op->as.sst.columns);
+                break;
+            case MILENA_HIR_DATA_EXPORT:
+                free(op->as.export_result.path);
+                break;
+        }
+    }
+    free(hir->operations);
+    free(hir);
+}
+
+static MilenaHIRColumnRef hir_unresolved_column(const char *name,
+                                                 const ASTNode *node) {
+    MilenaHIRColumnRef ref = {0};
+    ref.name = name ? milena_strdup(name) : NULL;
+    ref.resolved_column_index = SIZE_MAX;
+    ref.type = MILENA_HIR_COLUMN_UNKNOWN;
+    hir_source_span(&ref.span, node);
+    return ref;
+}
+
+static bool hir_append_data_operation(MilenaDataHIR *hir,
+                                     MilenaHIRDataOperation *operation) {
+    if (!hir || !operation || hir->operation_count >= SIZE_MAX / sizeof(*hir->operations))
+        return false;
+    size_t count = hir->operation_count + 1;
+    MilenaHIRDataOperation *grown = (MilenaHIRDataOperation *)realloc(
+        hir->operations, count * sizeof(*grown));
+    if (!grown) return false;
+    hir->operations = grown;
+    hir->operations[hir->operation_count++] = *operation;
+    memset(operation, 0, sizeof(*operation));
+    return true;
+}
+
+static bool hir_parse_product(const char *text, char left[128], char right[128]) {
+    char extra;
+    return text && sscanf(text, " %127s * %127s %c", left, right, &extra) == 2;
+}
+
+static bool hir_parse_filter(const char *text, char column[128],
+                             ASTOperatorKind *operation, double *threshold) {
+    char token[3] = {0}, extra;
+    if (!text || sscanf(text, " %127s %2s %lf %c", column, token,
+                        threshold, &extra) != 3 || !isfinite(*threshold)) return false;
+    if (strcmp(token, "==") == 0) *operation = AST_OPERATOR_EQUAL;
+    else if (strcmp(token, "!=") == 0) *operation = AST_OPERATOR_NOT_EQUAL;
+    else if (strcmp(token, ">") == 0) *operation = AST_OPERATOR_GREATER;
+    else if (strcmp(token, ">=") == 0) *operation = AST_OPERATOR_GREATER_EQUAL;
+    else if (strcmp(token, "<") == 0) *operation = AST_OPERATOR_LESS;
+    else if (strcmp(token, "<=") == 0) *operation = AST_OPERATOR_LESS_EQUAL;
+    else return false;
+    return true;
+}
+
+static char *hir_trim(char *text) {
+    if (!text) return NULL;
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') text++;
+    size_t length = strlen(text);
+    while (length && (text[length - 1] == ' ' || text[length - 1] == '\t' ||
+                      text[length - 1] == '\r' || text[length - 1] == '\n'))
+        text[--length] = '\0';
+    return text;
+}
+
+static bool hir_parse_selection(const char *text, MilenaHIRDataOperation *op,
+                                const ASTNode *span_node) {
+    if (!text || !op) return false;
+    char *copy = milena_strdup(text);
+    if (!copy) return false;
+    size_t count = 1;
+    for (const char *p = text; *p; ++p) if (*p == ',') count++;
+    if (!count || count > 32 || count > SIZE_MAX / sizeof(*op->as.select.columns)) {
+        free(copy);
+        return false;
+    }
+    op->as.select.columns = (MilenaHIRColumnRef *)calloc(
+        count, sizeof(*op->as.select.columns));
+    if (!op->as.select.columns) { free(copy); return false; }
+    char *cursor = copy;
+    for (size_t i = 0; i < count; ++i) {
+        char *comma = strchr(cursor, ',');
+        if (comma) *comma = '\\0';
+        char *name = hir_trim(cursor);
+        if (!name || !*name || strlen(name) >= 128) { free(copy); return false; }
+        for (size_t j = 0; j < i; ++j)
+            if (strcmp(op->as.select.columns[j].name, name) == 0) {
+                free(copy);
+                return false;
+            }
+        op->as.select.columns[i] = hir_unresolved_column(name, span_node);
+        if (!op->as.select.columns[i].name) { free(copy); return false; }
+        op->as.select.count++;
+        if (i + 1 < count && !comma) { free(copy); return false; }
+        if (i + 1 == count && comma) { free(copy); return false; }
+        cursor = comma ? comma + 1 : cursor + strlen(cursor);
+    }
+    free(copy);
+    return true;
+}
+
+static bool hir_append_declared_column(MilenaDataHIR *hir,
+                                       MilenaHIRColumnRef *column) {
+    if (!hir || !column || hir->declared_column_count >=
+        SIZE_MAX / sizeof(*hir->declared_schema)) return false;
+    size_t count = hir->declared_column_count + 1;
+    MilenaHIRColumnRef *grown = (MilenaHIRColumnRef *)realloc(
+        hir->declared_schema, count * sizeof(*grown));
+    if (!grown) return false;
+    hir->declared_schema = grown;
+    hir->declared_schema[hir->declared_column_count++] = *column;
+    memset(column, 0, sizeof(*column));
+    return true;
+}
+
+static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output) {
+    *output = NULL;
+    if (!ast || ast->type != AST_PROGRAMA || ast->child_count != 1 ||
+        !ast->children[0] || ast->children[0]->type != AST_BLOQUE_ANALISIS)
+        return HIR_BUILD_UNSUPPORTED;
+    const ASTNode *analysis = ast->children[0];
+    MilenaDataHIR *hir = (MilenaDataHIR *)calloc(1, sizeof(*hir));
+    if (!hir) return HIR_BUILD_MEMORY;
+    hir_source_span(&hir->source.span, analysis);
+    hir->resource_policy.max_input_rows = SIZE_MAX;
+    hir->resource_policy.max_output_rows = SIZE_MAX;
+    hir->resource_policy.max_columns = SIZE_MAX;
+    const ASTNode *load = NULL;
+    for (size_t i = 0; i < analysis->child_count; ++i) {
+        const ASTNode *node = analysis->children[i];
+        if (!node) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
+        if (node->type == AST_LLAMADA_CARGAR) {
+            if (load || !node->value || (node->type_name &&
+                strcmp(node->type_name, "flujo") == 0)) {
+                data_hir_release(hir);
+                return HIR_BUILD_UNSUPPORTED;
+            }
+            load = node;
+            hir->source.path = milena_strdup(node->value);
+            hir->source.resolved_dataset_id = 1;
+            hir->source.streaming = false;
+            hir->source.chunk_rows = 0;
+            if (node->has_source_span) hir_source_span(&hir->source.span, node);
+            if (!hir->source.path) { data_hir_release(hir); return HIR_BUILD_MEMORY; }
+            continue;
+        }
+        if (node->type == AST_DECLARACION_VARIABLE) {
+            if (!node->value || !node->type_name || node->child_count != 0) {
+                data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+            }
+            MilenaHIRColumnRef declared = hir_unresolved_column(node->value, node);
+            if (strcmp(node->type_name, "numerica") == 0)
+                declared.declared_type = MILENA_HIR_COLUMN_NUMERIC;
+            else if (strcmp(node->type_name, "binaria") == 0 ||
+                     strcmp(node->type_name, "categorica") == 0)
+                declared.declared_type = MILENA_HIR_COLUMN_CATEGORICAL;
+            else if (strcmp(node->type_name, "texto") == 0 ||
+                     strcmp(node->type_name, "fecha") == 0)
+                declared.declared_type = MILENA_HIR_COLUMN_TEXT;
+            else {
+                hir_column_ref_release(&declared);
+                data_hir_release(hir);
+                return HIR_BUILD_UNSUPPORTED;
+            }
+            if (!declared.name) {
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            bool duplicate = false;
+            for (size_t j = 0; j < hir->declared_column_count; ++j)
+                duplicate |= strcmp(hir->declared_schema[j].name,
+                                    declared.name) == 0;
+            if (duplicate || !hir_append_declared_column(hir, &declared)) {
+                hir_column_ref_release(&declared);
+                data_hir_release(hir);
+                return duplicate ? HIR_BUILD_UNSUPPORTED : HIR_BUILD_MEMORY;
+            }
+            continue;
+        }
+        if (node->type == AST_BLOQUE_TRANSFORMAR) {
+            for (size_t j = 0; j < node->child_count; ++j) {
+                const ASTNode *command = node->children[j];
+                if (!command || command->type != AST_COMANDO_TOTAL || !command->value) {
+                    data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+                }
+                char left[128] = {0}, right[128] = {0};
+                if (!hir_parse_product(command->value, left, right)) {
+                    data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+                }
+                MilenaHIRDataOperation op = {0};
+                op.kind = MILENA_HIR_DATA_PRODUCT;
+                hir_source_span(&op.span, command->has_source_span ? command : node);
+                op.as.product.left = hir_unresolved_column(left, command);
+                op.as.product.right = hir_unresolved_column(right, command);
+                op.as.product.output_name = milena_strdup("total");
+                if (!op.as.product.left.name || !op.as.product.right.name ||
+                    !op.as.product.output_name || !hir_append_data_operation(hir, &op)) {
+                    hir_column_ref_release(&op.as.product.left);
+                    hir_column_ref_release(&op.as.product.right);
+                    free(op.as.product.output_name);
+                    data_hir_release(hir);
+                    return HIR_BUILD_MEMORY;
+                }
+            }
+            continue;
+        }
+        if (node->type == AST_BLOQUE_FILTRAR) {
+            if (node->child_count != 1 || !node->children[0] ||
+                node->children[0]->type != AST_COMANDO_CONDICION ||
+                !node->children[0]->value) {
+                data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+            }
+            const ASTNode *condition = node->children[0];
+            char column[128] = {0};
+            MilenaHIRDataOperation op = {0};
+            op.kind = MILENA_HIR_DATA_FILTER_NUMERIC;
+            if (!hir_parse_filter(condition->value, column,
+                                  &op.as.filter.operation,
+                                  &op.as.filter.threshold)) {
+                data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+            }
+            hir_source_span(&op.span, condition->has_source_span ? condition : node);
+            op.as.filter.column = hir_unresolved_column(column, condition);
+            if (!op.as.filter.column.name || !hir_append_data_operation(hir, &op)) {
+                hir_column_ref_release(&op.as.filter.column);
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            continue;
+        }
+        if (node->type == AST_BLOQUE_SELECCIONAR) {
+            if (node->child_count != 1 || !node->children[0] ||
+                node->children[0]->type != AST_COMANDO_COLUMNAS ||
+                !node->children[0]->value) {
+                data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+            }
+            MilenaHIRDataOperation op = {0};
+            op.kind = MILENA_HIR_DATA_SELECT_COLUMNS;
+            hir_source_span(&op.span, node->children[0]->has_source_span ?
+                            node->children[0] : node);
+            if (!hir_parse_selection(node->children[0]->value, &op,
+                                     node->children[0])) {
+                for (size_t j = 0; j < op.as.select.count; ++j)
+                    hir_column_ref_release(&op.as.select.columns[j]);
+                free(op.as.select.columns);
+                data_hir_release(hir);
+                return HIR_BUILD_UNSUPPORTED;
+            }
+            if (!hir_append_data_operation(hir, &op)) {
+                for (size_t j = 0; j < op.as.select.count; ++j)
+                    hir_column_ref_release(&op.as.select.columns[j]);
+                free(op.as.select.columns);
+                data_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+            continue;
+        }
+        if (node->type == AST_BLOQUE_EXPORTAR && node->value) {
+            if (hir->export_path) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
+            hir->export_path = milena_strdup(node->value);
+            if (!hir->export_path) { data_hir_release(hir); return HIR_BUILD_MEMORY; }
+            continue;
+        }
+        data_hir_release(hir);
+        return HIR_BUILD_UNSUPPORTED;
+    }
+    if (!load) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
+    *output = hir;
+    return HIR_BUILD_OK;
+}
+
 void milena_canonical_program_init(MilenaCanonicalProgram *program) {
     if (!program) return;
     program->ast = NULL;
     program->table = NULL;
     program->hir = NULL;
+    program->data_hir = NULL;
 }
 
 void milena_canonical_program_release(MilenaCanonicalProgram *program) {
     if (!program) return;
     scalar_hir_release(program->hir);
     program->hir = NULL;
+    data_hir_release(program->data_hir);
+    program->data_hir = NULL;
     ast_destroy(program->ast);
     program->ast = NULL;
     program->table = NULL;
@@ -470,9 +802,160 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
                         "Sin memoria para construir la HIR escalar canónica");
         return MILENA_ERR_MEMORY;
     }
-    /* Unsupported legacy/data-operation ASTs remain intact and have no HIR. */
+    MilenaDataHIR *data_hir = NULL;
+    HIRBuildResult data_result = data_hir_build(ast, &data_hir);
+    if (data_result == HIR_BUILD_MEMORY) {
+        scalar_hir_release(hir);
+        ast_destroy(ast);
+        canonical_error(error, MILENA_ERR_MEMORY,
+                        "Sin memoria para construir la HIR de datos canónica");
+        return MILENA_ERR_MEMORY;
+    }
+    /* ASTs outside both closed HIR subsets remain compatibility-only. */
     program->ast = ast;
     program->hir = hir;
+    program->data_hir = data_hir;
+    return MILENA_OK;
+}
+
+static void canonical_span_error(MilenaError *error, MilenaStatus code,
+                                 const MilenaHIRSourceSpan *span,
+                                 const char *message) {
+    if (!error) return;
+    milena_error_set(error, code, span && span->has_source_span ? span->line : 0,
+                     span && span->has_source_span ? span->column : 0, 0, message);
+}
+
+static bool hir_numeric_dtype(MilenaDType dtype) {
+    return dtype >= MILENA_DTYPE_INT8 && dtype <= MILENA_DTYPE_FLOAT64;
+}
+
+static bool hir_previous_product(const MilenaDataHIR *hir, size_t before,
+                                 const char *name) {
+    if (!hir || !name) return false;
+    if (before > hir->operation_count) before = hir->operation_count;
+    for (size_t i = 0; i < before; ++i) {
+        const MilenaHIRDataOperation *op = &hir->operations[i];
+        if (op->kind == MILENA_HIR_DATA_PRODUCT && op->as.product.output_name &&
+            strcmp(op->as.product.output_name, name) == 0) return true;
+    }
+    return false;
+}
+
+static MilenaStatus hir_bind_column(const MilenaTable *table,
+                                    const MilenaDataHIR *hir,
+                                    MilenaHIRColumnRef *ref,
+                                    size_t before_operation,
+                                    bool require_numeric,
+                                    MilenaError *error) {
+    if (!table || !hir || !ref || !ref->name) return MILENA_ERR_ARGUMENT;
+    int index = milena_table_column_index(table, ref->name);
+    const MilenaTableColumn *column = index >= 0
+        ? milena_table_column(table, (size_t)index) : NULL;
+    if (!column && hir_previous_product(hir, before_operation, ref->name)) {
+        size_t virtual_index = table->column_count;
+        for (size_t i = 0; i < before_operation; ++i) {
+            const MilenaHIRDataOperation *prior = &hir->operations[i];
+            if (prior->kind != MILENA_HIR_DATA_PRODUCT) continue;
+            if (strcmp(prior->as.product.output_name, ref->name) == 0) break;
+            virtual_index++;
+        }
+        ref->resolved_column_index = virtual_index;
+        ref->type = MILENA_HIR_COLUMN_NUMERIC;
+        ref->dtype = MILENA_DTYPE_FLOAT64;
+        ref->nullable = true;
+        ref->rank = 1;
+        ref->shape[0] = table->row_count;
+        return MILENA_OK;
+    }
+    if (!column) {
+        canonical_span_error(error, MILENA_ERR_TYPE, &ref->span,
+                             "Columna no declarada en la fuente de datos ligada");
+        return MILENA_ERR_TYPE;
+    }
+    ref->resolved_column_index = (size_t)index;
+    ref->nullable = column->nullable;
+    ref->rank = 1;
+    ref->shape[0] = table->row_count;
+    if (column->type == MILENA_COLUMN_ARRAY) {
+        ref->dtype = column->values.dtype;
+        if (column->values.dtype == MILENA_DTYPE_BOOL)
+            ref->type = MILENA_HIR_COLUMN_BOOLEAN;
+        else if (hir_numeric_dtype(column->values.dtype))
+            ref->type = MILENA_HIR_COLUMN_NUMERIC;
+        else
+            ref->type = MILENA_HIR_COLUMN_UNKNOWN;
+    } else if (column->type == MILENA_COLUMN_STRING) {
+        ref->type = MILENA_HIR_COLUMN_TEXT;
+        ref->dtype = MILENA_DTYPE_UINT8;
+    } else {
+        ref->type = MILENA_HIR_COLUMN_CATEGORICAL;
+        ref->dtype = MILENA_DTYPE_UINT32;
+    }
+    if (require_numeric && ref->type != MILENA_HIR_COLUMN_NUMERIC) {
+        canonical_span_error(error, MILENA_ERR_TYPE, &ref->span,
+                             "La operación requiere una columna numérica no booleana");
+        return MILENA_ERR_TYPE;
+    }
+    return MILENA_OK;
+}
+
+static MilenaStatus data_hir_bind_table(MilenaDataHIR *hir,
+                                        const MilenaTable *table,
+                                        MilenaError *error) {
+    if (!hir || !table) return MILENA_ERR_ARGUMENT;
+    size_t output_columns = table->column_count;
+    for (size_t i = 0; i < hir->declared_column_count; ++i) {
+        MilenaHIRColumnRef *declared = &hir->declared_schema[i];
+        if (!declared->span.has_source_span) declared->span = hir->source.span;
+        MilenaStatus status = hir_bind_column(table, hir, declared, 0, false, error);
+        if (status != MILENA_OK) return status;
+        if (declared->type != declared->declared_type) {
+            canonical_span_error(error, MILENA_ERR_TYPE, &declared->span,
+                                 "El tipo declarado no coincide con el tipo enlazado de la columna");
+            return MILENA_ERR_TYPE;
+        }
+    }
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        MilenaHIRDataOperation *op = &hir->operations[i];
+        MilenaStatus status = MILENA_OK;
+        if (!op->span.has_source_span) op->span = hir->source.span;
+        if (op->kind == MILENA_HIR_DATA_PRODUCT) {
+            if (!op->as.product.left.span.has_source_span)
+                op->as.product.left.span = op->span;
+            if (!op->as.product.right.span.has_source_span)
+                op->as.product.right.span = op->span;
+            if (milena_table_column_index(table, op->as.product.output_name) >= 0 ||
+                hir_previous_product(hir, i, op->as.product.output_name)) {
+                canonical_span_error(error, MILENA_ERR_TYPE, &op->span,
+                                     "La columna derivada 'total' ya existe");
+                return MILENA_ERR_TYPE;
+            }
+            status = hir_bind_column(table, hir, &op->as.product.left, i, true, error);
+            if (status == MILENA_OK)
+                status = hir_bind_column(table, hir, &op->as.product.right, i, true, error);
+            if (status != MILENA_OK) return status;
+            if (output_columns == SIZE_MAX) return MILENA_ERR_OVERFLOW;
+            output_columns++;
+        } else if (op->kind == MILENA_HIR_DATA_FILTER_NUMERIC) {
+            if (!op->as.filter.column.span.has_source_span)
+                op->as.filter.column.span = op->span;
+            status = hir_bind_column(table, hir, &op->as.filter.column, i, true, error);
+            if (status != MILENA_OK) return status;
+        } else if (op->kind == MILENA_HIR_DATA_SELECT_COLUMNS) {
+            for (size_t j = 0; j < op->as.select.count; ++j) {
+                if (!op->as.select.columns[j].span.has_source_span)
+                    op->as.select.columns[j].span = op->span;
+                status = hir_bind_column(table, hir, &op->as.select.columns[j], i,
+                                         false, error);
+                if (status != MILENA_OK) return status;
+            }
+        }
+    }
+    hir->resource_policy.max_input_rows = table->row_count;
+    hir->resource_policy.max_output_rows = table->row_count;
+    hir->resource_policy.max_columns = output_columns;
+    hir->schema_bound = true;
     return MILENA_OK;
 }
 
@@ -499,8 +982,139 @@ MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program
         status = milena_validate_sst_table(analysis, table, error);
         if (status != MILENA_OK) return status;
     }
+    if (program->data_hir) {
+        program->data_hir->schema_bound = false;
+        status = data_hir_bind_table(program->data_hir, table, error);
+        if (status != MILENA_OK) return status;
+    }
     program->table = table;
     return MILENA_OK;
+}
+
+static const char *hir_operator_text(ASTOperatorKind operation) {
+    switch (operation) {
+        case AST_OPERATOR_EQUAL: return "==";
+        case AST_OPERATOR_NOT_EQUAL: return "!=";
+        case AST_OPERATOR_GREATER: return ">";
+        case AST_OPERATOR_GREATER_EQUAL: return ">=";
+        case AST_OPERATOR_LESS: return "<";
+        case AST_OPERATOR_LESS_EQUAL: return "<=";
+        default: return NULL;
+    }
+}
+
+static void hir_attach_error_span(MilenaError *error,
+                                 const MilenaHIRSourceSpan *span) {
+    if (!error || error->code == MILENA_OK || error->line != 0 ||
+        !span || !span->has_source_span) return;
+    error->line = span->line;
+    error->column = span->column;
+}
+
+MilenaStatus milena_canonical_program_execute_data(
+    const MilenaCanonicalProgram *program,
+    const MilenaHIRResourcePolicy *policy,
+    MilenaTable *output,
+    MilenaError *error) {
+    if (error) milena_error_clear(error);
+    if (!program || !program->data_hir || !program->data_hir->schema_bound ||
+        !program->table || !output) {
+        canonical_error(error, MILENA_ERR_ARGUMENT,
+                        "La ejecución de datos HIR requiere HIR ligada, tabla y salida inicializada");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (output == program->table) {
+        canonical_error(error, MILENA_ERR_ARGUMENT,
+                        "La salida no puede aliasar la tabla prestada de entrada");
+        return MILENA_ERR_ARGUMENT;
+    }
+    const MilenaHIRResourcePolicy *limits = policy ? policy :
+        &program->data_hir->resource_policy;
+    const MilenaTable *input = program->table;
+    if (input->row_count > limits->max_input_rows ||
+        input->column_count > limits->max_columns) {
+        canonical_error(error, MILENA_ERR_OVERFLOW,
+                        "La tabla ligada excede la política de recursos HIR");
+        return MILENA_ERR_OVERFLOW;
+    }
+    MilenaTable working = {0};
+    milena_table_init(&working);
+    MilenaStatus status = milena_table_clone(&working, input, error);
+    for (size_t i = 0; status == MILENA_OK &&
+         i < program->data_hir->operation_count; ++i) {
+        const MilenaHIRDataOperation *op = &program->data_hir->operations[i];
+        if (op->kind == MILENA_HIR_DATA_PRODUCT) {
+            if (working.column_count >= limits->max_columns) {
+                canonical_span_error(error, MILENA_ERR_OVERFLOW, &op->span,
+                                     "La transformación excede el límite de columnas HIR");
+                status = MILENA_ERR_OVERFLOW;
+            } else {
+                status = milena_table_add_product(&working,
+                    op->as.product.left.name, op->as.product.right.name,
+                    op->as.product.output_name, error);
+            }
+        } else if (op->kind == MILENA_HIR_DATA_FILTER_NUMERIC) {
+            const char *operator_text = hir_operator_text(op->as.filter.operation);
+            MilenaTable filtered = {0};
+            milena_table_init(&filtered);
+            if (!operator_text) {
+                status = MILENA_ERR_UNSUPPORTED;
+                canonical_span_error(error, status, &op->span,
+                                     "Operador de filtro no representado por HIR");
+            } else {
+                status = milena_table_filter_numeric(&filtered, &working,
+                    op->as.filter.column.name, operator_text,
+                    op->as.filter.threshold, error);
+            }
+            if (status == MILENA_OK) milena_table_swap(&working, &filtered);
+            milena_table_destroy(&filtered);
+        } else if (op->kind == MILENA_HIR_DATA_SELECT_COLUMNS) {
+            size_t count = op->as.select.count;
+            const char **names = count ? (const char **)calloc(count, sizeof(*names)) : NULL;
+            if (count && !names) {
+                status = MILENA_ERR_MEMORY;
+                canonical_span_error(error, status, &op->span,
+                                     "Sin memoria para proyectar columnas HIR");
+            } else {
+                for (size_t j = 0; j < count; ++j)
+                    names[j] = op->as.select.columns[j].name;
+                MilenaTable selected = {0};
+                milena_table_init(&selected);
+                status = milena_table_select_columns(&selected, &working, names,
+                                                      count, error);
+                if (status == MILENA_OK) milena_table_swap(&working, &selected);
+                milena_table_destroy(&selected);
+                free(names);
+            }
+        } else {
+            status = MILENA_ERR_UNSUPPORTED;
+            canonical_span_error(error, status, &op->span,
+                                 "Operación de datos no está en el subconjunto HIR ejecutable");
+        }
+        if (status == MILENA_OK && working.row_count > limits->max_output_rows) {
+            canonical_span_error(error, MILENA_ERR_OVERFLOW, &op->span,
+                                 "La operación excede el límite de filas HIR");
+            status = MILENA_ERR_OVERFLOW;
+        }
+        if (status == MILENA_OK && working.column_count > limits->max_columns) {
+            canonical_span_error(error, MILENA_ERR_OVERFLOW, &op->span,
+                                 "La operación excede el límite de columnas HIR");
+            status = MILENA_ERR_OVERFLOW;
+        }
+        if (status != MILENA_OK) hir_attach_error_span(error, &op->span);
+    }
+    if (status == MILENA_OK &&
+        (working.row_count > limits->max_output_rows ||
+         working.column_count > limits->max_columns)) {
+        canonical_error(error, MILENA_ERR_OVERFLOW,
+                        "La salida excede la política de recursos HIR");
+        status = MILENA_ERR_OVERFLOW;
+    }
+    if (status == MILENA_OK) {
+        milena_table_swap(output, &working);
+    }
+    milena_table_destroy(&working);
+    return status;
 }
 
 MilenaStatus milena_canonical_compatibility_input(
@@ -511,6 +1125,7 @@ MilenaStatus milena_canonical_compatibility_input(
         input->ast = NULL;
         input->table = NULL;
         input->hir = NULL;
+        input->data_hir = NULL;
     }
     if (error) milena_error_clear(error);
     if (!program || !program->ast || !input) {
@@ -521,6 +1136,7 @@ MilenaStatus milena_canonical_compatibility_input(
     input->ast = program->ast;
     input->table = program->table;
     input->hir = program->hir;
+    input->data_hir = program->data_hir;
     return MILENA_OK;
 }
 
@@ -558,6 +1174,37 @@ static const ASTNode *hir_first_unsupported_node(const ASTNode *node) {
     return NULL;
 }
 
+static bool hir_supports_data_ast_node(const ASTNode *node) {
+    if (!node) return false;
+    switch (node->type) {
+        case AST_PROGRAMA:
+        case AST_BLOQUE_ANALISIS:
+        case AST_LLAMADA_CARGAR:
+        case AST_DECLARACION_VARIABLE:
+        case AST_BLOQUE_TRANSFORMAR:
+        case AST_COMANDO_TOTAL:
+        case AST_BLOQUE_FILTRAR:
+        case AST_COMANDO_CONDICION:
+        case AST_BLOQUE_SELECCIONAR:
+        case AST_COMANDO_COLUMNAS:
+        case AST_BLOQUE_EXPORTAR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static const ASTNode *hir_first_unsupported_data_node(const ASTNode *node) {
+    if (!node) return NULL;
+    if (!hir_supports_data_ast_node(node)) return node;
+    for (size_t i = 0; i < node->child_count; ++i) {
+        const ASTNode *unsupported =
+            hir_first_unsupported_data_node(node->children[i]);
+        if (unsupported) return unsupported;
+    }
+    return NULL;
+}
+
 MilenaStatus milena_canonical_hir_input(
     const MilenaCanonicalProgram *program,
     MilenaCanonicalCompilerInput *input,
@@ -566,6 +1213,7 @@ MilenaStatus milena_canonical_hir_input(
         input->ast = NULL;
         input->table = NULL;
         input->hir = NULL;
+        input->data_hir = NULL;
     }
     if (error) milena_error_clear(error);
     if (!program || !program->ast || !input) {
@@ -573,8 +1221,20 @@ MilenaStatus milena_canonical_hir_input(
                         "La entrada HIR del compilador canónico es inválida");
         return MILENA_ERR_ARGUMENT;
     }
-    if (!program->hir) {
-        const ASTNode *unsupported = hir_first_unsupported_node(program->ast);
+    if (program->data_hir && !program->data_hir->schema_bound) {
+        canonical_error(error, MILENA_ERR_DATA,
+                        "La HIR de datos requiere enlace de esquema antes del consumo");
+        return MILENA_ERR_DATA;
+    }
+    if (!program->hir && !program->data_hir) {
+        const ASTNode *unsupported = NULL;
+        if (program->ast->child_count == 1 && program->ast->children[0] &&
+            program->ast->children[0]->type == AST_BLOQUE_ANALISIS) {
+            unsupported = hir_first_unsupported_data_node(program->ast);
+            if (!unsupported) unsupported = program->ast->children[0];
+        } else {
+            unsupported = hir_first_unsupported_node(program->ast);
+        }
         if (!unsupported) unsupported = program->ast;
         char message[MILENA_ERROR_TEXT];
         (void)snprintf(message, sizeof(message),

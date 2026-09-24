@@ -16,6 +16,7 @@
 #include "sst_contingency.h"
 #include "sst_model.h"
 #include "language_semantic.h"
+#include "canonical_compiler.h"
 #include "finance.h"
 #include "ast.h"
 #include "lexer.h"
@@ -1670,8 +1671,16 @@ MilenaStatus milena_run_dataset_program(const char *source,
     }
 
     char input[2048];
-    MilenaStatus status = dataset_runtime_path(load->value, script_filename, false,
-                                               input, sizeof(input), error);
+    MilenaCanonicalProgram source_program;
+    milena_canonical_program_init(&source_program);
+    MilenaStatus status = milena_canonical_program_parse(&source_program, source, error);
+    const char *source_path = load->value;
+    if (status == MILENA_OK && source_program.data_hir)
+        source_path = source_program.data_hir->source.path;
+    if (status == MILENA_OK)
+        status = dataset_runtime_path(source_path, script_filename, false,
+                                      input, sizeof(input), error);
+    milena_canonical_program_release(&source_program);
     if (status != MILENA_OK) {
         ast_destroy(program);
         parser_release(&parser);
@@ -1788,7 +1797,50 @@ MilenaStatus milena_run_dataset_program(const char *source,
         status = milena_table_from_dataset(&canonical_table, &runtime.dataset,
                                            &schema, error);
     }
+    bool data_hir_executed = false;
     if (status == MILENA_OK) {
+        /* The closed HIR subset is the actual runtime consumer for products,
+         * numeric filters and projections. Unsupported programs continue only
+         * through this explicitly legacy AST interpreter path. */
+        MilenaCanonicalProgram canonical_program;
+        milena_canonical_program_init(&canonical_program);
+        status = milena_canonical_program_parse(&canonical_program, source, error);
+        if (status == MILENA_OK && canonical_program.data_hir) {
+            if (canonical_program.data_hir->export_path)
+                status = dataset_runtime_path(
+                    canonical_program.data_hir->export_path, script_filename, true,
+                    output_path, sizeof(output_path), error);
+            if (status == MILENA_OK)
+                status = milena_canonical_program_bind_table(&canonical_program,
+                                                             &canonical_table, error);
+            MilenaCanonicalCompilerInput compiler_input = {0};
+            if (status == MILENA_OK)
+                status = milena_canonical_compiler_input(&canonical_program,
+                                                         &compiler_input, error);
+            MilenaTable executed = {0};
+            milena_table_init(&executed);
+            if (status == MILENA_OK)
+                status = milena_canonical_program_execute_data(&canonical_program,
+                                                               NULL, &executed, error);
+            if (status == MILENA_OK) {
+                milena_table_swap(&canonical_table, &executed);
+                for (size_t i = 0; i < canonical_program.data_hir->operation_count; ++i) {
+                    const MilenaHIRDataOperation *op =
+                        &canonical_program.data_hir->operations[i];
+                    if (op->kind == MILENA_HIR_DATA_PRODUCT) {
+                        status = schema_add(&schema, op->as.product.output_name,
+                                            MILENA_VAR_NUMERIC,
+                                            MILENA_ROLE_FEATURE, error);
+                        if (status != MILENA_OK) break;
+                    }
+                }
+                data_hir_executed = status == MILENA_OK;
+            }
+            milena_table_destroy(&executed);
+        }
+        milena_canonical_program_release(&canonical_program);
+    }
+    if (status == MILENA_OK && !data_hir_executed) {
         for (size_t i = 0; i < analysis->child_count; i++) {
             const ASTNode *block = analysis->children[i];
             if (!block) continue;

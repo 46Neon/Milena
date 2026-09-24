@@ -221,6 +221,37 @@ static int run_dataset_pipeline(void) {
     return 0;
 }
 
+static int run_typed_data_hir_runtime(void) {
+    const char *csv = "test-hir-data-runtime.csv";
+    const char *report = "test-hir-data-runtime.json";
+    const char *content = "id,precio,cantidad\n1,2,3\n2,5,2\n3,4,1\n";
+    CHECK(write_file(csv, content), "HIR runtime: no se pudo escribir el CSV de entrada");
+    const char *source =
+        ".analisis ventas {\n"
+        " variable id numerica\n"
+        " variable precio numerica\n"
+        " variable cantidad numerica\n"
+        " dataset cargar datos(\"test-hir-data-runtime.csv\")\n"
+        " .transformar dataset { #total(\"precio * cantidad\") }\n"
+        " .filtrar { #condicion(\"total >= 10\") }\n"
+        " .seleccionar { #columnas(\"id,total\") }\n"
+        " .exportar { (\"test-hir-data-runtime.json\") }\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(source, "test-hir-data-runtime.milena",
+                                     NULL, &error) == MILENA_OK,
+          error.message);
+    char text[4096];
+    CHECK(read_file(report, text, sizeof(text)), "HIR runtime: no se publicó el reporte");
+    CHECK(strstr(text, "\"filas\": 1") != NULL &&
+          strstr(text, "total") != NULL && strstr(text, "precio") == NULL,
+          "HIR runtime: la ruta canónica no ejecutó producto/filtro/proyección antes de exportar");
+    remove(csv);
+    remove(report);
+    return 0;
+}
+
 static int run_inference_pipeline(void) {
     const char *csv = "test-language-runtime-inference-data.csv";
     const char *output = "test-language-runtime-inference-data.json";
@@ -482,6 +513,7 @@ static int run_int64_grouped_spill_adapter(void) {
 int main(void) {
     CHECK(run_arrays() == 0, "falló la fase de arrays");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
+    CHECK(run_typed_data_hir_runtime() == 0, "falló la fase de HIR de datos");
     CHECK(run_inference_pipeline() == 0, "falló la fase de inferencia");
     CHECK(run_summary_pipeline() == 0, "falló la fase de resumen");
     CHECK(run_stream_pipeline() == 0, "falló la fase de flujo");

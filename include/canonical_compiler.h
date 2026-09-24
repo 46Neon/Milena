@@ -18,12 +18,10 @@ extern "C" {
  * remains owned by the caller.
  */
 /*
- * Owned typed HIR for the canonical scalar-function subset only.  The current
- * HIR is intentionally unavailable for analysis/data-operation programs; those
- * continue to use the validated AST until their typed data-operation HIR and
- * column bindings are implemented.  All text and child storage in this HIR is
- * independently owned, and every node carries the originating AST binding ID
- * and source span.
+ * Owned typed HIRs for the validated scalar-function subset and the closed
+ * table subset documented below. HIR storage owns names, children and operation
+ * vectors; input tables remain borrowed. Data column references retain resolved
+ * schema identity/type/nullability/shape and source spans when available.
  */
 typedef enum {
     MILENA_HIR_NUMBER,
@@ -111,16 +109,104 @@ typedef struct {
     size_t statement_count;
 } MilenaScalarHIR;
 
+/* Typed table/data HIR. The first executable subset is deliberately closed:
+ * one caller-bound dataset source, numeric product, numeric predicate,
+ * column projection, and a borrowed-output export boundary. */
+typedef enum {
+    MILENA_HIR_COLUMN_UNKNOWN,
+    MILENA_HIR_COLUMN_NUMERIC,
+    MILENA_HIR_COLUMN_BOOLEAN,
+    MILENA_HIR_COLUMN_TEXT,
+    MILENA_HIR_COLUMN_CATEGORICAL
+} MilenaHIRColumnType;
+
+typedef struct {
+    char *name;
+    size_t resolved_column_index;
+    MilenaHIRColumnType type;
+    MilenaHIRColumnType declared_type;
+    MilenaDType dtype;
+    bool nullable;
+    size_t rank;
+    size_t shape[1];
+    MilenaHIRSourceSpan span;
+} MilenaHIRColumnRef;
+
+typedef struct {
+    size_t max_input_rows;
+    size_t max_output_rows;
+    size_t max_columns;
+} MilenaHIRResourcePolicy;
+
+typedef struct {
+    char *path;
+    size_t resolved_dataset_id;
+    bool streaming;
+    size_t chunk_rows;
+    size_t max_rows;
+    size_t max_columns;
+    size_t max_record_bytes;
+    double max_elapsed_milliseconds;
+    MilenaHIRSourceSpan span;
+} MilenaHIRDatasetSource;
+
+typedef struct {
+    MilenaHIRColumnRef input;
+    MilenaAggregateOp operation;
+    char *output_name;
+    double percentile;
+    MilenaHIRSourceSpan span;
+} MilenaHIRAggregate;
+
+typedef enum {
+    MILENA_HIR_DATA_PRODUCT,
+    MILENA_HIR_DATA_FILTER_NUMERIC,
+    MILENA_HIR_DATA_SELECT_COLUMNS,
+    MILENA_HIR_DATA_GROUP,
+    MILENA_HIR_DATA_SUMMARIZE,
+    MILENA_HIR_DATA_JOIN,
+    MILENA_HIR_DATA_SST,
+    MILENA_HIR_DATA_EXPORT
+} MilenaHIRDataOperationKind;
+
+typedef struct {
+    MilenaHIRDataOperationKind kind;
+    MilenaHIRSourceSpan span;
+    union {
+        struct { MilenaHIRColumnRef left, right; char *output_name; } product;
+        struct { MilenaHIRColumnRef column; ASTOperatorKind operation; double threshold; } filter;
+        struct { MilenaHIRColumnRef *columns; size_t count; } select;
+        struct { MilenaHIRColumnRef key; MilenaHIRAggregate *aggregates; size_t aggregate_count; MilenaHIRResourcePolicy policy; } group;
+        struct { MilenaHIRAggregate *aggregates; size_t aggregate_count; } summarize;
+        struct { char *right_source; MilenaHIRColumnRef left_key, right_key; MilenaJoinType join_type; MilenaHIRResourcePolicy policy; } join;
+        struct { char *name; MilenaHIRColumnRef *columns; size_t column_count; } sst;
+        struct { char *path; } export_result;
+    } as;
+} MilenaHIRDataOperation;
+
+typedef struct {
+    MilenaHIRDatasetSource source;
+    MilenaHIRColumnRef *declared_schema;
+    size_t declared_column_count;
+    MilenaHIRDataOperation *operations;
+    size_t operation_count;
+    char *export_path;
+    MilenaHIRResourcePolicy resource_policy;
+    bool schema_bound;
+} MilenaDataHIR;
+
 typedef struct {
     const ASTNode *ast;
     const MilenaTable *table;
-    const MilenaScalarHIR *hir; /* NULL when this AST is outside scalar HIR. */
+    const MilenaScalarHIR *hir;
+    const MilenaDataHIR *data_hir; /* NULL outside the typed data subset. */
 } MilenaCanonicalCompilerInput;
 
 typedef struct {
     ASTNode *ast;
     const MilenaTable *table;
-    MilenaScalarHIR *hir; /* Owned; present only for the scalar subset above. */
+    MilenaScalarHIR *hir; /* Owned scalar HIR, when the scalar subset applies. */
+    MilenaDataHIR *data_hir; /* Owned data HIR, when the table subset applies. */
 } MilenaCanonicalProgram;
 
 void milena_canonical_program_init(MilenaCanonicalProgram *program);
@@ -135,6 +221,15 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
 MilenaStatus milena_canonical_program_bind_table(MilenaCanonicalProgram *program,
                                                  const MilenaTable *table,
                                                  MilenaError *error);
+
+/* Execute the supported typed data-HIR subset against the borrowed bound table.
+ * `output` is replaced transactionally on success and left unchanged on error.
+ * A NULL policy uses safe bounds derived from the input table dimensions. */
+MilenaStatus milena_canonical_program_execute_data(
+    const MilenaCanonicalProgram *program,
+    const MilenaHIRResourcePolicy *policy,
+    MilenaTable *output,
+    MilenaError *error);
 
 /* Default compiler boundary. This is fail-closed: a backend cannot receive an
  * AST-only program as if it were compilable. */
