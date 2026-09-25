@@ -84,7 +84,7 @@ entre ejecuciones. El workflow manual exige `confirm_device=true`.
 
 Un contenedor Debian, WSL, Ubuntu hosted runner o emulador no demuestra Termux,
 Bionic ni aarch64: solo puede ejecutar las pruebas estáticas y la fixture de
-metadatos (`python3 scripts/test_termux_packaging.py`). Si no existe hardware
+metadatos (`make test-termux-packaging`). Si no existe hardware
 registrado, esa limitación debe permanecer visible y no se genera una falsa
 marca de compilación/instalación.
 
