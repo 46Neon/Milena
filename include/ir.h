@@ -69,6 +69,19 @@ typedef struct IRBasicBlock {
     bool terminated;
 } IRBasicBlock;
 
+typedef struct IRBlockParameter {
+    uint32_t block_id;
+    uint32_t value_id;
+    IRType type;
+} IRBlockParameter;
+
+typedef struct IREdgeArgument {
+    uint32_t source_block_id;
+    uint32_t target_block_id;
+    uint32_t parameter_index;
+    uint32_t value_id;
+} IREdgeArgument;
+
 typedef struct IRProgram {
     IRInstruction *instructions;
     size_t count;
@@ -77,6 +90,12 @@ typedef struct IRProgram {
     IRBasicBlock *blocks;
     size_t block_count;
     size_t block_capacity;
+    IRBlockParameter *parameters;
+    size_t parameter_count;
+    size_t parameter_capacity;
+    IREdgeArgument *edge_arguments;
+    size_t edge_argument_count;
+    size_t edge_argument_capacity;
 } IRProgram;
 
 IRProgram* ir_program_create(void);
@@ -88,8 +107,18 @@ bool ir_generate(IRProgram *program, ASTNode *ast);
 
 /* Incremental typed portable IR construction API. Blocks are appended in
  * layout order; each block must end in exactly one terminator before another
- * block can be opened. Validation deliberately rejects legacy string opcodes. */
+ * block can be opened. Block parameters and explicit edge arguments provide
+ * SSA-style value flow. Validation rejects legacy string opcodes and checks
+ * CFG reachability, dominance, and edge argument arity/types. */
 bool ir_program_add_block(IRProgram *program, uint32_t block_id);
+/* Parameters are added while the target block is open, before its first
+ * instruction. Every incoming CFG edge must supply one typed argument per
+ * parameter, in parameter-index order. */
+bool ir_program_add_block_parameter(IRProgram *program, uint32_t block_id,
+                                    uint32_t value_id, IRType type);
+bool ir_block_add_edge_argument(IRProgram *program, uint32_t source_block_id,
+                                uint32_t target_block_id, uint32_t parameter_index,
+                                uint32_t value_id);
 bool ir_block_append_instruction(IRProgram *program, uint32_t block_id,
                                  IROpCode opcode, uint32_t result_id,
                                  IRType result_type, uint32_t operand1_id,

@@ -39,6 +39,8 @@ void ir_program_destroy(IRProgram *program) {
     
     free(program->instructions);
     free(program->blocks);
+    free(program->parameters);
+    free(program->edge_arguments);
     free(program);
 }
 
@@ -280,6 +282,57 @@ bool ir_program_add_block(IRProgram *program, uint32_t block_id) {
     return true;
 }
 
+bool ir_program_add_block_parameter(IRProgram *program, uint32_t block_id,
+                                    uint32_t value_id, IRType type) {
+    IRBlockParameter *grown;
+    size_t capacity;
+    IRBasicBlock *block;
+    if (!program || program->block_count == 0 || value_id == 0 ||
+        type <= IR_TYPE_INVALID || type >= IR_TYPE_VOID) return false;
+    block = &program->blocks[program->block_count - 1];
+    if (block->id != block_id || block->instruction_count != 0 || block->terminated)
+        return false;
+    for (size_t i = 0; i < program->parameter_count; ++i)
+        if (program->parameters[i].block_id == block_id &&
+            program->parameters[i].value_id == value_id) return false;
+    if (program->parameter_count == program->parameter_capacity) {
+        capacity = program->parameter_capacity == 0 ? 4 : program->parameter_capacity * 2;
+        if (capacity < program->parameter_capacity ||
+            capacity > SIZE_MAX / sizeof(*grown)) return false;
+        grown = (IRBlockParameter *)realloc(program->parameters,
+                                             capacity * sizeof(*grown));
+        if (!grown) return false;
+        program->parameters = grown;
+        program->parameter_capacity = capacity;
+    }
+    program->parameters[program->parameter_count++] =
+        (IRBlockParameter){block_id, value_id, type};
+    return true;
+}
+
+bool ir_block_add_edge_argument(IRProgram *program, uint32_t source_block_id,
+                                uint32_t target_block_id, uint32_t parameter_index,
+                                uint32_t value_id) {
+    IREdgeArgument *grown;
+    size_t capacity;
+    if (!program || source_block_id == 0 || target_block_id == 0 || value_id == 0)
+        return false;
+    if (program->edge_argument_count == program->edge_argument_capacity) {
+        capacity = program->edge_argument_capacity == 0 ? 8 :
+                   program->edge_argument_capacity * 2;
+        if (capacity < program->edge_argument_capacity ||
+            capacity > SIZE_MAX / sizeof(*grown)) return false;
+        grown = (IREdgeArgument *)realloc(program->edge_arguments,
+                                           capacity * sizeof(*grown));
+        if (!grown) return false;
+        program->edge_arguments = grown;
+        program->edge_argument_capacity = capacity;
+    }
+    program->edge_arguments[program->edge_argument_count++] =
+        (IREdgeArgument){source_block_id, target_block_id, parameter_index, value_id};
+    return true;
+}
+
 bool ir_block_append_instruction(IRProgram *program, uint32_t block_id,
                                  IROpCode opcode, uint32_t result_id,
                                  IRType result_type, uint32_t operand1_id,
@@ -319,181 +372,391 @@ bool ir_block_append_instruction(IRProgram *program, uint32_t block_id,
 typedef struct {
     uint32_t id;
     IRType type;
-    uint32_t block_id;
+    size_t block_index;
+    size_t instruction_index;
+    bool parameter;
 } IRValidatedValue;
 
 static const IRValidatedValue *ir_find_value(const IRValidatedValue *values,
                                               size_t count, uint32_t id) {
-    for (size_t i = 0; i < count; ++i) {
+    for (size_t i = 0; i < count; ++i)
         if (values[i].id == id) return &values[i];
+    return NULL;
+}
+
+static size_t ir_find_block_index(const IRProgram *program, uint32_t id) {
+    for (size_t i = 0; i < program->block_count; ++i)
+        if (program->blocks[i].id == id) return i;
+    return SIZE_MAX;
+}
+
+static const IRBlockParameter *ir_nth_parameter(const IRProgram *program,
+                                                 uint32_t block_id,
+                                                 uint32_t index) {
+    uint32_t seen = 0;
+    for (size_t i = 0; i < program->parameter_count; ++i) {
+        if (program->parameters[i].block_id == block_id) {
+            if (seen == index) return &program->parameters[i];
+            ++seen;
+        }
     }
     return NULL;
 }
 
-static bool ir_use_has_type(const IRValidatedValue *values, size_t value_count,
-                            uint32_t id, uint32_t block_id, IRType type,
-                            char *error, size_t error_capacity) {
+static bool ir_add_validated_value(IRValidatedValue *values, size_t *count,
+                                   size_t capacity, uint32_t id, IRType type,
+                                   size_t block_index, size_t instruction_index,
+                                   bool parameter, char *error,
+                                   size_t error_capacity) {
+    if (id == 0 || type <= IR_TYPE_INVALID || type >= IR_TYPE_VOID ||
+        *count >= capacity)
+        return ir_fail(error, error_capacity, "value has invalid id or type");
+    if (ir_find_value(values, *count, id))
+        return ir_fail(error, error_capacity, "duplicate IR value id %u", id);
+    values[*count] = (IRValidatedValue){id, type, block_index,
+                                         instruction_index, parameter};
+    ++*count;
+    return true;
+}
+
+static bool ir_use_is_valid(const IRValidatedValue *values, size_t value_count,
+                            uint32_t id, IRType expected_type, size_t use_block,
+                            size_t use_instruction, size_t block_count,
+                            const unsigned char *dominators, char *error,
+                            size_t error_capacity) {
     const IRValidatedValue *value = ir_find_value(values, value_count, id);
-    if (!value) return ir_fail(error, error_capacity, "undefined IR value %u", id);
-    if (value->block_id != block_id)
-        return ir_fail(error, error_capacity, "IR value %u is not defined in block %u", id, block_id);
-    if (value->type != type)
+    if (!value)
+        return ir_fail(error, error_capacity, "undefined IR value %u", id);
+    if (value->type != expected_type)
         return ir_fail(error, error_capacity, "IR value %u has wrong type", id);
-    return true;
-}
-
-static bool ir_define_value(IRValidatedValue *values, size_t *value_count,
-                            size_t value_capacity, const IRInstruction *instruction,
-                            char *error, size_t error_capacity) {
-    if (instruction->result_id == 0 || instruction->result_type == IR_TYPE_INVALID ||
-        instruction->result_type == IR_TYPE_VOID)
-        return ir_fail(error, error_capacity, "value-producing opcode has invalid result metadata");
-    if (*value_count >= value_capacity || ir_find_value(values, *value_count, instruction->result_id))
-        return ir_fail(error, error_capacity, "duplicate or excessive IR value id %u", instruction->result_id);
-    values[*value_count].id = instruction->result_id;
-    values[*value_count].type = instruction->result_type;
-    values[*value_count].block_id = instruction->block_id;
-    (*value_count)++;
-    return true;
-}
-
-static bool ir_target_exists(const IRProgram *program, uint32_t target) {
-    for (size_t i = 0; i < program->block_count; ++i) {
-        if (program->blocks[i].id == target) return true;
+    if (value->block_index == use_block) {
+        if (!value->parameter && value->instruction_index >= use_instruction)
+            return ir_fail(error, error_capacity,
+                           "IR value %u is used before its definition", id);
+    } else if (!dominators[use_block * block_count + value->block_index]) {
+        return ir_fail(error, error_capacity,
+                       "IR value %u does not dominate its use", id);
     }
-    return false;
+    return true;
 }
 
 bool ir_program_validate(const IRProgram *program, char *error,
                          size_t error_capacity) {
-    IRValidatedValue *values;
+    IRValidatedValue *values = NULL;
+    unsigned char *reachable = NULL;
+    unsigned char *dominators = NULL;
+    size_t *queue = NULL;
     size_t value_count = 0;
+    size_t value_capacity;
     size_t expected_first = 0;
+    size_t n;
+    bool changed;
     if (error && error_capacity > 0) error[0] = '\0';
     if (!program || !program->instructions || !program->blocks ||
-        program->count == 0 || program->block_count == 0)
-        return ir_fail(error, error_capacity, "typed IR must contain instructions and blocks");
-    values = (IRValidatedValue *)calloc(program->count, sizeof(*values));
-    if (!values) return ir_fail(error, error_capacity, "out of memory validating IR");
+        program->count == 0 || program->block_count == 0 ||
+        (program->parameter_count && !program->parameters) ||
+        (program->edge_argument_count && !program->edge_arguments))
+        return ir_fail(error, error_capacity,
+                       "typed IR must contain valid instructions and blocks");
+    n = program->block_count;
+    if (program->parameter_count > SIZE_MAX - program->count)
+        return ir_fail(error, error_capacity, "too many typed IR values");
+    value_capacity = program->parameter_count + program->count;
+    if (n > SIZE_MAX / n)
+        return ir_fail(error, error_capacity, "CFG is too large to validate");
+    values = (IRValidatedValue *)calloc(value_capacity, sizeof(*values));
+    reachable = (unsigned char *)calloc(n, sizeof(*reachable));
+    queue = (size_t *)calloc(n, sizeof(*queue));
+    dominators = (unsigned char *)calloc(n * n, sizeof(*dominators));
+    if (!values || !reachable || !queue || !dominators) {
+        free(values); free(reachable); free(queue); free(dominators);
+        return ir_fail(error, error_capacity, "out of memory validating IR");
+    }
+#define IR_REJECT(...) do { \
+    free(values); free(reachable); free(queue); free(dominators); \
+    return ir_fail(error, error_capacity, __VA_ARGS__); \
+} while (0)
 
-    for (size_t bi = 0; bi < program->block_count; ++bi) {
+    for (size_t bi = 0; bi < n; ++bi) {
         const IRBasicBlock *block = &program->blocks[bi];
         size_t end;
         if (block->id == 0 || block->first_instruction != expected_first ||
-            block->instruction_count == 0 || block->instruction_count > program->count - expected_first ||
-            !block->terminated) {
-            free(values);
-            return ir_fail(error, error_capacity, "invalid or unterminated IR block at index %zu", bi);
-        }
+            expected_first > program->count || block->instruction_count == 0 ||
+            block->instruction_count > program->count - expected_first ||
+            !block->terminated)
+            IR_REJECT("invalid or unterminated IR block at index %zu", bi);
         end = block->first_instruction + block->instruction_count;
-        for (size_t prior = 0; prior < bi; ++prior) {
-            if (program->blocks[prior].id == block->id) {
-                free(values);
-                return ir_fail(error, error_capacity, "duplicate IR block id %u", block->id);
-            }
+        for (size_t prior = 0; prior < bi; ++prior)
+            if (program->blocks[prior].id == block->id)
+                IR_REJECT("duplicate IR block id %u", block->id);
+        expected_first = end;
+    }
+    if (expected_first != program->count)
+        IR_REJECT("instructions are not assigned to a basic block");
+
+    /* Block parameters are definitions at block entry, just like phi values. */
+    for (size_t pi = 0; pi < program->parameter_count; ++pi) {
+        const IRBlockParameter *parameter = &program->parameters[pi];
+        size_t bi = ir_find_block_index(program, parameter->block_id);
+        if (bi == SIZE_MAX || parameter->type <= IR_TYPE_INVALID ||
+            parameter->type >= IR_TYPE_VOID)
+            IR_REJECT("invalid block parameter at index %zu", pi);
+        if (bi == 0)
+            IR_REJECT("entry block parameters require function-signature support");
+        if (!ir_add_validated_value(values, &value_count, value_capacity,
+                                    parameter->value_id, parameter->type, bi, 0,
+                                    true, error, error_capacity)) {
+            free(values); free(reachable); free(queue); free(dominators);
+            return false;
         }
+        for (size_t prior = 0; prior < pi; ++prior)
+            if (program->parameters[prior].block_id == parameter->block_id &&
+                program->parameters[prior].value_id == parameter->value_id)
+                IR_REJECT("duplicate block parameter id %u", parameter->value_id);
+    }
+
+    /* Check block-local instruction shape and collect every SSA definition
+       before checking uses, so forward/non-dominating references fail closed. */
+    for (size_t bi = 0; bi < n; ++bi) {
+        const IRBasicBlock *block = &program->blocks[bi];
+        size_t end = block->first_instruction + block->instruction_count;
         for (size_t ii = block->first_instruction; ii < end; ++ii) {
             const IRInstruction *ins = &program->instructions[ii];
             bool last = ii + 1 == end;
+            bool terminator = ins->opcode == IR_BRANCH ||
+                              ins->opcode == IR_COND_BRANCH ||
+                              ins->opcode == IR_RETURN;
             bool defines = false;
             if (ins->block_id != block->id || ins->arg1 || ins->arg2 || ins->arg3 ||
-                ins->opcode < IR_CONST_I64 || ins->opcode >= IR_OPCODE_COUNT) {
-                free(values);
-                return ir_fail(error, error_capacity, "unsupported or malformed opcode/instruction at %zu", ii);
-            }
+                ins->opcode < IR_CONST_I64 || ins->opcode >= IR_OPCODE_COUNT)
+                IR_REJECT("unsupported or malformed opcode/instruction at %zu", ii);
             switch (ins->opcode) {
                 case IR_CONST_I64:
                     defines = true;
-                    if (ins->result_type != IR_TYPE_I64 || ins->operand1_id || ins->operand2_id ||
-                        ins->target_true || ins->target_false || ins->float_immediate != 0.0) goto bad_shape;
+                    if (ins->result_type != IR_TYPE_I64 || ins->operand1_id ||
+                        ins->operand2_id || ins->target_true || ins->target_false ||
+                        ins->float_immediate != 0.0) goto bad_shape;
                     break;
                 case IR_CONST_F64:
                     defines = true;
-                    if (ins->result_type != IR_TYPE_F64 || ins->operand1_id || ins->operand2_id ||
-                        ins->target_true || ins->target_false || ins->integer_immediate != 0 ||
-                        !isfinite(ins->float_immediate)) goto bad_shape;
+                    if (ins->result_type != IR_TYPE_F64 || ins->operand1_id ||
+                        ins->operand2_id || ins->target_true || ins->target_false ||
+                        ins->integer_immediate != 0 || !isfinite(ins->float_immediate))
+                        goto bad_shape;
                     break;
                 case IR_ADD_I64:
-                case IR_ADD_F64: {
-                    IRType expected = ins->opcode == IR_ADD_I64 ? IR_TYPE_I64 : IR_TYPE_F64;
+                case IR_ADD_F64:
                     defines = true;
-                    if (ins->result_type != expected || ins->operand1_id == 0 || ins->operand2_id == 0 ||
+                    if (ins->result_type != (ins->opcode == IR_ADD_I64 ?
+                                             IR_TYPE_I64 : IR_TYPE_F64) ||
+                        ins->operand1_id == 0 || ins->operand2_id == 0 ||
                         ins->integer_immediate || ins->float_immediate != 0.0 ||
-                        ins->target_true || ins->target_false ||
-                        !ir_use_has_type(values, value_count, ins->operand1_id, block->id, expected, error, error_capacity) ||
-                        !ir_use_has_type(values, value_count, ins->operand2_id, block->id, expected, error, error_capacity)) {
-                        free(values); return false;
-                    }
+                        ins->target_true || ins->target_false) goto bad_shape;
                     break;
-                }
                 case IR_EQ_I64:
                     defines = true;
-                    if (ins->result_type != IR_TYPE_BOOL || ins->operand1_id == 0 || ins->operand2_id == 0 ||
-                        ins->integer_immediate || ins->float_immediate != 0.0 || ins->target_true || ins->target_false ||
-                        !ir_use_has_type(values, value_count, ins->operand1_id, block->id, IR_TYPE_I64, error, error_capacity) ||
-                        !ir_use_has_type(values, value_count, ins->operand2_id, block->id, IR_TYPE_I64, error, error_capacity)) {
-                        free(values); return false;
-                    }
+                    if (ins->result_type != IR_TYPE_BOOL || !ins->operand1_id ||
+                        !ins->operand2_id || ins->integer_immediate ||
+                        ins->float_immediate != 0.0 || ins->target_true ||
+                        ins->target_false) goto bad_shape;
                     break;
                 case IR_BRANCH:
-                    if (!last || ins->result_id || ins->result_type != IR_TYPE_VOID || ins->operand1_id ||
-                        ins->operand2_id || ins->integer_immediate || ins->float_immediate != 0.0 ||
-                        ins->target_true == 0 || ins->target_false != 0) goto bad_shape;
+                    if (!last || ins->result_id || ins->result_type != IR_TYPE_VOID ||
+                        ins->operand1_id || ins->operand2_id || ins->integer_immediate ||
+                        ins->float_immediate != 0.0 || !ins->target_true ||
+                        ins->target_false) goto bad_shape;
                     break;
                 case IR_COND_BRANCH:
-                    if (!last || ins->result_id || ins->result_type != IR_TYPE_VOID || ins->operand1_id == 0 ||
-                        ins->operand2_id || ins->integer_immediate || ins->float_immediate != 0.0 ||
-                        ins->target_true == 0 || ins->target_false == 0 ||
-                        !ir_use_has_type(values, value_count, ins->operand1_id, block->id, IR_TYPE_BOOL, error, error_capacity)) {
-                        free(values); return false;
-                    }
+                    if (!last || ins->result_id || ins->result_type != IR_TYPE_VOID ||
+                        !ins->operand1_id || ins->operand2_id || ins->integer_immediate ||
+                        ins->float_immediate != 0.0 || !ins->target_true ||
+                        !ins->target_false) goto bad_shape;
                     break;
                 case IR_RETURN:
-                    if (!last || ins->result_id || ins->operand2_id || ins->integer_immediate ||
-                        ins->float_immediate != 0.0 || ins->target_true || ins->target_false) goto bad_shape;
-                    if (ins->operand1_id == 0) {
-                        if (ins->result_type != IR_TYPE_VOID) goto bad_shape;
-                    } else if (ins->result_type == IR_TYPE_VOID ||
-                               !ir_use_has_type(values, value_count, ins->operand1_id, block->id,
-                                                ins->result_type, error, error_capacity)) {
-                        free(values); return false;
-                    }
+                    if (!last || ins->result_id || ins->operand2_id ||
+                        ins->integer_immediate || ins->float_immediate != 0.0 ||
+                        ins->target_true || ins->target_false ||
+                        ins->result_type <= IR_TYPE_INVALID ||
+                        ins->result_type > IR_TYPE_VOID ||
+                        (!ins->operand1_id && ins->result_type != IR_TYPE_VOID) ||
+                        (ins->operand1_id && ins->result_type == IR_TYPE_VOID))
+                        goto bad_shape;
                     break;
                 default:
-                    free(values);
-                    return ir_fail(error, error_capacity, "unsupported IR opcode %d", (int)ins->opcode);
+                    IR_REJECT("unsupported IR opcode %d", (int)ins->opcode);
             }
-            if (defines && !ir_define_value(values, &value_count, program->count, ins, error, error_capacity)) {
-                free(values); return false;
-            }
-            if (last != (ins->opcode == IR_BRANCH || ins->opcode == IR_COND_BRANCH || ins->opcode == IR_RETURN)) {
-                free(values);
-                return ir_fail(error, error_capacity, "block %u must end with exactly one terminator", block->id);
+            if (last != terminator)
+                IR_REJECT("block %u must end with exactly one terminator", block->id);
+            if (defines && !ir_add_validated_value(values, &value_count,
+                    value_capacity, ins->result_id, ins->result_type, bi, ii,
+                    false, error, error_capacity)) {
+                free(values); free(reachable); free(queue); free(dominators);
+                return false;
             }
             continue;
         bad_shape:
-            free(values);
-            return ir_fail(error, error_capacity, "invalid operands, result type, or targets at instruction %zu", ii);
+            IR_REJECT("invalid operands, result type, or targets at instruction %zu", ii);
         }
-        expected_first = end;
-        if (block->successor_true != program->instructions[end - 1].target_true ||
-            block->successor_false != program->instructions[end - 1].target_false) {
-            free(values);
-            return ir_fail(error, error_capacity, "block %u successor metadata disagrees with terminator", block->id);
-        }
+        const IRInstruction *term = &program->instructions[end - 1];
+        if (block->successor_true != term->target_true ||
+            block->successor_false != term->target_false)
+            IR_REJECT("block %u successor metadata disagrees with terminator", block->id);
     }
-    if (expected_first != program->count) {
-        free(values);
-        return ir_fail(error, error_capacity, "instructions are not assigned to a basic block");
-    }
-    for (size_t bi = 0; bi < program->block_count; ++bi) {
+
+    /* Validate CFG targets, then require a single reachable region rooted at
+       layout block zero. This makes dominance well-defined for every block. */
+    for (size_t bi = 0; bi < n; ++bi) {
         const IRBasicBlock *block = &program->blocks[bi];
-        if ((block->successor_true && !ir_target_exists(program, block->successor_true)) ||
-            (block->successor_false && !ir_target_exists(program, block->successor_false))) {
-            free(values);
-            return ir_fail(error, error_capacity, "block %u branches to a missing block", block->id);
+        if ((block->successor_true &&
+             ir_find_block_index(program, block->successor_true) == SIZE_MAX) ||
+            (block->successor_false &&
+             ir_find_block_index(program, block->successor_false) == SIZE_MAX))
+            IR_REJECT("block %u branches to a missing block", block->id);
+    }
+    size_t head = 0, tail = 0;
+    reachable[0] = 1;
+    queue[tail++] = 0;
+    while (head < tail) {
+        size_t bi = queue[head++];
+        const IRBasicBlock *block = &program->blocks[bi];
+        uint32_t targets[2] = {block->successor_true, block->successor_false};
+        for (size_t k = 0; k < 2; ++k) {
+            size_t ti;
+            if (!targets[k] || (k == 1 && targets[1] == targets[0])) continue;
+            ti = ir_find_block_index(program, targets[k]);
+            if (!reachable[ti]) { reachable[ti] = 1; queue[tail++] = ti; }
         }
     }
-    free(values);
+    for (size_t bi = 0; bi < n; ++bi)
+        if (!reachable[bi]) IR_REJECT("unreachable IR block %u", program->blocks[bi].id);
+
+    /* Iterative classical dominator solution for the explicitly represented
+       CFG; entry dominates itself, every other block starts with all blocks. */
+    dominators[0] = 1;
+    for (size_t bi = 1; bi < n; ++bi)
+        memset(&dominators[bi * n], 1, n);
+    do {
+        changed = false;
+        for (size_t bi = 1; bi < n; ++bi) {
+            unsigned char *row = &dominators[bi * n];
+            unsigned char *next = (unsigned char *)calloc(n, sizeof(*next));
+            bool first = true;
+            if (!next) IR_REJECT("out of memory solving CFG dominators");
+            for (size_t pi = 0; pi < n; ++pi) {
+                const IRBasicBlock *pred = &program->blocks[pi];
+                if (pred->successor_true != program->blocks[bi].id &&
+                    pred->successor_false != program->blocks[bi].id) continue;
+                if (first) { memcpy(next, &dominators[pi * n], n); first = false; }
+                else for (size_t k = 0; k < n; ++k)
+                    next[k] = (unsigned char)(next[k] && dominators[pi * n + k]);
+            }
+            if (first) {
+                free(next);
+                IR_REJECT("reachable block %u has no predecessor", program->blocks[bi].id);
+            }
+            next[bi] = 1;
+            if (memcmp(row, next, n) != 0) {
+                memcpy(row, next, n);
+                changed = true;
+            }
+            free(next);
+        }
+    } while (changed);
+
+    /* Check ordinary operand typing and SSA availability at the exact use. */
+    for (size_t bi = 0; bi < n; ++bi) {
+        const IRBasicBlock *block = &program->blocks[bi];
+        size_t end = block->first_instruction + block->instruction_count;
+        for (size_t ii = block->first_instruction; ii < end; ++ii) {
+            const IRInstruction *ins = &program->instructions[ii];
+            IRType operand_type = IR_TYPE_INVALID;
+            switch (ins->opcode) {
+                case IR_ADD_I64: operand_type = IR_TYPE_I64; break;
+                case IR_ADD_F64: operand_type = IR_TYPE_F64; break;
+                case IR_EQ_I64: operand_type = IR_TYPE_I64; break;
+                case IR_COND_BRANCH: operand_type = IR_TYPE_BOOL; break;
+                case IR_RETURN:
+                    if (ins->operand1_id) operand_type = ins->result_type;
+                    break;
+                default: break;
+            }
+            if (operand_type != IR_TYPE_INVALID &&
+                !ir_use_is_valid(values, value_count, ins->operand1_id,
+                    operand_type, bi, ii, n, dominators, error, error_capacity)) {
+                free(values); free(reachable); free(queue); free(dominators);
+                return false;
+            }
+            if ((ins->opcode == IR_ADD_I64 || ins->opcode == IR_ADD_F64 ||
+                 ins->opcode == IR_EQ_I64) &&
+                !ir_use_is_valid(values, value_count, ins->operand2_id,
+                    ins->opcode == IR_ADD_I64 ? IR_TYPE_I64 :
+                    ins->opcode == IR_ADD_F64 ? IR_TYPE_F64 : IR_TYPE_I64,
+                    bi, ii, n, dominators, error, error_capacity)) {
+                free(values); free(reachable); free(queue); free(dominators);
+                return false;
+            }
+        }
+    }
+
+    /* Every CFG edge carries exactly one correctly typed value for each target
+       parameter; each incoming value must be available at its predecessor end. */
+    for (size_t ai = 0; ai < program->edge_argument_count; ++ai) {
+        const IREdgeArgument *arg = &program->edge_arguments[ai];
+        size_t si = ir_find_block_index(program, arg->source_block_id);
+        size_t ti = ir_find_block_index(program, arg->target_block_id);
+        const IRBasicBlock *source;
+        const IRBlockParameter *parameter;
+        bool edge_exists;
+        if (si == SIZE_MAX || ti == SIZE_MAX)
+            IR_REJECT("edge argument references a missing block");
+        source = &program->blocks[si];
+        edge_exists = source->successor_true == arg->target_block_id ||
+                      source->successor_false == arg->target_block_id;
+        if (!edge_exists)
+            IR_REJECT("edge argument does not correspond to a CFG edge");
+        parameter = ir_nth_parameter(program, arg->target_block_id,
+                                     arg->parameter_index);
+        if (!parameter)
+            IR_REJECT("edge argument has an invalid target parameter index");
+        for (size_t prior = 0; prior < ai; ++prior)
+            if (program->edge_arguments[prior].source_block_id == arg->source_block_id &&
+                program->edge_arguments[prior].target_block_id == arg->target_block_id &&
+                program->edge_arguments[prior].parameter_index == arg->parameter_index)
+                IR_REJECT("duplicate argument for CFG edge parameter");
+        size_t term_index = source->first_instruction + source->instruction_count - 1;
+        if (!ir_use_is_valid(values, value_count, arg->value_id, parameter->type,
+                             si, term_index, n, dominators, error, error_capacity)) {
+            free(values); free(reachable); free(queue); free(dominators);
+            return false;
+        }
+    }
+    for (size_t si = 0; si < n; ++si) {
+        const IRBasicBlock *source = &program->blocks[si];
+        uint32_t targets[2] = {source->successor_true, source->successor_false};
+        for (size_t k = 0; k < 2; ++k) {
+            if (!targets[k] || (k == 1 && targets[1] == targets[0])) continue;
+            const IRBasicBlock *target =
+                &program->blocks[ir_find_block_index(program, targets[k])];
+            uint32_t param_index = 0;
+            for (;;) {
+                const IRBlockParameter *parameter =
+                    ir_nth_parameter(program, target->id, param_index);
+                if (!parameter) break;
+                size_t matches = 0;
+                for (size_t ai = 0; ai < program->edge_argument_count; ++ai)
+                    if (program->edge_arguments[ai].source_block_id == source->id &&
+                        program->edge_arguments[ai].target_block_id == target->id &&
+                        program->edge_arguments[ai].parameter_index == param_index)
+                        ++matches;
+                if (matches != 1)
+                    IR_REJECT("CFG edge %u -> %u must supply each block parameter exactly once",
+                              source->id, target->id);
+                ++param_index;
+            }
+        }
+    }
+
+    free(values); free(reachable); free(queue); free(dominators);
+#undef IR_REJECT
     return true;
 }
