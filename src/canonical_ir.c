@@ -1432,10 +1432,10 @@ static bool ir_program_lower_scalar_function_body_context(
             const size_t outer_binding_count = binding_count;
             size_t then_binding_count = outer_binding_count;
             size_t else_binding_count = outer_binding_count;
-            if (!statement->as.conditional.else_body ||
-                statement->as.conditional.else_count == 0) {
+            if (statement->as.conditional.else_count &&
+                !statement->as.conditional.else_body) {
                 ir_fail(error, error_capacity,
-                    "typed scalar si/sino merge requires an explicit nonempty sino branch");
+                    "typed scalar conditional has a missing sino body");
                 goto cleanup;
             }
             if (lowered->block_count > UINT32_MAX - 3) {

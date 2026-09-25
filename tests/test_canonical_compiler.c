@@ -316,6 +316,15 @@ int main(void) {
     milena_ir_program_destroy(typed_body);
     milena_canonical_program_release(&program);
 
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion sin_retorno_falso(x) { si (x > 0) { retornar x; } }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL,
+          "un si terminal sin sino no debe aparentar un retorno en el camino falso");
+    milena_canonical_program_release(&program);
+
     /* Nonterminal source-level si/sino assignment branches lower to a CFG
        merge with typed block parameters and per-edge SSA arguments. */
     milena_canonical_program_init(&program);
