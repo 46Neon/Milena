@@ -260,7 +260,7 @@ static void list_add_n(StringList *list, const char *value, size_t length)
         fail("out of memory while collecting source paths");
     }
     memcpy(copy, value, length);
-    copy[length] = '\\0';
+    copy[length] = '\0';
     list->items[list->count] = copy;
     ++list->count;
 }
