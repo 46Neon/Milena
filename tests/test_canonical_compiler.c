@@ -1496,7 +1496,7 @@ int main(void) {
         "guardar resultado en \"salida.arrow\" }";
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program, arrow_invalid_source, &error) ==
-              MILENA_ERR_TYPE && program.ast == NULL && program.arrow_plan == NULL &&
+              MILENA_ERR_PARSE && program.ast == NULL && program.arrow_plan == NULL &&
           strstr(error.message, "Cada campo Arrow proyectado") != NULL,
           "el frontend canónico debe rechazar el tipo Arrow inválido con diagnóstico tipado");
     milena_canonical_program_release(&program);
