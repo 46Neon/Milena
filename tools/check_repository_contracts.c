@@ -917,6 +917,7 @@ static void check_stream_architecture(void)
 
 
 
+
 /* Phase 3 Python checker ports: local Markdown targets and Termux contracts. */
 static bool ascii_equal_nocase(const char *left, const char *right, size_t length)
 {
@@ -963,9 +964,13 @@ static char *optional_read_file(const char *path)
         exit(EXIT_FAILURE);
     }
     bytes_read = fread(contents, 1U, (size_t)length, file);
-    if (bytes_read != (size_t)length || ferror(file) != 0 || fclose(file) != 0) {
-        free(contents);
-        return NULL;
+    {
+        bool read_failed = bytes_read != (size_t)length || ferror(file) != 0;
+        int close_status = fclose(file);
+        if (read_failed || close_status != 0) {
+            free(contents);
+            return NULL;
+        }
     }
     contents[bytes_read] = '\0';
     return contents;
@@ -1560,7 +1565,6 @@ static void termux_industrial_check(void)
     }
     (void)printf("Termux industrial static contract: OK\n");
     list_free(&errors);
-    list_free(&empty);
 }
 
 static char *capture_recipe_assignment(const char *text, const char *name, bool anchored)
