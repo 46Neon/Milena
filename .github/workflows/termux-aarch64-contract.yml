@@ -67,7 +67,8 @@ jobs:
           rm -rf "$TERMUX_PACKAGES_DIR/packages/milena"
           mkdir -p "$TERMUX_PACKAGES_DIR/packages/milena"
           cp -R packaging/termux-packages/milena/. "$TERMUX_PACKAGES_DIR/packages/milena/"
-          python3 scripts/validate_termux_recipe.py \
+          make tools/check_repository_contracts CC=clang
+          ./tools/check_repository_contracts termux-recipe \
             "$TERMUX_PACKAGES_DIR/packages/milena/build.sh" \
             --official-dir "$TERMUX_PACKAGES_DIR"
 
