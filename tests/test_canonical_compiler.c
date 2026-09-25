@@ -267,6 +267,10 @@ int main(void) {
           program.data_hir->source.resolved_dataset_id != 0 &&
           strcmp(program.data_hir->export_path, "salida.json") == 0 &&
           program.data_hir->operation_count == 3 &&
+          program.data_hir->operations[1].as.filter.operation ==
+              AST_OPERATOR_GREATER_EQUAL &&
+          program.data_hir->operations[1].as.filter.threshold == 10.0 &&
+          strcmp(program.data_hir->operations[1].as.filter.column.name, "total") == 0 &&
           program.data_hir->operations[0].resolved_dataset_id ==
               program.data_hir->source.resolved_dataset_id,
           "la HIR debe poseer fuente, transformación, filtro, proyección y destino de exportación");
@@ -635,6 +639,24 @@ int main(void) {
               MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&
           data_input.data_hir == NULL,
           "una acción de limpieza no implementada debe fallar cerrado y sin vista parcial");
+    milena_canonical_program_release(&program);
+
+    /* Malformed filter text remains AST-only and cannot be admitted to HIR. */
+    milena_canonical_program_init(&program);
+    const char *malformed_filter_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".filtrar { #condicion(\"total =~ 10\") } }";
+    CHECK(milena_canonical_program_parse(&program, malformed_filter_source,
+                                         &error) == MILENA_OK, error.message);
+    CHECK(program.data_hir == NULL,
+          "un predicado sin forma tipada no debe producir HIR de datos");
+    MilenaCanonicalCompilerInput rejected_input = {0};
+    CHECK(milena_canonical_compiler_input(&program, &rejected_input, &error) ==
+              MILENA_ERR_UNSUPPORTED &&
+          rejected_input.ast == NULL && rejected_input.data_hir == NULL &&
+          error.line > 0 && error.column > 0 &&
+          strstr(error.message, "AST_COMANDO_CONDICION") != NULL,
+          "el HIR debe fallar cerrado con nodo y ubicación, sin vista parcial");
     milena_canonical_program_release(&program);
 
     puts("OK: canonical compiler boundary, typed scalar/data HIR, binding, execution and source diagnostics");
