@@ -1,4 +1,4 @@
-name: Compiler phase 1 lexer checks
+name: Compiler phase 1 frontend and typed IR checks
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   lexer-and-parser:
-    name: Lexer/parser regressions (${{ matrix.compiler }})
+    name: Lexer/parser/typed-IR regressions (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -25,10 +25,10 @@ jobs:
         run: |
           set -euxo pipefail
           make clean
-          make CC=${{ matrix.compiler }} test-lexer-safety test-parser-variables test-parser-statistics test-ast-validation test-canonical-compiler test-functions
+          make CC=${{ matrix.compiler }} test-lexer-safety test-parser-variables test-parser-statistics test-ast-validation test-canonical-compiler test-functions test-ir-validation
 
   lexer-sanitizers:
-    name: Lexer ASan and UBSan
+    name: Frontend and typed IR ASan and UBSan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -43,4 +43,4 @@ jobs:
           make CC=clang \
             CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
             LDFLAGS='-fsanitize=address,undefined -lm -pthread' \
-            test-lexer-safety test-parser-variables test-parser-statistics test-ast-validation test-canonical-compiler test-functions
+            test-lexer-safety test-parser-variables test-parser-statistics test-ast-validation test-canonical-compiler test-functions test-ir-validation

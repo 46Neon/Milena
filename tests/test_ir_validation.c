@@ -1,0 +1,121 @@
+#include "ir.h"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+static bool append(IRProgram *program, uint32_t block, IROpCode opcode,
+                   uint32_t result, IRType result_type, uint32_t left,
+                   uint32_t right, int64_t integer, uint32_t yes,
+                   uint32_t no) {
+    return ir_block_append_instruction(program, block, opcode, result, result_type,
+                                       left, right, integer, 0.0, yes, no);
+}
+
+static void test_typed_values_and_return(void) {
+    char error[160];
+    IRProgram *program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 1));
+    assert(append(program, 1, IR_CONST_I64, 1, IR_TYPE_I64, 0, 0, 40, 0, 0));
+    assert(append(program, 1, IR_CONST_I64, 2, IR_TYPE_I64, 0, 0, 2, 0, 0));
+    assert(append(program, 1, IR_ADD_I64, 3, IR_TYPE_I64, 1, 2, 0, 0, 0));
+    assert(append(program, 1, IR_RETURN, 0, IR_TYPE_I64, 3, 0, 0, 0, 0));
+    assert(ir_program_validate(program, error, sizeof(error)));
+    assert(error[0] == '\0');
+    ir_program_destroy(program);
+}
+
+static void test_control_flow_targets(void) {
+    char error[160];
+    IRProgram *program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 10));
+    assert(append(program, 10, IR_CONST_I64, 1, IR_TYPE_I64, 0, 0, 8, 0, 0));
+    assert(append(program, 10, IR_CONST_I64, 2, IR_TYPE_I64, 0, 0, 8, 0, 0));
+    assert(append(program, 10, IR_EQ_I64, 3, IR_TYPE_BOOL, 1, 2, 0, 0, 0));
+    assert(append(program, 10, IR_COND_BRANCH, 0, IR_TYPE_VOID, 3, 0, 0, 20, 30));
+    assert(ir_program_add_block(program, 20));
+    assert(append(program, 20, IR_RETURN, 0, IR_TYPE_VOID, 0, 0, 0, 0, 0));
+    assert(ir_program_add_block(program, 30));
+    assert(append(program, 30, IR_RETURN, 0, IR_TYPE_VOID, 0, 0, 0, 0, 0));
+    assert(ir_program_validate(program, error, sizeof(error)));
+    ir_program_destroy(program);
+}
+
+static void test_rejects_type_mismatch(void) {
+    char error[160];
+    IRProgram *program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 1));
+    assert(append(program, 1, IR_CONST_I64, 1, IR_TYPE_I64, 0, 0, 2, 0, 0));
+    assert(append(program, 1, IR_CONST_F64, 2, IR_TYPE_F64, 0, 0, 0, 0, 0));
+    assert(append(program, 1, IR_ADD_I64, 3, IR_TYPE_I64, 1, 2, 0, 0, 0));
+    assert(append(program, 1, IR_RETURN, 0, IR_TYPE_VOID, 0, 0, 0, 0, 0));
+    assert(!ir_program_validate(program, error, sizeof(error)));
+    assert(strstr(error, "wrong type") != NULL);
+    ir_program_destroy(program);
+}
+
+static void test_rejects_undefined_and_duplicate_values(void) {
+    char error[160];
+    IRProgram *program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 1));
+    assert(append(program, 1, IR_ADD_I64, 1, IR_TYPE_I64, 77, 77, 0, 0, 0));
+    assert(append(program, 1, IR_RETURN, 0, IR_TYPE_VOID, 0, 0, 0, 0, 0));
+    assert(!ir_program_validate(program, error, sizeof(error)));
+    assert(strstr(error, "undefined") != NULL);
+    ir_program_destroy(program);
+
+    program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 1));
+    assert(append(program, 1, IR_CONST_I64, 4, IR_TYPE_I64, 0, 0, 1, 0, 0));
+    assert(append(program, 1, IR_CONST_I64, 4, IR_TYPE_I64, 0, 0, 2, 0, 0));
+    assert(append(program, 1, IR_RETURN, 0, IR_TYPE_VOID, 0, 0, 0, 0, 0));
+    assert(!ir_program_validate(program, error, sizeof(error)));
+    assert(strstr(error, "duplicate") != NULL);
+    ir_program_destroy(program);
+}
+
+static void test_rejects_missing_terminator_and_unknown_legacy_opcode(void) {
+    char error[160];
+    IRProgram *program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 1));
+    assert(append(program, 1, IR_CONST_I64, 1, IR_TYPE_I64, 0, 0, 7, 0, 0));
+    assert(!ir_program_validate(program, error, sizeof(error)));
+    ir_program_destroy(program);
+
+    program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 1));
+    assert(append(program, 1, IR_CONST_I64, 1, IR_TYPE_I64, 0, 0, 7, 0, 0));
+    assert(append(program, 1, IR_RETURN, 0, IR_TYPE_VOID, 0, 0, 0, 0, 0));
+    program->instructions[0].opcode = IR_LOAD_DATASET;
+    assert(!ir_program_validate(program, error, sizeof(error)));
+    assert(strstr(error, "unsupported") != NULL);
+    ir_program_destroy(program);
+}
+
+static void test_rejects_missing_branch_target(void) {
+    char error[160];
+    IRProgram *program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 1));
+    assert(append(program, 1, IR_BRANCH, 0, IR_TYPE_VOID, 0, 0, 0, 99, 0));
+    assert(ir_program_validate(program, error, sizeof(error)) == false);
+    assert(strstr(error, "missing block") != NULL);
+    ir_program_destroy(program);
+}
+
+int main(void) {
+    test_typed_values_and_return();
+    test_control_flow_targets();
+    test_rejects_type_mismatch();
+    test_rejects_undefined_and_duplicate_values();
+    test_rejects_missing_terminator_and_unknown_legacy_opcode();
+    test_rejects_missing_branch_target();
+    puts("typed IR structural/type/control-flow validation tests passed");
+    return 0;
+}
