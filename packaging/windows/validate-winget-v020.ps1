@@ -82,8 +82,13 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "Could not enable local manifest installation (exit code $LASTEXITCODE)."
 }
+# This is a disposable CI runner; remove Store to avoid its agreement and region lookup.
+& $winget.Source source remove --name msstore --disable-interactivity
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not remove the Microsoft Store source from the disposable runner (exit code $LASTEXITCODE)."
+}
 & $winget.Source install --manifest $manifestDirectory `
-    --accept-package-agreements --accept-source-agreements --disable-interactivity
+    --accept-package-agreements --disable-interactivity
 if ($LASTEXITCODE -ne 0) {
     throw "winget install --manifest failed with exit code $LASTEXITCODE."
 }
