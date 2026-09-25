@@ -1960,12 +1960,13 @@ static void check_termux_packaging(void)
         "packaging/termux/README.md", "packaging/termux-packages/README.md",
         "packaging/termux-packages/milena/build.sh", "scripts/termux-install-smoke.sh",
         "scripts/termux-real-smoke.sh", "scripts/validate_termux_artifact.py",
-        "scripts/validate_termux_recipe.py", "scripts/test_termux_packaging.py"
+        "scripts/test_termux_packaging.py"
     };
     static const char *const workflow_required[] = {
         "workflow_dispatch:", "confirm_device:", "if: inputs.confirm_device == true",
         "runs-on: [self-hosted, termux, aarch64, milena]", "TERMUX_PACKAGES_DIR", "build-package.sh",
         "-I -f milena", "termux-runner-preflight.sh", "validate_termux_artifact.py", "termux-real-smoke.sh",
+        "make tools/check_repository_contracts", "./tools/check_repository_contracts termux-recipe",
         "upload-artifact@v4", "if-no-files-found: error"
     };
     static const char *const builder_required[] = {"validate_termux_elf.py", "README.md", "SOURCE_DATE_EPOCH", ".provenance.json", "TERMUX=1"};
@@ -2138,8 +2139,9 @@ static void check_termux_runner_contract(void)
     static const char *const workflow_fragments[] = {
         "workflow_dispatch:", "confirm_device:", "if: inputs.confirm_device == true",
         "runs-on: [self-hosted, termux, aarch64, milena]", "TERMUX_PACKAGES_DIR", "build-package.sh",
-        "-I -f milena", "termux-runner-preflight.sh", "validate_termux_recipe.py",
-        "validate_termux_artifact.py", "validate_termux_elf.py", "termux-real-smoke.sh",
+        "-I -f milena", "termux-runner-preflight.sh", "make tools/check_repository_contracts",
+        "tools/check_repository_contracts termux-recipe", "validate_termux_artifact.py",
+        "validate_termux_elf.py", "termux-real-smoke.sh",
         "pkg install", "pkg upgrade", "pkg remove", "upload-artifact@v4", "if-no-files-found: error"
     };
     static const char *const preflight_fragments[] = {
