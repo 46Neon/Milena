@@ -105,8 +105,8 @@ jobs:
           test "$(dpkg-deb -f "$package" Architecture)" = aarch64
           test "$(dpkg-deb -f "$package" Package)" = milena
 
-      - name: Run pkg install, upgrade and remove on Android
-        # termux-real-smoke.sh executes pkg install, pkg upgrade and pkg remove.
+      - name: Run isolated pkg install/remove lifecycle on Android
+        # termux-real-smoke.sh tests pkg install/remove only; never run pkg upgrade.
         shell: bash
         env:
           MILENA_APT_REPOSITORY: ${{ inputs.apt_repository }}
