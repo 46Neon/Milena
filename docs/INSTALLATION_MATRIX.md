@@ -40,8 +40,8 @@ No usar scripts remotos ejecutados directamente por `curl | sh` como sustituto d
 
 ### Debian/Ubuntu / APT
 
-- Construir paquetes Linux por arquitectura declarada; verificar control, dependencias, rutas, checksum y procedencia. Este PR fija `Maintainer: Milena SST <j7942281@gmail.com>` y añade generación/verificación del sidecar SHA-256 del `.deb` amd64 antes de adjuntarlo a futuras Releases. El artefacto histórico `v0.2.0` conserva el correo anterior y no debe publicarse en un feed APT nuevo.
-- Publicar índices `Packages` y metadatos `InRelease`/`Release.gpg` firmados para cada arquitectura disponible. El canal Linux debe estar separado del repositorio Termux.
+- Construir paquetes Linux por arquitectura declarada; verificar control, dependencias, rutas, checksum y procedencia. Este PR fija `Maintainer: Milena SST <j7942281@gmail.com>`, genera/verifica el sidecar SHA-256 del `.deb` amd64 y añade un generador local de APT firmado probado en CI con una clave efímera. El artefacto histórico `v0.2.0` conserva el correo anterior y no debe publicarse en un feed nuevo.
+- Publicar índices `Packages` y metadatos `InRelease`/`Release.gpg` firmados para cada arquitectura disponible. La CI instala y elimina `milena` desde un origen `file:` firmado con clave efímera, pero eso no publica ni configura un origen para usuarios; el canal Linux debe estar separado del repositorio Termux.
 - Probar `apt install`, actualización, ejecución y eliminación en una instalación limpia de cada distribución/arquitectura anunciada.
 
 ### Android AArch64 / Termux
@@ -56,6 +56,7 @@ No usar scripts remotos ejecutados directamente por `curl | sh` como sustituto d
 
 - [`packaging/windows/README.md`](../packaging/windows/README.md): artefacto portable y proceso WinGet.
 - [`packaging/debian/README.md`](../packaging/debian/README.md): paquete local Debian/Ubuntu.
+- [`packaging/debian/generate-apt-repo.sh`](../packaging/debian/generate-apt-repo.sh): genera y firma un índice Linux amd64 local; no publica ni configura el origen.
 - [`packaging/termux/README.md`](../packaging/termux/README.md): paquete Termux y validación Android.
 - [`packaging/termux-packages/README.md`](../packaging/termux-packages/README.md): receta candidata y proceso de aceptación oficial.
 - [`.github/workflows/build-release.yml`](../.github/workflows/build-release.yml): artefactos Debian amd64 y Windows x64.

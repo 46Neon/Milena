@@ -32,7 +32,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y clang make dpkg-dev
+        run: sudo apt-get update && sudo apt-get install -y clang make dpkg-dev apt-utils gnupg
       - name: Build and test Debian package
         run: |
           set -euxo pipefail
@@ -49,6 +49,50 @@ jobs:
           (cd "$(dirname "$package")" && sha256sum --check "$(basename "$checksum")")
           test "$(dpkg-deb -f "$package" Package)" = 'milena'
           test "$(dpkg-deb -f "$package" Architecture)" = 'amd64'
+      - name: Generate and verify signed Debian APT repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GNUPGHOME="$RUNNER_TEMP/milena-apt-test-gnupg"
+          install -d -m 0700 "$GNUPGHOME"
+          gpg --batch --pinentry-mode loopback --passphrase '' \
+            --quick-generate-key 'Milena CI Test <ci@example.invalid>' rsa3072 sign 1d
+          key_id="$(gpg --batch --with-colons --fingerprint 'Milena CI Test <ci@example.invalid>' \
+            | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test -n "$key_id"
+          MILENA_GPG_KEY_ID="$key_id" \
+            ./packaging/debian/generate-apt-repo.sh dist/debian dist/debian-apt
+      - name: Install from the signed local Debian APT repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          keyring="$GITHUB_WORKSPACE/dist/debian-apt/milena-archive-keyring.gpg"
+          source_list="$RUNNER_TEMP/milena-ci.list"
+          sudo install -m 0644 "$keyring" /usr/share/keyrings/milena-ci.gpg
+          printf 'deb [signed-by=/usr/share/keyrings/milena-ci.gpg] file:%s stable main\n' \
+            "$GITHUB_WORKSPACE/dist/debian-apt" > "$source_list"
+          sudo apt-get \
+            -o Dir::Etc::sourcelist="$source_list" \
+            -o Dir::Etc::sourceparts='-' \
+            -o APT::Get::List-Cleanup='0' update
+          sudo apt-get \
+            -o Dir::Etc::sourcelist="$source_list" \
+            -o Dir::Etc::sourceparts='-' \
+            install -y --no-install-recommends milena
+          command -v milena >/dev/null
+          set +e
+          output="$(milena 2>&1)"
+          exit_code=$?
+          set -e
+          if [[ "$exit_code" -ne 2 ]]; then
+            printf 'Unexpected milena exit code: %s\n%s\n' "$exit_code" "$output" >&2
+            exit 1
+          fi
+          grep -F "Milena ${MILENA_VERSION#v}" <<<"$output"
+          sudo apt-get \
+            -o Dir::Etc::sourcelist="$source_list" \
+            -o Dir::Etc::sourceparts='-' \
+            remove -y milena
       - name: Upload Debian artifact
         uses: actions/upload-artifact@v4
         with:

@@ -23,9 +23,11 @@ Un `.deb` de Termux no es intercambiable con uno de Debian/Ubuntu. El workflow A
 
 ## Reproducibilidad y seguridad
 
-El constructor Termux fija `SOURCE_DATE_EPOCH`, normaliza modos y timestamps y emite un checksum SHA-256. El generador APT crea únicamente `binary-aarch64`, valida el nombre, metadatos y rutas del paquete, y firma `Release` e `InRelease`. Las claves privadas y contraseñas solo se leen desde secretos de CI; nunca se guardan en el repositorio ni en el árbol publicado.
+El constructor Termux fija `SOURCE_DATE_EPOCH`, normaliza modos y timestamps y emite un checksum SHA-256. El generador APT de Termux crea únicamente `binary-aarch64`, valida el nombre, metadatos y rutas del paquete, y firma `Release` e `InRelease`.
 
-La publicación a Netlify es un canal de hosting opcional del workflow único y no es una dependencia del lenguaje.
+`packaging/debian/generate-apt-repo.sh` es el generador separado para Linux `amd64`: valida el `.deb`, su checksum y el mantenedor, crea `Packages`/`Release` firmados y verifica las firmas. La CI lo prueba con una clave efímera e instala/elimina el paquete desde un origen `file:`; no publica el repositorio ni configura una fuente para usuarios. Las claves privadas reales solo se leen desde secretos de CI; nunca se guardan en el repositorio ni en el árbol publicado.
+
+La publicación a Netlify descrita por `.github/workflows/publish-apt.yml` corresponde al canal Termux/AArch64; no es una dependencia del lenguaje ni publica el repositorio Linux.
 
 ## Plantilla para termux-packages
 
