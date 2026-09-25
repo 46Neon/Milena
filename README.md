@@ -257,31 +257,17 @@ make test
 
 Termux utiliza las mismas fuentes C17 y el mismo pipeline canónico. La validación automatizada principal se ejecuta actualmente en Linux y Windows; cualquier diferencia específica de Android o Termux debe reportarse con el dispositivo, la versión de Termux y el commit utilizado.
 
-## Distribución mediante gestores de paquetes
+## Instalación y empaquetado por plataformas
 
-La distribución oficial mediante APT, WinGet y el repositorio de paquetes de Termux forma parte del objetivo de portabilidad de Milena.
+Los comandos objetivo, la arquitectura de cada artefacto, su disponibilidad y los requisitos pendientes se mantienen en la [matriz de instalación](docs/INSTALLATION_MATRIX.md). No se deben presentar como instalables desde un equipo limpio hasta que cada paquete esté indexado en una fuente consultable y haya pasado una prueba real de instalación.
 
-Los comandos previstos son:
+| Plataforma | Comando objetivo | Estado |
+|---|---|---|
+| Windows x64 | `winget install --id 46Neon.Milena --exact` | Manifiestos adjuntos a una Release; publicación/indexación WinGet y prueba limpia pendientes. |
+| Debian/Ubuntu Linux amd64 | `sudo apt install milena` | `.deb` local/de Release; repositorio APT Linux firmado y registrado pendiente. |
+| Android/Termux AArch64 | `pkg install milena` | Receta candidata; aceptación/publicación y prueba en Android/Bionic pendientes. |
 
-```bash
-sudo apt install milena
-```
-
-```powershell
-winget install milena
-```
-
-```bash
-pkg install milena
-```
-
-La instalación mediante un gestor de paquetes de Termux **todavía no se presenta como disponible**: falta publicar y probar un repositorio APT real. Mientras tanto, las rutas verificadas son la compilación desde el repositorio, el paquete Debian local, el ejecutable portable de Windows y la compilación desde Termux.
-
-## Empaquetado y distribución
-
-El paquete Termux se construye por separado del paquete Debian/Ubuntu y, por ahora, solo se prepara para `aarch64` mediante `packaging/termux/build-local-deb.sh`. La compilación local y la inspección del `.deb` son verificables; el repositorio APT todavía no es oficial. No se anuncia instalación desde un gestor de paquetes hasta completar una prueba real en Termux desde el repositorio publicado.
-
-La publicación APT preparada en `.github/workflows/publish-apt.yml` acepta únicamente un artefacto Termux real, genera índices para las arquitecturas que efectivamente tienen paquete y firma los metadatos con secretos de CI. El hosting no es una dependencia del lenguaje.
+Los paquetes Linux y Termux son diferentes aunque ambos usen formato `.deb`: Linux usa su ABI y rutas `/usr`; Termux usa Bionic y `$PREFIX`. El workflow `.github/workflows/publish-apt.yml` corresponde al repositorio Termux/AArch64, no al canal APT de Debian/Ubuntu. Consulta la matriz para los gates y límites exactos por canal.
 
 ## Estado del proyecto
 
