@@ -236,7 +236,7 @@ int main(void) {
     test_control_flow_targets();
     test_rejects_type_mismatch();
     test_rejects_undefined_and_duplicate_values();
-    test_rejects_missing_terminator_and_unknown_legacy_opcode();
+    test_rejects_missing_terminator_and_unknown_opcode();
     test_rejects_missing_branch_target();
     test_dominance_and_block_parameter_value_flow();
     test_loop_backedge_value_flow();
