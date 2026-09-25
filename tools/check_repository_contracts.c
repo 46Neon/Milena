@@ -1960,7 +1960,7 @@ static void check_termux_packaging(void)
         "packaging/termux/README.md", "packaging/termux-packages/README.md",
         "packaging/termux-packages/milena/build.sh", "scripts/termux-install-smoke.sh",
         "scripts/termux-real-smoke.sh", "scripts/validate_termux_artifact.py",
-        "scripts/test_termux_packaging.py"
+        "tests/test_termux_packaging.c"
     };
     static const char *const workflow_required[] = {
         "workflow_dispatch:", "confirm_device:", "if: inputs.confirm_device == true",
