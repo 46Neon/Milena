@@ -1496,14 +1496,9 @@ int main(void) {
         "guardar resultado en \"salida.arrow\" }";
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program, arrow_invalid_source, &error) ==
-              MILENA_OK, error.message);
-    CHECK(program.arrow_plan == NULL,
-          "una declaración binaria no debe crear un plan Arrow numérico/textual");
-    input = (MilenaCanonicalCompilerInput){0};
-    CHECK(milena_canonical_hir_input(&program, &input, &error) == MILENA_ERR_TYPE &&
-          input.ast == NULL && input.arrow_plan == NULL &&
+              MILENA_ERR_TYPE && program.ast == NULL && program.arrow_plan == NULL &&
           strstr(error.message, "Cada campo Arrow proyectado") != NULL,
-          "un plan Arrow inválido debe fallar cerrado con su diagnóstico tipado");
+          "el frontend canónico debe rechazar el tipo Arrow inválido con diagnóstico tipado");
     milena_canonical_program_release(&program);
 
     puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, Arrow typed plan, binding, execution and diagnostics");
