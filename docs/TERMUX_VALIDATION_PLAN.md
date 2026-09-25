@@ -86,8 +86,8 @@ lexer -> parser -> AST -> language_semantic -> language_runtime -> MilenaTable
 
 `Dataset` es una entrada de compatibilidad: el runtime materializa el dataset en
 `MilenaTable` y las transformaciones, agrupaciones, resúmenes, joins y análisis
-operan sobre la tabla canónica. `scripts/check_compiler_boundary.py` y el
-objetivo `make test` comprueban que `compiler.c`, `ir.c`, `vm.c`, `gc.c` y los
+operan sobre la tabla canónica. Los objetivos C17 `make check-compiler-boundary`
+y `make test` comprueban que `compiler.c`, `ir.c`, `vm.c`, `gc.c` y los
 demás módulos experimentales no entren en `Makefile:SOURCES` ni sean incluidos
 por una fuente oficial.
 
