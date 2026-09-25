@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "scripts/validate_termux_artifact.py"
-RECIPE_VALIDATOR = ROOT / "scripts/validate_termux_recipe.py"
+RECIPE_VALIDATOR = ROOT / "tools/check_repository_contracts"
 RECIPE = ROOT / "packaging/termux-packages/milena/build.sh"
 
 
@@ -56,9 +57,9 @@ def run_validator(package: Path, *extra: str, expect_success: bool = True) -> No
         raise AssertionError(f"validator success={result.returncode == 0}, expected {expect_success}")
 
 
-def run_recipe(path: Path, expect_success: bool = True) -> None:
+def run_recipe(path: Path, *extra: str, expect_success: bool = True) -> None:
     result = subprocess.run(
-        [sys.executable, str(RECIPE_VALIDATOR), str(path)],
+        [str(RECIPE_VALIDATOR), "termux-recipe", str(path), *extra],
         cwd=ROOT, text=True, capture_output=True,
     )
     if (result.returncode == 0) != expect_success:
@@ -70,16 +71,50 @@ def run_recipe(path: Path, expect_success: bool = True) -> None:
 def main() -> int:
     run_recipe(RECIPE)
     with tempfile.TemporaryDirectory(prefix="milena-termux-recipe-") as raw_recipe:
+        work = Path(raw_recipe)
         base = RECIPE.read_text(encoding="utf-8")
-        missing_sha = Path(raw_recipe) / "missing-sha.sh"
-        missing_sha.write_text(base.replace(
-            "TERMUX_PKG_SHA256=56e189bbd1e89aa25a7e8588e0606f0ea42d3bf5f1086fcfa3442d632d571153",
-            "TERMUX_PKG_SHA256=",
-        ), encoding="utf-8")
-        run_recipe(missing_sha, expect_success=False)
-        debian_path = Path(raw_recipe) / "debian-path.sh"
+        sha_line = "TERMUX_PKG_SHA256=56e189bbd1e89aa25a7e8588e0606f0ea42d3bf5f1086fcfa3442d632d571153"
+        missing_sha = work / "missing-sha.sh"
+        missing_sha.write_text(base.replace(sha_line, "TERMUX_PKG_SHA256=\n" + sha_line), encoding="utf-8")
+        run_recipe(missing_sha)
+        unterminated = work / "unterminated-then-valid.sh"
+        unterminated.write_text(base.replace(sha_line, 'TERMUX_PKG_SHA256="unterminated\n' + sha_line), encoding="utf-8")
+        run_recipe(unterminated)
+        invalid_sha = work / "invalid-sha.sh"
+        invalid_sha.write_text(base.replace(sha_line, "TERMUX_PKG_SHA256=\n"), encoding="utf-8")
+        run_recipe(invalid_sha, expect_success=False)
+        debian_path = work / "debian-path.sh"
         debian_path.write_text(base.replace("$TERMUX_PREFIX/bin/milena", "/usr/bin/milena"), encoding="utf-8")
         run_recipe(debian_path, expect_success=False)
+
+        official = work / "official"
+        official.mkdir()
+        run_recipe(RECIPE, "--official-dir", str(official), expect_success=False)
+        build_script = official / "build-package.sh"
+        build_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        build_script.chmod(0o644)
+        run_recipe(RECIPE, f"--official-dir={official}", expect_success=False)
+        build_script.chmod(0o755)
+        run_recipe(RECIPE, "--official-dir", str(official))
+
+        if shutil.which("curl"):
+            archive = work / "archive/refs/tags/v0.2.0.tar.gz"
+            archive.parent.mkdir(parents=True)
+            payload = b"local fixture for optional recipe SHA256 fetch\n"
+            archive.write_bytes(payload)
+            file_recipe = work / "file-fetch.sh"
+            url = archive.as_uri().replace("v0.2.0.tar.gz", "v${TERMUX_PKG_VERSION}.tar.gz")
+            fetch_source = base.replace(
+                "TERMUX_PKG_SRCURL=https://github.com/46Neon/Milena/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz",
+                f'TERMUX_PKG_SRCURL="{url}"',
+            )
+            digest = hashlib.sha256(payload).hexdigest()
+            fetch_source = fetch_source.replace(sha_line, f'TERMUX_PKG_SHA256="{digest}"')
+            file_recipe.write_text(fetch_source, encoding="utf-8")
+            run_recipe(file_recipe, "--fetch")
+            mismatch_recipe = work / "file-fetch-mismatch.sh"
+            mismatch_recipe.write_text(fetch_source.replace(digest, "0" * 64), encoding="utf-8")
+            run_recipe(mismatch_recipe, "--fetch", expect_success=False)
     with tempfile.TemporaryDirectory(prefix="milena-termux-boundary-") as raw:
         work = Path(raw)
         package = make_package(work)
