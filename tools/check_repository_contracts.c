@@ -765,6 +765,7 @@ static void check_stream_architecture(void)
     char *spill_contract = read_file("docs/GROUPED_SPILL_CONTRACT.md");
     char *pr25_docs = read_file("docs/PR25_BIG_DATA_FOUNDATION.md");
     char *make_sources;
+    char *manifest_make;
     char *spill_start;
     char *runtime_stream_start;
     char *runtime_stream_end;
@@ -822,7 +823,6 @@ static void check_stream_architecture(void)
          contains(runtime_stream_start, "group_key->value") && contains(runtime_stream_start, "MILENA_PHYSICAL_CSV_STREAM_GROUPED"),
          "grouping key bypasses the typed logical/physical plan");
     need(contains(runtime, "milena_stream_execution_plan_build"), "canonical runtime bypasses the typed streaming plan");
-    require_markers(plan_header, physical_fields, ARRAY_COUNT(physical_fields), "typed query plan omits physical safety field: marker");
     for (index = 0U; index < ARRAY_COUNT(physical_fields); ++index) {
         if (!contains(plan_header, physical_fields[index])) {
             (void)fprintf(stderr, "typed query plan omits physical safety field: %s\n", physical_fields[index]);
