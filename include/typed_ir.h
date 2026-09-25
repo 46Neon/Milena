@@ -75,6 +75,12 @@ typedef struct MilenaIREdgeArgument {
     uint32_t value_id;
 } MilenaIREdgeArgument;
 
+typedef struct MilenaIRFunctionSignature {
+    MilenaIRType *parameter_types;
+    size_t parameter_count;
+    MilenaIRType return_type;
+} MilenaIRFunctionSignature;
+
 typedef struct MilenaIRProgram {
     MilenaIRInstruction *instructions;
     size_t count;
@@ -88,12 +94,18 @@ typedef struct MilenaIRProgram {
     MilenaIREdgeArgument *edge_arguments;
     size_t edge_argument_count;
     size_t edge_argument_capacity;
+    MilenaIRFunctionSignature signature;
+    bool has_function_signature;
 } MilenaIRProgram;
 
 /* This canonical typed representation is independent of the experimental
  * string-based IRProgram declared by ir.h. */
 MilenaIRProgram *milena_ir_program_create(void);
 void milena_ir_program_destroy(MilenaIRProgram *program);
+bool milena_ir_program_set_function_signature(MilenaIRProgram *program,
+                                               const MilenaIRType *parameter_types,
+                                               size_t parameter_count,
+                                               MilenaIRType return_type);
 bool milena_ir_program_add_block(MilenaIRProgram *program, uint32_t block_id);
 bool milena_ir_program_add_block_parameter(MilenaIRProgram *program,
                                             uint32_t block_id,
@@ -119,10 +131,11 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                                 size_t error_capacity);
 
 /* Lower one canonical scalar-HIR function body into a fresh, verified typed-IR
- * body. The current slice accepts zero parameters, numeric/bool locals, and
+ * body. The current slice accepts typed numeric (F64) input parameters and numeric/bool locals, and
  * either one final return or a final si/sino whose two arms each return
- * immediately. Calls and other control-flow shapes fail closed. `program`
- * must be empty. Function identity/signatures are not yet represented in IR. */
+ * immediately. The IR carries an explicit signature and entry-block parameter
+ * definitions. Calls and other control-flow shapes fail closed. `program`
+ * must be empty. */
 bool milena_ir_program_lower_scalar_function_body(
     MilenaIRProgram *program, const MilenaHIRFunction *function, char *error,
     size_t error_capacity);

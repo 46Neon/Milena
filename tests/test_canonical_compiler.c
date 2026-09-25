@@ -284,24 +284,80 @@ int main(void) {
     milena_ir_program_destroy(typed_body);
     milena_canonical_program_release(&program);
 
-    /* Unsupported parameters fail closed and leave the caller's empty output
-       untouched; no implicit function ABI is fabricated by this slice. */
+    /* Parameterized source -> typed HIR -> canonical IR keeps its function
+       signature and defines every input as an entry-block SSA value. */
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
           "funcion identidad(n) { retornar n; }", &error) == MILENA_OK,
           error.message);
-    typed_body = milena_ir_program_create();
-    CHECK(typed_body != NULL, "no se pudo reservar IR tipada de rechazo");
-    CHECK(!milena_ir_program_lower_scalar_function_body(typed_body,
-          &program.hir->functions[0], error.message, sizeof(error.message)) &&
-          strstr(error.message, "zero-parameter") != NULL &&
-          typed_body->count == 0 && typed_body->block_count == 0,
-          "parámetros sin firma IR deben rechazarse sin publicar IR parcial");
+    CHECK(program.hir && program.hir->function_count == 1 &&
+          program.hir->functions[0].parameter_count == 1 &&
+          program.hir->functions[0].parameters[0].value_type == MILENA_HIR_NUMBER &&
+          program.hir->functions[0].parameters[0].resolved_symbol_id != 0,
+          "la HIR debe conservar la declaración tipada y enlazada del parámetro");
+    program.hir->functions[0].parameters[0].value_type = MILENA_HIR_BOOLEAN;
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
               MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
-          program.ast != NULL && program.hir != NULL && error.line == 1,
-          "la integración debe fallar cerrado con parámetro y preservar AST/HIR; no debe usar intérprete");
-    milena_ir_program_destroy(typed_body);
+          program.ast != NULL && program.hir != NULL,
+          "un tipo de parámetro no admitido debe fallar cerrado sin publicar IR");
+    program.hir->functions[0].parameters[0].value_type = MILENA_HIR_NUMBER;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL,
+          error.message);
+    typed_body = program.typed_ir;
+    CHECK(typed_body->has_function_signature &&
+          typed_body->signature.parameter_count == 1 &&
+          typed_body->signature.parameter_types[0] == MILENA_IR_TYPE_F64 &&
+          typed_body->signature.return_type == MILENA_IR_TYPE_F64 &&
+          typed_body->parameter_count == 1 &&
+          typed_body->parameters[0].block_id == 1 &&
+          typed_body->parameters[0].value_id == 1 &&
+          typed_body->parameters[0].type == MILENA_IR_TYPE_F64 &&
+          typed_body->instructions[0].opcode == MILENA_IR_RETURN &&
+          typed_body->instructions[0].operand1_id == 1 &&
+          milena_ir_program_validate(typed_body, error.message,
+                                    sizeof(error.message)),
+          "el parámetro debe ser definición SSA de entrada usada por el retorno");
+    MilenaIRType saved_parameter_type = typed_body->signature.parameter_types[0];
+    typed_body->parameters[0].type = MILENA_IR_TYPE_BOOL;
+    CHECK(!milena_ir_program_validate(typed_body, error.message,
+                                      sizeof(error.message)) &&
+          strstr(error.message, "function signature") != NULL,
+          "el verificador debe rechazar tipo de entrada distinto a la firma");
+    typed_body->parameters[0].type = MILENA_IR_TYPE_F64;
+    typed_body->signature.parameter_types[0] = MILENA_IR_TYPE_BOOL;
+    CHECK(!milena_ir_program_validate(typed_body, error.message,
+                                      sizeof(error.message)),
+          "el verificador debe rechazar firma incompatible con el valor SSA de entrada");
+    typed_body->signature.parameter_types[0] = saved_parameter_type;
+    MilenaIRType *saved_parameter_types = typed_body->signature.parameter_types;
+    typed_body->signature.parameter_types = NULL;
+    typed_body->signature.parameter_count = 0;
+    CHECK(!milena_ir_program_validate(typed_body, error.message,
+                                      sizeof(error.message)) &&
+          strstr(error.message, "function signature") != NULL,
+          "el verificador debe rechazar una firma con aridad distinta a la entrada");
+    typed_body->signature.parameter_types = saved_parameter_types;
+    typed_body->signature.parameter_count = 1;
+    CHECK(milena_ir_program_validate(typed_body, error.message,
+                                     sizeof(error.message)),
+          error.message);
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion suma(a, b) { retornar a + b; }", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir &&
+          program.typed_ir->signature.parameter_count == 2 &&
+          program.typed_ir->parameter_count == 2 &&
+          program.typed_ir->parameters[0].value_id == 1 &&
+          program.typed_ir->parameters[1].value_id == 2 &&
+          program.typed_ir->instructions[0].opcode == MILENA_IR_ADD_F64 &&
+          program.typed_ir->instructions[0].operand1_id == 1 &&
+          program.typed_ir->instructions[0].operand2_id == 2,
+          "la lowering debe preservar orden de firma y lecturas de dos parámetros");
     milena_canonical_program_release(&program);
 
     milena_canonical_program_init(&program);
@@ -316,6 +372,15 @@ int main(void) {
           program.hir->functions[0].body[0]->as.conditional.then_count == 1 &&
           program.hir->functions[0].body[0]->as.conditional.else_count == 1,
           "la HIR debe conservar condición booleana y ramas de si/sino");
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir &&
+          program.typed_ir->signature.parameter_count == 1 &&
+          program.typed_ir->parameter_count == 1 &&
+          program.typed_ir->blocks[0].successor_true == 2 &&
+          program.typed_ir->blocks[0].successor_false == 3 &&
+          milena_ir_program_validate(program.typed_ir, error.message,
+                                     sizeof(error.message)),
+          "los parámetros de función deben dominar la condición y retornos de ambas ramas");
     milena_canonical_program_release(&program);
 
     /* An unresolved variable is an error with the original identifier span. */

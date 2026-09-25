@@ -93,14 +93,17 @@ struct MilenaHIRStatement {
     } as;
 };
 
+typedef struct {
+    char *name;
+    size_t resolved_symbol_id;
+    MilenaHIRValueType value_type;
+} MilenaHIRFunctionParameter;
+
 typedef struct MilenaHIRFunction {
     char *name;
     size_t resolved_symbol_id;
     MilenaHIRSourceSpan span;
-    struct {
-        char *name;
-        size_t resolved_symbol_id;
-    } *parameters;
+    MilenaHIRFunctionParameter *parameters;
     size_t parameter_count;
     MilenaHIRStatement **body;
     size_t body_count;
@@ -228,9 +231,10 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
                                              const char *source,
                                              MilenaError *error);
 
-/* Compile exactly one zero-parameter scalar HIR function into owned, verified
- * typed IR. Unsupported shapes fail closed; this never invokes the interpreter.
- * A successful compile replaces any previously owned typed_ir transactionally. */
+/* Compile exactly one supported scalar HIR function, including numeric input
+ * parameters, into owned, verified typed IR with an explicit function signature.
+ * Unsupported shapes fail closed; this never invokes the interpreter. A
+ * successful compile replaces any previously owned typed_ir transactionally. */
 MilenaStatus milena_canonical_program_compile_scalar_ir(
     MilenaCanonicalProgram *program, MilenaError *error);
 

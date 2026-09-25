@@ -15,7 +15,40 @@ void milena_ir_program_destroy(MilenaIRProgram *program) {
     free(program->blocks);
     free(program->parameters);
     free(program->edge_arguments);
+    free(program->signature.parameter_types);
     free(program);
+}
+
+bool milena_ir_program_set_function_signature(MilenaIRProgram *program,
+                                               const MilenaIRType *parameter_types,
+                                               size_t parameter_count,
+                                               MilenaIRType return_type) {
+    MilenaIRType *copy = NULL;
+    if (!program || program->has_function_signature ||
+        program->instructions || program->blocks || program->parameters ||
+        program->edge_arguments || program->count || program->block_count ||
+        program->parameter_count || program->edge_argument_count ||
+        program->signature.parameter_types || program->signature.parameter_count ||
+        program->signature.return_type != MILENA_IR_TYPE_INVALID ||
+        (parameter_count && !parameter_types) ||
+        parameter_count > SIZE_MAX / sizeof(*copy) ||
+        return_type <= MILENA_IR_TYPE_INVALID ||
+        return_type >= MILENA_IR_TYPE_VOID)
+        return false;
+    for (size_t i = 0; i < parameter_count; ++i)
+        if (parameter_types[i] <= MILENA_IR_TYPE_INVALID ||
+            parameter_types[i] >= MILENA_IR_TYPE_VOID)
+            return false;
+    if (parameter_count) {
+        copy = (MilenaIRType *)malloc(parameter_count * sizeof(*copy));
+        if (!copy) return false;
+        memcpy(copy, parameter_types, parameter_count * sizeof(*copy));
+    }
+    program->signature.parameter_types = copy;
+    program->signature.parameter_count = parameter_count;
+    program->signature.return_type = return_type;
+    program->has_function_signature = true;
+    return true;
 }
 
 static bool ir_fail(char *error, size_t capacity, const char *format, ...) {
@@ -231,6 +264,7 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
     size_t value_count = 0;
     size_t value_capacity;
     size_t expected_first = 0;
+    size_t entry_parameter_count = 0;
     size_t n;
     bool changed;
     if (error && error_capacity > 0) error[0] = '\0';
@@ -240,6 +274,26 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
         (program->edge_argument_count && !program->edge_arguments))
         return ir_fail(error, error_capacity,
                        "typed IR must contain valid instructions and blocks");
+    if (program->has_function_signature) {
+        if ((program->signature.parameter_count &&
+             !program->signature.parameter_types) ||
+            (!program->signature.parameter_count &&
+             program->signature.parameter_types) ||
+            program->signature.return_type <= MILENA_IR_TYPE_INVALID ||
+            program->signature.return_type >= MILENA_IR_TYPE_VOID)
+            return ir_fail(error, error_capacity,
+                           "invalid typed IR function signature");
+        for (size_t i = 0; i < program->signature.parameter_count; ++i)
+            if (program->signature.parameter_types[i] <= MILENA_IR_TYPE_INVALID ||
+                program->signature.parameter_types[i] >= MILENA_IR_TYPE_VOID)
+                return ir_fail(error, error_capacity,
+                               "invalid function parameter type at index %zu", i);
+    } else if (program->signature.parameter_types ||
+               program->signature.parameter_count ||
+               program->signature.return_type != MILENA_IR_TYPE_INVALID) {
+        return ir_fail(error, error_capacity,
+                       "function signature data is present without a signature");
+    }
     n = program->block_count;
     if (program->parameter_count > SIZE_MAX - program->count)
         return ir_fail(error, error_capacity, "too many typed IR values");
@@ -283,8 +337,14 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
         if (bi == SIZE_MAX || parameter->type <= MILENA_IR_TYPE_INVALID ||
             parameter->type >= MILENA_IR_TYPE_VOID)
             IR_REJECT("invalid block parameter at index %zu", pi);
-        if (bi == 0)
-            IR_REJECT("entry block parameters require function-signature support");
+        if (bi == 0) {
+            if (!program->has_function_signature ||
+                entry_parameter_count >= program->signature.parameter_count ||
+                parameter->type !=
+                    program->signature.parameter_types[entry_parameter_count])
+                IR_REJECT("entry block parameter does not match the function signature");
+            ++entry_parameter_count;
+        }
         if (!ir_add_validated_value(values, &value_count, value_capacity,
                                     parameter->value_id, parameter->type, bi, 0,
                                     true, error, error_capacity)) {
@@ -296,6 +356,10 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                 program->parameters[prior].value_id == parameter->value_id)
                 IR_REJECT("duplicate block parameter id %u", parameter->value_id);
     }
+    if ((program->has_function_signature &&
+         entry_parameter_count != program->signature.parameter_count) ||
+        (!program->has_function_signature && entry_parameter_count != 0))
+        IR_REJECT("entry block parameter count does not match the function signature");
 
     /* Check block-local instruction shape and collect every SSA definition
        before checking uses, so forward/non-dominating references fail closed. */
@@ -382,7 +446,9 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                         ins->result_type <= MILENA_IR_TYPE_INVALID ||
                         ins->result_type > MILENA_IR_TYPE_VOID ||
                         (!ins->operand1_id && ins->result_type != MILENA_IR_TYPE_VOID) ||
-                        (ins->operand1_id && ins->result_type == MILENA_IR_TYPE_VOID))
+                        (ins->operand1_id && ins->result_type == MILENA_IR_TYPE_VOID) ||
+                        (program->has_function_signature &&
+                         ins->result_type != program->signature.return_type))
                         goto bad_shape;
                     break;
                 default:
@@ -739,37 +805,126 @@ static bool ir_scalar_lower_return_branch(
     return true;
 }
 
+static bool ir_scalar_function_return_type(const MilenaHIRFunction *function,
+                                           MilenaIRType *return_type,
+                                           char *error, size_t error_capacity) {
+    const MilenaHIRStatement *last;
+    if (!function || !function->body || !function->body_count || !return_type)
+        return ir_fail(error, error_capacity,
+                       "scalar HIR function has no final return");
+    last = function->body[function->body_count - 1];
+    if (last && last->kind == MILENA_HIR_STMT_RETURN && last->as.expression)
+        return ir_hir_value_type(last->as.expression->value_type, return_type) ||
+               ir_fail(error, error_capacity,
+                       "unsupported scalar HIR function return type");
+    if (last && last->kind == MILENA_HIR_STMT_IF &&
+        last->as.conditional.then_count == 1 &&
+        last->as.conditional.else_count == 1 &&
+        last->as.conditional.then_body && last->as.conditional.else_body &&
+        last->as.conditional.then_body[0] &&
+        last->as.conditional.else_body[0] &&
+        last->as.conditional.then_body[0]->kind == MILENA_HIR_STMT_RETURN &&
+        last->as.conditional.else_body[0]->kind == MILENA_HIR_STMT_RETURN &&
+        last->as.conditional.then_body[0]->as.expression &&
+        last->as.conditional.else_body[0]->as.expression) {
+        MilenaIRType then_type, else_type;
+        if (!ir_hir_value_type(
+                last->as.conditional.then_body[0]->as.expression->value_type,
+                &then_type) ||
+            !ir_hir_value_type(
+                last->as.conditional.else_body[0]->as.expression->value_type,
+                &else_type) || then_type != else_type)
+            return ir_fail(error, error_capacity,
+                           "scalar conditional return types do not match");
+        *return_type = then_type;
+        return true;
+    }
+    return ir_fail(error, error_capacity,
+                   "scalar HIR function requires one final return or returning si/sino");
+}
+
 bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
                                            const MilenaHIRFunction *function,
                                            char *error, size_t error_capacity) {
     MilenaIRProgram *lowered = NULL;
     IRScalarBinding *bindings = NULL;
+    MilenaIRType *parameter_types = NULL;
+    MilenaIRType return_type = MILENA_IR_TYPE_INVALID;
     size_t binding_count = 0;
+    size_t binding_capacity;
     uint32_t next_value = 1;
     bool saw_return = false;
     bool success = false;
     if (error && error_capacity) error[0] = '\0';
     if (!program || !function || !function->name || !function->resolved_symbol_id ||
-        function->parameter_count != 0 || function->body_count == 0 ||
-        !function->body || program->instructions || program->blocks ||
-        program->parameters || program->edge_arguments || program->count ||
-        program->capacity || program->block_count || program->block_capacity ||
-        program->parameter_count || program->parameter_capacity ||
-        program->edge_argument_count || program->edge_argument_capacity)
+        !function->body_count || !function->body ||
+        (function->parameter_count && !function->parameters) ||
+        function->parameter_count >= UINT32_MAX ||
+        function->body_count > SIZE_MAX - function->parameter_count ||
+        program->instructions || program->blocks || program->parameters ||
+        program->edge_arguments || program->signature.parameter_types ||
+        program->signature.parameter_count ||
+        program->signature.return_type != MILENA_IR_TYPE_INVALID ||
+        program->has_function_signature || program->count || program->capacity ||
+        program->block_count || program->block_capacity || program->parameter_count ||
+        program->parameter_capacity || program->edge_argument_count ||
+        program->edge_argument_capacity)
         return ir_fail(error, error_capacity,
-                       "scalar IR lowering requires a zero-parameter HIR function and fresh output");
-    if (function->body_count > SIZE_MAX / sizeof(*bindings))
-        return ir_fail(error, error_capacity, "scalar HIR function body is too large");
+                       "scalar IR lowering requires a supported HIR function and fresh output");
+    binding_capacity = function->body_count + function->parameter_count;
+    if (binding_capacity > SIZE_MAX / sizeof(*bindings) ||
+        function->parameter_count > SIZE_MAX / sizeof(*parameter_types))
+        return ir_fail(error, error_capacity, "scalar HIR function is too large");
+    if (!ir_scalar_function_return_type(function, &return_type,
+                                        error, error_capacity)) return false;
     lowered = milena_ir_program_create();
-    bindings = (IRScalarBinding *)calloc(function->body_count, sizeof(*bindings));
-    if (!lowered || !bindings) {
+    bindings = (IRScalarBinding *)calloc(binding_capacity, sizeof(*bindings));
+    if (function->parameter_count)
+        parameter_types = (MilenaIRType *)calloc(function->parameter_count,
+                                                  sizeof(*parameter_types));
+    if (!lowered || !bindings || (function->parameter_count && !parameter_types)) {
         milena_ir_program_destroy(lowered);
         free(bindings);
+        free(parameter_types);
         return ir_fail(error, error_capacity, "out of memory lowering scalar HIR function");
     }
+    for (size_t i = 0; i < function->parameter_count; ++i) {
+        const MilenaHIRFunctionParameter *parameter = &function->parameters[i];
+        if (!parameter->resolved_symbol_id || !parameter->name ||
+            parameter->value_type != MILENA_HIR_NUMBER ||
+            !ir_hir_value_type(parameter->value_type, &parameter_types[i])) {
+            ir_fail(error, error_capacity,
+                    "scalar HIR input parameters must have resolved numeric types");
+            goto cleanup;
+        }
+        if (ir_scalar_binding_index(bindings, binding_count,
+                                    parameter->resolved_symbol_id) != SIZE_MAX) {
+            ir_fail(error, error_capacity,
+                    "scalar HIR function contains duplicate parameter bindings");
+            goto cleanup;
+        }
+        uint32_t value_id = (uint32_t)i + 1;
+        bindings[binding_count++] = (IRScalarBinding){
+            parameter->resolved_symbol_id, value_id, parameter_types[i]};
+    }
+    if (!milena_ir_program_set_function_signature(lowered, parameter_types,
+            function->parameter_count, return_type)) {
+        ir_fail(error, error_capacity,
+                "could not establish scalar IR function signature");
+        goto cleanup;
+    }
+    next_value = (uint32_t)function->parameter_count + 1;
     if (!milena_ir_program_add_block(lowered, 1)) {
         ir_fail(error, error_capacity, "could not create scalar IR entry block");
         goto cleanup;
+    }
+    for (size_t i = 0; i < function->parameter_count; ++i) {
+        if (!milena_ir_program_add_block_parameter(lowered, 1,
+                (uint32_t)i + 1, parameter_types[i])) {
+            ir_fail(error, error_capacity,
+                    "could not define scalar IR input at entry block");
+            goto cleanup;
+        }
     }
     for (size_t i = 0; i < function->body_count; ++i) {
         const MilenaHIRStatement *statement = function->body[i];
@@ -882,5 +1037,6 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
 cleanup:
     milena_ir_program_destroy(lowered);
     free(bindings);
+    free(parameter_types);
     return success;
 }

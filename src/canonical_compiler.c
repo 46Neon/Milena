@@ -396,6 +396,11 @@ static HIRBuildResult scalar_hir_build(const ASTNode *ast,
                 result = HIR_BUILD_MEMORY;
                 break;
             }
+            if (!hir_value_type(parameter->value_type,
+                                &function->parameters[j].value_type)) {
+                result = HIR_BUILD_UNSUPPORTED;
+                break;
+            }
         }
         if (result != HIR_BUILD_OK) break;
         const ASTNode *body = node->children[1];
@@ -1070,7 +1075,7 @@ MilenaStatus milena_canonical_program_compile_scalar_ir(
     if (!program->hir || program->hir->function_count != 1 ||
         program->hir->statement_count != 0 || !program->hir->functions) {
         canonical_error(error, MILENA_ERR_UNSUPPORTED,
-                        "La compilación IR requiere exactamente una función escalar y ninguna sentencia global");
+                        "La compilación IR requiere exactamente una función escalar soportada y ninguna sentencia global");
         return MILENA_ERR_UNSUPPORTED;
     }
 
