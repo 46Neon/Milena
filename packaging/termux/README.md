@@ -32,11 +32,12 @@ El entorno Termux es Linux incompleto respecto a Debian: no presupone `sudo`,
 Desde la raíz de Milena se valida la receta y luego se copia al checkout oficial:
 
 ```bash
-python3 scripts/validate_termux_recipe.py \
+make tools/check_repository_contracts CC=clang
+./tools/check_repository_contracts termux-recipe \
   packaging/termux-packages/milena/build.sh --fetch
 mkdir -p "$TERMUX_PACKAGES_DIR/packages/milena"
 cp packaging/termux-packages/milena/build.sh "$TERMUX_PACKAGES_DIR/packages/milena/"
-python3 scripts/validate_termux_recipe.py \
+./tools/check_repository_contracts termux-recipe \
   "$TERMUX_PACKAGES_DIR/packages/milena/build.sh" \
   --official-dir "$TERMUX_PACKAGES_DIR"
 cd "$TERMUX_PACKAGES_DIR"
