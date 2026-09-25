@@ -13,7 +13,7 @@ Se reconcilia `include/ir.h` / `src/ir.c` añadiendo metadatos tipados a la repr
 - Bloques contiguos con IDs no nulos y únicos, terminador obligatorio, sucesores explícitos existentes y consistencia entre aristas y terminador.
 - IDs de valores únicos; operandos definidos anteriormente en el mismo bloque y con el tipo requerido; opcode, tipo de resultado y forma de operandos explícitos. El rechazo de usos entre bloques es deliberado: esta iteración aún no implementa parámetros/phi ni cálculo de dominadores.
 
-El validador rechaza las operaciones legadas basadas en cadenas y cualquier opcode no listado. La API anterior de `ir_generate` se conserva por compatibilidad experimental, pero no produce ni valida este subconjunto tipado. El ejecutable oficial no incluye `src/ir.c`; el target de prueba lo compila aislado para no enlazar una VM/backend incompletos en el producto.
+El validador rechaza las operaciones legadas basadas en cadenas y cualquier opcode no listado. La API anterior de `ir_generate` se conserva por compatibilidad experimental, pero no produce ni valida este subconjunto tipado. El ejecutable oficial no incluye `src/ir.c`; el paso dedicado de CI compila la prueba junto con `src/ir.c` y `src/common.c` de forma aislada, sin añadir esa fuente experimental al Makefile canónico ni enlazar una VM/backend incompletos en el producto.
 
 ## Lowering desde el lenguaje: todavía no implementado
 
