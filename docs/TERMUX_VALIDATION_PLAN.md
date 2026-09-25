@@ -72,7 +72,7 @@ oficial indicado por `TERMUX_PACKAGES_DIR`. La rama del fork no equivale a una
 aceptación de Termux ni abre una PR adicional en Milena.
 
 La validación de receta puede ejecutarse sin clonar más de lo necesario con
-`python3 scripts/validate_termux_recipe.py ... --official-dir "$TERMUX_PACKAGES_DIR"`;
+`./tools/check_repository_contracts termux-recipe ... --official-dir "$TERMUX_PACKAGES_DIR"`;
 el build real requiere el `build-package.sh` oficial y solo se habilita en el
 runner self-hosted Android/aarch64.
 
