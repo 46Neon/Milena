@@ -1,6 +1,6 @@
-# Plan industrial del compilador de Milena
+# Historial del plan anterior del compilador de Milena
 
-**Estado de esta rama:** fase 1 completada y verificada en su SHA correspondiente; fase 2 tiene un primer incremento estructural, sin satisfacer aún su gate de salida. Las ocho fases no están completadas y no hay backend promovido al producto. Este documento define alcance y criterios; no declara capacidades ausentes.
+> **Documento histórico.** Este archivo conserva el análisis y el roadmap anterior de ocho pasos por trazabilidad. No es el plan vigente ni sus estados describen la entrega actual. El contrato normativo actual, en exactamente dos fases, está en [COMPILADOR_DOS_FASES.md](COMPILADOR_DOS_FASES.md).
 
 ## Principios y límites
 
