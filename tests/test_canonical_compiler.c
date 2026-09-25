@@ -1219,16 +1219,16 @@ int main(void) {
           milena_ir_module_validate(program.typed_module, error.message,
                                     sizeof(error.message)), error.message);
     MilenaIRProgram *forward_body = program.typed_module->functions[0].body;
-    MilenaIRInstruction *forward_call = NULL;
+    MilenaIRInstruction *forward_ir_call = NULL;
     for (size_t i = 0; i < forward_body->count; ++i)
         if (forward_body->instructions[i].opcode == MILENA_IR_CALL)
-            forward_call = &forward_body->instructions[i];
-    CHECK(forward_call && forward_call->integer_immediate ==
+            forward_ir_call = &forward_body->instructions[i];
+    CHECK(forward_ir_call && forward_ir_call->integer_immediate ==
               (int64_t)program.typed_module->functions[1].symbol_id &&
-          forward_call->call_argument_count == 3 &&
-          forward_body->call_arguments[forward_call->call_argument_offset] == 1 &&
-          forward_body->call_arguments[forward_call->call_argument_offset + 1] == 2 &&
-          forward_body->call_arguments[forward_call->call_argument_offset + 2] == 3,
+          forward_ir_call->call_argument_count == 3 &&
+          forward_body->call_arguments[forward_ir_call->call_argument_offset] == 1 &&
+          forward_body->call_arguments[forward_ir_call->call_argument_offset + 1] == 2 &&
+          forward_body->call_arguments[forward_ir_call->call_argument_offset + 2] == 3,
           "la llamada adelantada enlaza symbol ID y todos los argumentos SSA");
     CHECK(milena_ir_module_validate(program.typed_module, error.message,
                                     sizeof(error.message)), error.message);
