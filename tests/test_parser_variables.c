@@ -76,5 +76,36 @@ int main(void) {
 
     ast_destroy(program);
     parser_release(&parser);
+
+    /* The public function contract documents both spellings, including the
+       accented canonical keyword. Keep its parameter/return/call AST shape
+       covered independently of interpreter execution. */
+    const char *function_source =
+        "función doble(n) { retornar n * 2; }\n"
+        "variable salida = doble(21);\n";
+    lexer_init(&lexer, function_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program != NULL && !parser.has_error);
+    assert(program->child_count == 2);
+    ASTNode *function = program->children[0];
+    assert(function->type == AST_DECLARACION_FUNCION);
+    assert(strcmp(function->value, "doble") == 0);
+    assert(function->child_count == 2);
+    assert(function->children[0]->type == AST_BLOQUE_FUNCION);
+    assert(function->children[0]->child_count == 1);
+    assert(strcmp(function->children[0]->children[0]->value, "n") == 0);
+    ASTNode *body = function->children[1];
+    assert(body->type == AST_BLOQUE_FUNCION);
+    assert(body->child_count == 1);
+    assert(body->children[0]->type == AST_COMANDO_RETORNAR);
+    assert(body->children[0]->children[0]->type == AST_EXPRESION_OPERACION);
+    ASTNode *output = program->children[1];
+    assert(output->type == AST_DECLARACION_VARIABLE);
+    assert(output->children[0]->type == AST_EXPRESION_LLAMADA);
+    assert(strcmp(output->children[0]->value, "doble") == 0);
+    assert(output->children[0]->child_count == 1);
+    ast_destroy(program);
+    parser_release(&parser);
     return 0;
 }
