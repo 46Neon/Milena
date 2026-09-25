@@ -609,14 +609,14 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                 free(values); free(reachable); free(queue); free(dominators);
                 return false;
             }
-            if ((ins->opcode == MILENA_IR_CALL && ins->target_true == 2) ||
-                (ins->opcode != MILENA_IR_CALL &&
-                 (ins->opcode == MILENA_IR_ADD_I64 || ins->opcode == MILENA_IR_EQ_I64 ||
-                  ins->opcode == MILENA_IR_ADD_F64 || ins->opcode == MILENA_IR_SUB_F64 ||
-                  ins->opcode == MILENA_IR_MUL_F64 || ins->opcode == MILENA_IR_DIV_F64 ||
-                  ins->opcode == MILENA_IR_EQ_F64 || ins->opcode == MILENA_IR_NE_F64 ||
-                  ins->opcode == MILENA_IR_LT_F64 || ins->opcode == MILENA_IR_LE_F64 ||
-                  ins->opcode == MILENA_IR_GT_F64 || ins->opcode == MILENA_IR_GE_F64)) &&
+            if (((ins->opcode == MILENA_IR_CALL && ins->target_true == 2) ||
+                 (ins->opcode != MILENA_IR_CALL &&
+                  (ins->opcode == MILENA_IR_ADD_I64 || ins->opcode == MILENA_IR_EQ_I64 ||
+                   ins->opcode == MILENA_IR_ADD_F64 || ins->opcode == MILENA_IR_SUB_F64 ||
+                   ins->opcode == MILENA_IR_MUL_F64 || ins->opcode == MILENA_IR_DIV_F64 ||
+                   ins->opcode == MILENA_IR_EQ_F64 || ins->opcode == MILENA_IR_NE_F64 ||
+                   ins->opcode == MILENA_IR_LT_F64 || ins->opcode == MILENA_IR_LE_F64 ||
+                   ins->opcode == MILENA_IR_GT_F64 || ins->opcode == MILENA_IR_GE_F64))) &&
                 !ir_use_is_valid(values, value_count, ins->operand2_id,
                     ins->opcode == MILENA_IR_CALL ?
                         ir_module_parameter_type(program->module_context,
