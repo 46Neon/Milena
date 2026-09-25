@@ -86,8 +86,9 @@ def validate_elf_from_package(package: Path) -> None:
                 binary.write_bytes(member.read())
         except (OSError, subprocess.CalledProcessError, tarfile.TarError) as exc:
             fail(f"cannot extract package ELF: {exc}")
-        checker = Path(__file__).with_name("validate_termux_elf.py")
-        result = subprocess.run([sys.executable, str(checker), str(binary)], text=True, capture_output=True)
+        checker_name = "validate_termux_elf.exe" if sys.platform == "win32" else "validate_termux_elf"
+        checker = Path(__file__).resolve().parents[1] / "tools" / checker_name
+        result = subprocess.run([str(checker), str(binary)], text=True, capture_output=True)
         if result.returncode:
             fail(result.stderr.strip() or "Termux ELF validation failed")
 

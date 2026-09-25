@@ -100,7 +100,8 @@ jobs:
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           dpkg-deb --fsys-tarfile "$package" | tar -xOf - ./data/data/com.termux/files/usr/bin/milena > "$tmp/milena"
-          python3 scripts/validate_termux_elf.py "$tmp/milena"
+          make tools/validate_termux_elf CC=clang
+          ./tools/validate_termux_elf "$tmp/milena"
           test "$(dpkg-deb -f "$package" Architecture)" = aarch64
           test "$(dpkg-deb -f "$package" Package)" = milena
 

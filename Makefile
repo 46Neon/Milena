@@ -374,7 +374,7 @@ benchmark-stream-grouped-spill: $(TARGET)
 # experimental compiler/IR/VM sources and never assume a Debian filesystem.
 termux-build:
 	$(MAKE) clean
-	$(MAKE) TERMUX=1 CC="$${CC:-clang}" CFLAGS="$${CFLAGS:-$(TERMUX_CFLAGS)}" LDFLAGS="$${LDFLAGS:-$(TERMUX_LDFLAGS)}" all
+	$(MAKE) TERMUX=1 CC="$${CC:-clang}" CFLAGS="$${CFLAGS:-$(TERMUX_CFLAGS)}" LDFLAGS="$${LDFLAGS:-$(TERMUX_LDFLAGS)}" all tools/validate_termux_elf
 
 termux-install: termux-build
 	test -n "$(TERMUX_PREFIX)"

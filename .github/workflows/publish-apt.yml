@@ -85,7 +85,8 @@ jobs:
           tmp="$(mktemp -d)"
           trap 'rm -rf "$tmp"' EXIT
           dpkg-deb --fsys-tarfile "$package" | tar -xOf - ./data/data/com.termux/files/usr/bin/milena > "$tmp/milena"
-          python3 scripts/validate_termux_elf.py "$tmp/milena"
+          make tools/validate_termux_elf
+          ./tools/validate_termux_elf "$tmp/milena"
 
       - name: Run reproducible Termux boundary fixture tests
         run: make test-termux-packaging

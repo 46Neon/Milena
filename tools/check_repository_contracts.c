@@ -1969,7 +1969,7 @@ static void check_termux_packaging(void)
         "make tools/check_repository_contracts", "./tools/check_repository_contracts termux-recipe",
         "upload-artifact@v4", "if-no-files-found: error"
     };
-    static const char *const builder_required[] = {"validate_termux_elf.py", "README.md", "SOURCE_DATE_EPOCH", ".provenance.json", "TERMUX=1"};
+    static const char *const builder_required[] = {"tools/validate_termux_elf", "README.md", "SOURCE_DATE_EPOCH", ".provenance.json", "TERMUX=1"};
     static const char *const builder_forbidden[] = {"cp -R examples", "tests/", "include/", "src/compiler.c", "src/ir.c", "src/vm.c"};
     static const char *const readmes[] = {"README.md", "packaging/README.md", "packaging/termux/README.md"};
     StringList errors;
@@ -2141,7 +2141,7 @@ static void check_termux_runner_contract(void)
         "runs-on: [self-hosted, termux, aarch64, milena]", "TERMUX_PACKAGES_DIR", "build-package.sh",
         "-I -f milena", "termux-runner-preflight.sh", "make tools/check_repository_contracts",
         "tools/check_repository_contracts termux-recipe", "validate_termux_artifact.py",
-        "validate_termux_elf.py", "termux-real-smoke.sh",
+        "tools/validate_termux_elf", "termux-real-smoke.sh",
         "pkg install", "pkg upgrade", "pkg remove", "upload-artifact@v4", "if-no-files-found: error"
     };
     static const char *const preflight_fragments[] = {
