@@ -125,10 +125,13 @@ static void expect_invalid(const uint8_t *bytes, size_t size) {
     assert(module == NULL);
 }
 
-static void set_payload_length(uint8_t *bytes, size_t total_size) {
-    uint32_t payload_length = (uint32_t)(total_size - 16u);
+static void set_u32_le(uint8_t *bytes, size_t offset, uint32_t value) {
     for (size_t i = 0; i < 4u; ++i)
-        bytes[12u + i] = (uint8_t)(payload_length >> (i * 8u));
+        bytes[offset + i] = (uint8_t)(value >> (i * 8u));
+}
+
+static void set_payload_length(uint8_t *bytes, size_t total_size) {
+    set_u32_le(bytes, 12u, (uint32_t)(total_size - 16u));
 }
 
 static void test_rejects_bad_headers_and_lengths(void) {
@@ -178,6 +181,20 @@ static void test_rejects_bad_headers_and_lengths(void) {
     memcpy(mutated, bytes, size);
     /* function_count follows the 16-byte header and must be nonzero */
     memset(mutated + 16u, 0, 4u);
+    expect_invalid(mutated, size);
+
+    memcpy(mutated, bytes, size);
+    /* Each array count independently fits in the remaining payload, but their
+       combined records do not. The decoder must reject before allocating them. */
+    set_u32_le(mutated, 46u, 35u);  /* block parameter count */
+    set_u32_le(mutated, 50u, 29u);  /* edge argument count */
+    set_u32_le(mutated, 54u, 100u); /* call argument count */
+    set_u32_le(mutated, 58u, 8u);   /* instruction count */
+    char resource_error[256] = {0};
+    assert(!milena_bytecode_verify(mutated, size, resource_error,
+                                   sizeof(resource_error)));
+    assert(strstr(resource_error,
+                  "arrays exceed remaining bytecode length") != NULL);
     expect_invalid(mutated, size);
 
     memcpy(mutated, bytes, size);
