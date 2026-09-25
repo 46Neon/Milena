@@ -1,4 +1,4 @@
-/* ISO C17 ports of repository source-boundary and streaming architecture checks. */
+/* ISO C17 repository contracts for source boundaries, docs, and Termux packaging. */
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdarg.h>
@@ -915,10 +915,1145 @@ static void check_stream_architecture(void)
     free(pr25_docs);
 }
 
+
+
+/* Phase 3 Python checker ports: local Markdown targets and Termux contracts. */
+static bool ascii_equal_nocase(const char *left, const char *right, size_t length)
+{
+    size_t index;
+    for (index = 0U; index < length; ++index) {
+        unsigned char a = (unsigned char)left[index];
+        unsigned char b = (unsigned char)right[index];
+        if (a >= (unsigned char)'A' && a <= (unsigned char)'Z') {
+            a = (unsigned char)(a + ((unsigned char)'a' - (unsigned char)'A'));
+        }
+        if (b >= (unsigned char)'A' && b <= (unsigned char)'Z') {
+            b = (unsigned char)(b + ((unsigned char)'a' - (unsigned char)'A'));
+        }
+        if (a != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static char *optional_read_file(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    long length;
+    size_t bytes_read;
+    char *contents;
+    if (file == NULL) {
+        return NULL;
+    }
+    if (fseek(file, 0L, SEEK_END) != 0) {
+        (void)fclose(file);
+        return NULL;
+    }
+    length = ftell(file);
+    if (length < 0L || fseek(file, 0L, SEEK_SET) != 0 ||
+        (unsigned long)length >= (unsigned long)((size_t)-1)) {
+        (void)fclose(file);
+        return NULL;
+    }
+    contents = (char *)malloc((size_t)length + 1U);
+    if (contents == NULL) {
+        (void)fclose(file);
+        (void)fprintf(stderr, "ERROR: out of memory while reading %s\n", path);
+        exit(EXIT_FAILURE);
+    }
+    bytes_read = fread(contents, 1U, (size_t)length, file);
+    if (bytes_read != (size_t)length || ferror(file) != 0 || fclose(file) != 0) {
+        free(contents);
+        return NULL;
+    }
+    contents[bytes_read] = '\0';
+    return contents;
+}
+
+static void require_file_fragments(StringList *errors, const char *path,
+                                   const char *const *fragments, size_t fragment_count)
+{
+    size_t index;
+    char *text;
+    if (!file_exists(path)) {
+        list_addf(errors, "missing required file: %s", path);
+        return;
+    }
+    text = read_file(path);
+    for (index = 0U; index < fragment_count; ++index) {
+        if (!contains(text, fragments[index])) {
+            list_addf(errors, "%s missing required contract: %s", path, fragments[index]);
+        }
+    }
+    free(text);
+}
+
+static bool is_scheme_char(unsigned char value, bool first)
+{
+    return (value >= (unsigned char)'A' && value <= (unsigned char)'Z') ||
+           (value >= (unsigned char)'a' && value <= (unsigned char)'z') ||
+           (!first && ((value >= (unsigned char)'0' && value <= (unsigned char)'9') ||
+                       value == (unsigned char)'+' || value == (unsigned char)'.' ||
+                       value == (unsigned char)'-'));
+}
+
+static char *markdown_prose(const char *text)
+{
+    size_t text_length = strlen(text);
+    char *output = (char *)malloc(text_length + 1U);
+    size_t output_length = 0U;
+    const char *line = text;
+    bool in_fence = false;
+    char fence = '\0';
+    bool wrote_line = false;
+    if (output == NULL) {
+        (void)fprintf(stderr, "ERROR: out of memory while stripping Markdown code\n");
+        exit(EXIT_FAILURE);
+    }
+    while (*line != '\0') {
+        const char *end = strchr(line, '\n');
+        const char *cursor;
+        const char *trimmed;
+        bool is_fence = false;
+        size_t line_length;
+        if (end == NULL) {
+            end = line + strlen(line);
+        }
+        line_length = (size_t)(end - line);
+        trimmed = line;
+        while (trimmed < end && isspace((unsigned char)*trimmed) != 0) {
+            ++trimmed;
+        }
+        if ((size_t)(end - trimmed) >= 3U &&
+            ((trimmed[0] == '`' && trimmed[1] == '`' && trimmed[2] == '`') ||
+             (trimmed[0] == '~' && trimmed[1] == '~' && trimmed[2] == '~'))) {
+            char current = trimmed[0];
+            is_fence = true;
+            if (!in_fence) {
+                in_fence = true;
+                fence = current;
+            } else if (current == fence) {
+                in_fence = false;
+                fence = '\0';
+            }
+        }
+        if (!in_fence && !is_fence) {
+            bool wrote_char = false;
+            if (wrote_line) {
+                output[output_length++] = '\n';
+            }
+            cursor = line;
+            while (cursor < end) {
+                if (*cursor == '`') {
+                    const char *closing = cursor + 1;
+                    while (closing < end && *closing != '`') {
+                        ++closing;
+                    }
+                    if (closing < end) {
+                        cursor = closing + 1;
+                        continue;
+                    }
+                }
+                output[output_length++] = *cursor++;
+                wrote_char = true;
+            }
+            (void)wrote_char;
+            wrote_line = true;
+        }
+        if (*end == '\0') {
+            break;
+        }
+        line = end + 1;
+        if (*line == '\0') {
+            break;
+        }
+        (void)line_length;
+    }
+    output[output_length] = '\0';
+    return output;
+}
+
+static char *markdown_destination(const char *begin, const char *end)
+{
+    const char *start = begin;
+    const char *finish = end;
+    const char *space;
+    size_t length;
+    char *result;
+    while (start < finish && isspace((unsigned char)*start) != 0) {
+        ++start;
+    }
+    while (finish > start && isspace((unsigned char)finish[-1]) != 0) {
+        --finish;
+    }
+    if (start < finish && *start == '<') {
+        const char *close = memchr(start + 1, '>', (size_t)(finish - start - 1));
+        if (close != NULL) {
+            ++start;
+            finish = close;
+        }
+    } else {
+        for (space = start; space < finish; ++space) {
+            if (isspace((unsigned char)*space) != 0) {
+                finish = space;
+                break;
+            }
+        }
+    }
+    length = (size_t)(finish - start);
+    result = (char *)malloc(length + 1U);
+    if (result == NULL) {
+        (void)fprintf(stderr, "ERROR: out of memory while parsing Markdown destination\n");
+        exit(EXIT_FAILURE);
+    }
+    memcpy(result, start, length);
+    result[length] = '\0';
+    return result;
+}
+
+static void collect_markdown_targets(const char *prose, StringList *targets)
+{
+    const char *cursor = prose;
+    while (*cursor != '\0') {
+        const char *open = strchr(cursor, '[');
+        const char *label_end;
+        const char *destination_start;
+        const char *destination_end;
+        if (open == NULL) {
+            break;
+        }
+        label_end = strchr(open + 1, ']');
+        if (label_end != NULL && label_end[1] == '(') {
+            destination_start = label_end + 2;
+            destination_end = destination_start;
+            while (*destination_end != '\0' && *destination_end != ')' && *destination_end != '\n') {
+                ++destination_end;
+            }
+            if (destination_end > destination_start && *destination_end == ')') {
+                char *target = markdown_destination(destination_start, destination_end);
+                list_add(targets, target);
+                free(target);
+                cursor = destination_end + 1;
+                continue;
+            }
+        }
+        cursor = open + 1;
+    }
+}
+
+static bool html_word(unsigned char value)
+{
+    return (value >= (unsigned char)'A' && value <= (unsigned char)'Z') ||
+           (value >= (unsigned char)'a' && value <= (unsigned char)'z') ||
+           (value >= (unsigned char)'0' && value <= (unsigned char)'9') ||
+           value == (unsigned char)'_';
+}
+
+static void collect_html_targets(const char *text, StringList *targets)
+{
+    const char *cursor = text;
+    while ((cursor = strchr(cursor, '<')) != NULL) {
+        const char *tag = cursor + 1;
+        const char *tag_end;
+        const char *scan;
+        bool valid_tag;
+        {
+            size_t tag_length = strlen(tag);
+            bool is_img = tag_length >= 3U && ascii_equal_nocase(tag, "img", 3U);
+            bool is_anchor = tag_length >= 1U && ascii_equal_nocase(tag, "a", 1U);
+            valid_tag = (is_anchor || is_img) &&
+                        !html_word((unsigned char)tag[is_img ? 3U : 1U]);
+        }
+        if (!valid_tag) {
+            cursor += 1;
+            continue;
+        }
+        tag_end = strchr(tag, '>');
+        if (tag_end == NULL) {
+            break;
+        }
+        scan = tag;
+        while (scan < tag_end) {
+            const char *attribute = NULL;
+            const char *attribute_cursor;
+            const char *value_start;
+            const char *value_end;
+            for (attribute_cursor = scan; attribute_cursor < tag_end; ++attribute_cursor) {
+                if ((attribute_cursor == tag || !html_word((unsigned char)attribute_cursor[-1])) &&
+                    (size_t)(tag_end - attribute_cursor) >= 5U &&
+                    ((ascii_equal_nocase(attribute_cursor, "href", 4U) && attribute_cursor[4] == '=') ||
+                     (ascii_equal_nocase(attribute_cursor, "src", 3U) && attribute_cursor[3] == '='))) {
+                    attribute = attribute_cursor;
+                    break;
+                }
+            }
+            if (attribute == NULL) {
+                break;
+            }
+            attribute_cursor = attribute + (ascii_equal_nocase(attribute, "href", 4U) ? 5U : 4U);
+            if (*attribute_cursor == '\'' || *attribute_cursor == '"') {
+                char quote = *attribute_cursor++;
+                value_start = attribute_cursor;
+                value_end = value_start;
+                while (value_end < tag_end && *value_end != quote) {
+                    ++value_end;
+                }
+                if (value_end > value_start && value_end < tag_end) {
+                    char *target = (char *)malloc((size_t)(value_end - value_start) + 1U);
+                    if (target == NULL) {
+                        (void)fprintf(stderr, "ERROR: out of memory while parsing HTML target\n");
+                        exit(EXIT_FAILURE);
+                    }
+                    memcpy(target, value_start, (size_t)(value_end - value_start));
+                    target[value_end - value_start] = '\0';
+                    list_add(targets, target);
+                    free(target);
+                }
+                scan = value_end < tag_end ? value_end + 1 : tag_end;
+            } else {
+                scan = attribute_cursor;
+            }
+        }
+        cursor = tag_end + 1;
+    }
+}
+
+static int hex_value(unsigned char value)
+{
+    if (value >= (unsigned char)'0' && value <= (unsigned char)'9') {
+        return (int)(value - (unsigned char)'0');
+    }
+    if (value >= (unsigned char)'a' && value <= (unsigned char)'f') {
+        return (int)(value - (unsigned char)'a') + 10;
+    }
+    if (value >= (unsigned char)'A' && value <= (unsigned char)'F') {
+        return (int)(value - (unsigned char)'A') + 10;
+    }
+    return -1;
+}
+
+static char *percent_decode(const char *text, size_t length)
+{
+    char *decoded = (char *)malloc(length + 1U);
+    size_t input = 0U;
+    size_t output = 0U;
+    if (decoded == NULL) {
+        (void)fprintf(stderr, "ERROR: out of memory while decoding URL path\n");
+        exit(EXIT_FAILURE);
+    }
+    while (input < length) {
+        if (text[input] == '%' && input + 2U < length) {
+            int high = hex_value((unsigned char)text[input + 1U]);
+            int low = hex_value((unsigned char)text[input + 2U]);
+            if (high >= 0 && low >= 0) {
+                decoded[output++] = (char)(high * 16 + low);
+                input += 3U;
+                continue;
+            }
+        }
+        decoded[output++] = text[input++];
+    }
+    decoded[output] = '\0';
+    return decoded;
+}
+
+static bool known_repository_directory(const char *path)
+{
+    static const char *const directories[] = {
+        ".", ".github", ".github/workflows", "assets", "benchmarks", "docs", "examples",
+        "include", "packaging", "packaging/apt", "packaging/debian", "packaging/termux",
+        "packaging/termux-packages", "packaging/termux-packages/milena", "packaging/windows",
+        "scripts", "src", "tests", "tests/fixtures", "tests/fixtures/arrow_ipc", "third_party",
+        "third_party/sqlite", "tools"
+    };
+    size_t index;
+    if (*path == '\0') {
+        return true;
+    }
+    for (index = 0U; index < ARRAY_COUNT(directories); ++index) {
+        if (strcmp(path, directories[index]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static char *normalize_repository_path(const char *document, const char *target_path, bool *escaped)
+{
+    size_t doc_length = strlen(document);
+    size_t target_length = strlen(target_path);
+    size_t capacity = doc_length + target_length + 4U;
+    char *joined = (char *)malloc(capacity);
+    char *normalized = (char *)malloc(capacity);
+    size_t stack_count = 0U;
+    size_t *component_starts = (size_t *)malloc(capacity * sizeof(*component_starts));
+    size_t *component_lengths = (size_t *)malloc(capacity * sizeof(*component_lengths));
+    size_t length = 0U;
+    const char *slash;
+    const char *cursor;
+    size_t index;
+    if (joined == NULL || normalized == NULL || component_starts == NULL || component_lengths == NULL) {
+        free(joined);
+        free(normalized);
+        free(component_starts);
+        free(component_lengths);
+        (void)fprintf(stderr, "ERROR: out of memory while resolving Markdown path\n");
+        exit(EXIT_FAILURE);
+    }
+    if (target_path[0] != '/') {
+        slash = strrchr(document, '/');
+        if (slash != NULL) {
+            size_t base_length = (size_t)(slash - document) + 1U;
+            memcpy(joined, document, base_length);
+            length = base_length;
+        }
+    }
+    if (target_path[0] == '/') {
+        length = 0U;
+        cursor = target_path + 1;
+    } else {
+        cursor = target_path;
+    }
+    if (target_path[0] == '/') {
+        while (*cursor != '\0') {
+            joined[length++] = *cursor++;
+        }
+    } else {
+        while (*cursor != '\0') {
+            joined[length++] = *cursor++;
+        }
+    }
+    joined[length] = '\0';
+    *escaped = false;
+    cursor = joined;
+    while (*cursor != '\0') {
+        const char *component = cursor;
+        size_t component_length;
+        while (*cursor != '\0' && *cursor != '/') {
+            ++cursor;
+        }
+        component_length = (size_t)(cursor - component);
+        if (component_length == 0U || (component_length == 1U && component[0] == '.')) {
+            /* Ignore empty and current-directory components. */
+        } else if (component_length == 2U && component[0] == '.' && component[1] == '.') {
+            if (stack_count == 0U) {
+                *escaped = true;
+            } else {
+                --stack_count;
+            }
+        } else {
+            component_starts[stack_count] = (size_t)(component - joined);
+            component_lengths[stack_count] = component_length;
+            ++stack_count;
+        }
+        if (*cursor == '/') {
+            ++cursor;
+        }
+    }
+    length = 0U;
+    for (index = 0U; index < stack_count; ++index) {
+        if (index != 0U) {
+            normalized[length++] = '/';
+        }
+        memcpy(normalized + length, joined + component_starts[index], component_lengths[index]);
+        length += component_lengths[index];
+    }
+    normalized[length] = '\0';
+    free(joined);
+    free(component_starts);
+    free(component_lengths);
+    return normalized;
+}
+
+static bool markdown_target_exists(const char *normalized)
+{
+    if (file_exists(normalized)) {
+        return true;
+    }
+    return known_repository_directory(normalized);
+}
+
+static void markdown_check_document(const char *document, StringList *failures)
+{
+    char *text = optional_read_file(document);
+    char *prose;
+    StringList targets;
+    size_t index;
+    const char *display_document = document;
+    if (text == NULL) {
+        return;
+    }
+    while (display_document[0] == '.' && display_document[1] == '/') {
+        display_document += 2;
+    }
+    prose = markdown_prose(text);
+    list_init(&targets);
+    collect_markdown_targets(prose, &targets);
+    collect_html_targets(prose, &targets);
+    for (index = 0U; index < targets.count; ++index) {
+        const char *target = targets.items[index];
+        const char *path_start = target;
+        const char *end = target + strlen(target);
+        const char *colon = NULL;
+        const char *scan;
+        const char *path_end;
+        bool has_scheme = false;
+        bool has_netloc = false;
+        size_t scheme_length = 0U;
+        bool escaped;
+        char *decoded;
+        char *normalized;
+        if (target[0] == '/' && target[1] == '/') {
+            const char *host_end = target + 2;
+            while (*host_end != '\0' && *host_end != '/' && *host_end != '?' && *host_end != '#') {
+                ++host_end;
+            }
+            has_netloc = true;
+            path_start = host_end;
+        } else {
+            for (scan = target; scan < end && *scan != '/' && *scan != '?' && *scan != '#'; ++scan) {
+                if (*scan == ':') {
+                    colon = scan;
+                    break;
+                }
+            }
+            if (colon != NULL && colon > target) {
+                bool valid = is_scheme_char((unsigned char)target[0], true);
+                scheme_length = (size_t)(colon - target);
+                for (scan = target + 1; valid && scan < colon; ++scan) {
+                    valid = is_scheme_char((unsigned char)*scan, false);
+                }
+                if (valid) {
+                    has_scheme = true;
+                    path_start = colon + 1;
+                    if (path_start[0] == '/' && path_start[1] == '/') {
+                        const char *host_end = path_start + 2;
+                        while (*host_end != '\0' && *host_end != '/' && *host_end != '?' && *host_end != '#') {
+                            ++host_end;
+                        }
+                        has_netloc = true;
+                        path_start = host_end;
+                    }
+                }
+            }
+        }
+        path_end = path_start;
+        while (*path_end != '\0' && *path_end != '?' && *path_end != '#') {
+            ++path_end;
+        }
+        if (path_start == path_end || has_netloc ||
+            (has_scheme && ((scheme_length == 4U && ascii_equal_nocase(target, "http", 4U)) ||
+                             (scheme_length == 5U && ascii_equal_nocase(target, "https", 5U)) ||
+                             (scheme_length == 6U && ascii_equal_nocase(target, "mailto", 6U)) ||
+                             (scheme_length == 3U && ascii_equal_nocase(target, "tel", 3U)) ||
+                             (scheme_length == 4U && ascii_equal_nocase(target, "data", 4U))))) {
+            continue;
+        }
+        decoded = percent_decode(path_start, (size_t)(path_end - path_start));
+        normalized = normalize_repository_path(display_document, decoded, &escaped);
+        if (escaped) {
+            list_addf(failures, "%s: target escapes repository: %s", display_document, target);
+        } else if (!markdown_target_exists(normalized)) {
+            list_addf(failures, "%s: missing target: %s", display_document, target);
+        }
+        free(decoded);
+        free(normalized);
+    }
+    list_free(&targets);
+    free(prose);
+    free(text);
+}
+
+static void check_markdown_links(int argc, char **argv)
+{
+    StringList documents;
+    StringList failures;
+    int argument;
+    size_t index;
+    list_init(&documents);
+    list_init(&failures);
+    for (argument = 2; argument < argc; ++argument) {
+        list_add(&documents, argv[argument]);
+    }
+    list_sort(&documents);
+    for (index = 0U; index < documents.count; ++index) {
+        markdown_check_document(documents.items[index], &failures);
+    }
+    if (failures.count != 0U) {
+        (void)fprintf(stderr, "Broken local Markdown targets:\n");
+        for (index = 0U; index < failures.count; ++index) {
+            (void)fprintf(stderr, "- %s\n", failures.items[index]);
+        }
+        list_free(&failures);
+        list_free(&documents);
+        exit(EXIT_FAILURE);
+    }
+    (void)printf("All local Markdown targets resolve.\n");
+    list_free(&failures);
+    list_free(&documents);
+}
+
+static void termux_industrial_check(void)
+{
+    StringList errors;
+    static const char *const workflow_fragments[] = {
+        "concurrency:", "cancel-in-progress: false", "confirm_device:",
+        "if: inputs.confirm_device == true", "timeout-minutes:", "termux-real-smoke.sh",
+        "artifacts/termux-runner/toolchain.txt", "if-no-files-found: error"
+    };
+    static const char *const publish_fragments[] = {
+        "concurrency:", "confirm_publish:", "if: inputs.confirm_publish == true",
+        "--pattern 'milena_*_aarch64.deb'", "gpgv", "--provenance", "--require-provenance",
+        "--require-elf", "if-no-files-found: error"
+    };
+    static const char *const preflight_fragments[] = {
+        "uname -m", "dpkg --print-architecture", "termux-info", "readelf", "workspace-sha256.txt"
+    };
+    static const char *const artifact_fragments[] = {"expected_filename", "provenance", "gpgv", "binary-aarch64"};
+    static const char *const generator_fragments[] = {"PACKAGE_ARCH", "sha256sum", "MILENA_GPG_KEY_ID", "binary-aarch64"};
+    static const char *const plan_fragments[] = {"no crea ni registra", "install", "actualización", "eliminación", "SBOM"};
+    static const char *const security_fragments[] = {"Trust boundary", "gpgv"};
+    static const char *const checklist_fragments[] = {"confirm_device=true", "confirm_publish=true"};
+    static const char *const runbook_fragments[] = {"Artefacto o firma inválida", "Runner no conforme"};
+    char *workflow;
+    char *device;
+    list_init(&errors);
+    require_file_fragments(&errors, ".github/workflows/termux-aarch64-contract.yml", workflow_fragments, ARRAY_COUNT(workflow_fragments));
+    require_file_fragments(&errors, ".github/workflows/publish-apt.yml", publish_fragments, ARRAY_COUNT(publish_fragments));
+    require_file_fragments(&errors, "scripts/termux-runner-preflight.sh", preflight_fragments, ARRAY_COUNT(preflight_fragments));
+    require_file_fragments(&errors, "scripts/validate_termux_artifact.py", artifact_fragments, ARRAY_COUNT(artifact_fragments));
+    require_file_fragments(&errors, "packaging/termux/generate-apt-repo.sh", generator_fragments, ARRAY_COUNT(generator_fragments));
+    require_file_fragments(&errors, "docs/TERMUX_VALIDATION_PLAN.md", plan_fragments, ARRAY_COUNT(plan_fragments));
+    require_file_fragments(&errors, "docs/TERMUX_SECURITY.md", security_fragments, ARRAY_COUNT(security_fragments));
+    require_file_fragments(&errors, "docs/TERMUX_RELEASE_CHECKLIST.md", checklist_fragments, ARRAY_COUNT(checklist_fragments));
+    require_file_fragments(&errors, "docs/TERMUX_INCIDENT_RUNBOOK.md", runbook_fragments, ARRAY_COUNT(runbook_fragments));
+    workflow = optional_read_file(".github/workflows/publish-apt.yml");
+    if (workflow != NULL) {
+        if (contains(workflow, "\n  push:")) {
+            list_add(&errors, "APT publication must be manual; tag pushes are not an approval");
+        }
+        free(workflow);
+    }
+    workflow = optional_read_file(".github/workflows/termux-aarch64-contract.yml");
+    if (workflow == NULL) {
+        device = NULL;
+    } else {
+        const char *marker = "  termux-aarch64-contract:";
+        const char *found = strstr(workflow, marker);
+        device = found == NULL ? NULL : (char *)found + strlen(marker);
+    }
+    if (device == NULL || *device == '\0' ||
+        !contains(device, "runs-on: [self-hosted, termux, aarch64, milena]")) {
+        list_add(&errors, "Android contract must use the registered self-hosted Termux/aarch64 runner");
+    }
+    if (workflow != NULL) {
+        free(workflow);
+    }
+    if (errors.count != 0U) {
+        size_t index;
+        for (index = 0U; index < errors.count; ++index) {
+            (void)fprintf(stderr, "ERROR: %s\n", errors.items[index]);
+        }
+        list_free(&errors);
+        exit(EXIT_FAILURE);
+    }
+    (void)printf("Termux industrial static contract: OK\n");
+    list_free(&errors);
+    list_free(&empty);
+}
+
+static char *capture_recipe_assignment(const char *text, const char *name, bool anchored)
+{
+    const char *line = text;
+    size_t name_length = strlen(name);
+    while (*line != '\0') {
+        const char *line_end = strchr(line, '\n');
+        const char *cursor = line;
+        const char *start;
+        const char *end;
+        char quote = '\0';
+        if (line_end == NULL) {
+            line_end = line + strlen(line);
+        }
+        if (!anchored) {
+            while (cursor < line_end && isspace((unsigned char)*cursor) != 0) {
+                ++cursor;
+            }
+        }
+        if ((size_t)(line_end - cursor) >= name_length + 1U &&
+            memcmp(cursor, name, name_length) == 0 && cursor[name_length] == '=') {
+            start = cursor + name_length + 1U;
+            if (start < line_end && (*start == '\'' || *start == '"')) {
+                quote = *start++;
+                end = start;
+                while (end < line_end && *end != quote) {
+                    ++end;
+                }
+            } else {
+                end = start;
+                while (end < line_end && isspace((unsigned char)*end) == 0 && *end != '#') {
+                    ++end;
+                }
+            }
+            {
+                size_t value_length = (size_t)(end - start);
+                char *value = (char *)malloc(value_length + 1U);
+                if (value == NULL) {
+                    (void)fprintf(stderr, "ERROR: out of memory while parsing Termux recipe\n");
+                    exit(EXIT_FAILURE);
+                }
+                memcpy(value, start, value_length);
+                value[value_length] = '\0';
+                return value;
+            }
+        }
+        line = *line_end == '\0' ? line_end : line_end + 1;
+    }
+    return NULL;
+}
+
+static char *capture_makefile_termux_version(const char *text)
+{
+    const char *line = text;
+    static const char marker[] = "TERMUX_PKG_VERSION=";
+    while (*line != '\0') {
+        const char *line_end = strchr(line, '\n');
+        const char *start;
+        const char *end;
+        if (line_end == NULL) {
+            line_end = line + strlen(line);
+        }
+        if ((size_t)(line_end - line) >= sizeof(marker) - 1U &&
+            memcmp(line, marker, sizeof(marker) - 1U) == 0) {
+            start = line + sizeof(marker) - 1U;
+            end = start;
+            while (end < line_end && isspace((unsigned char)*end) == 0 && *end != '#') {
+                ++end;
+            }
+            if (end > start) {
+                size_t value_length = (size_t)(end - start);
+                char *value = (char *)malloc(value_length + 1U);
+                if (value == NULL) {
+                    (void)fprintf(stderr, "ERROR: out of memory while parsing Makefile version\n");
+                    exit(EXIT_FAILURE);
+                }
+                memcpy(value, start, value_length);
+                value[value_length] = '\0';
+                return value;
+            }
+        }
+        line = *line_end == '\0' ? line_end : line_end + 1;
+    }
+    return NULL;
+}
+
+static char *capture_runtime_version(const char *text)
+{
+    const char *line = text;
+    static const char marker[] = "#define MILENA_VERSION ";
+    while (*line != '\0') {
+        const char *line_end = strchr(line, '\n');
+        const char *cursor;
+        const char *end;
+        if (line_end == NULL) {
+            line_end = line + strlen(line);
+        }
+        if ((size_t)(line_end - line) >= sizeof(marker) - 1U &&
+            memcmp(line, marker, sizeof(marker) - 1U) == 0) {
+            cursor = line + sizeof(marker) - 1U;
+            if (cursor < line_end && *cursor == '"') {
+                ++cursor;
+                end = cursor;
+                while (end < line_end && *end != '"') {
+                    ++end;
+                }
+                if (end < line_end && end > cursor) {
+                    size_t value_length = (size_t)(end - cursor);
+                    char *value = (char *)malloc(value_length + 1U);
+                    if (value == NULL) {
+                        (void)fprintf(stderr, "ERROR: out of memory while reading runtime version\n");
+                        exit(EXIT_FAILURE);
+                    }
+                    memcpy(value, cursor, value_length);
+                    value[value_length] = '\0';
+                    return value;
+                }
+            }
+        }
+        line = *line_end == '\0' ? line_end : line_end + 1;
+    }
+    return NULL;
+}
+
+static bool is_hex_string(const char *text, size_t expected_length)
+{
+    size_t index;
+    if (strlen(text) != expected_length) {
+        return false;
+    }
+    for (index = 0U; index < expected_length; ++index) {
+        unsigned char value = (unsigned char)text[index];
+        if (!((value >= (unsigned char)'0' && value <= (unsigned char)'9') ||
+              (value >= (unsigned char)'a' && value <= (unsigned char)'f') ||
+              (value >= (unsigned char)'A' && value <= (unsigned char)'F'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool valid_recipe_version(const char *text)
+{
+    const unsigned char *cursor = (const unsigned char *)text;
+    if (*cursor < (unsigned char)'0' || *cursor > (unsigned char)'9') {
+        return false;
+    }
+    ++cursor;
+    while (*cursor != 0U) {
+        unsigned char value = *cursor++;
+        if (!((value >= (unsigned char)'0' && value <= (unsigned char)'9') ||
+              (value >= (unsigned char)'A' && value <= (unsigned char)'Z') ||
+              (value >= (unsigned char)'a' && value <= (unsigned char)'z') ||
+              value == (unsigned char)'.' || value == (unsigned char)'+' || value == (unsigned char)':' ||
+              value == (unsigned char)'~' || value == (unsigned char)'-')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool recipe_has_debian_usr_bin(const char *text)
+{
+    const char *cursor = text;
+    static const char prefix[] = "com.termux/files";
+    while ((cursor = strstr(cursor, "/usr/bin")) != NULL) {
+        const char *after = cursor + strlen("/usr/bin");
+        bool allowed_prefix = (size_t)(cursor - text) >= sizeof(prefix) - 1U &&
+            memcmp(cursor - (sizeof(prefix) - 1U), prefix, sizeof(prefix) - 1U) == 0;
+        if ((*after == '/' || *after == '\'' || *after == '"' || *after == '\0') && !allowed_prefix) {
+            return true;
+        }
+        ++cursor;
+    }
+    return false;
+}
+
+static void validate_termux_recipe_static(StringList *errors, const char *recipe_text)
+{
+    static const char *const required[] = {
+        "TERMUX_PKG_HOMEPAGE", "TERMUX_PKG_DESCRIPTION", "TERMUX_PKG_LICENSE",
+        "TERMUX_PKG_MAINTAINER", "TERMUX_PKG_VERSION", "TERMUX_PKG_SRCURL",
+        "TERMUX_PKG_SHA256", "TERMUX_PKG_DEPENDS", "TERMUX_PKG_BUILD_IN_SRC"
+    };
+    static const char *const forbidden[] = {"@REPLACE", "/usr/local", "apt-get", "dpkg-buildpackage", "glibc"};
+    char *values[ARRAY_COUNT(required)];
+    size_t index;
+    bool any_missing = false;
+    for (index = 0U; index < ARRAY_COUNT(required); ++index) {
+        values[index] = capture_recipe_assignment(recipe_text, required[index], false);
+        if (values[index] == NULL) {
+            list_addf(errors, "missing %s", required[index]);
+            any_missing = true;
+        }
+    }
+    if (any_missing) {
+        for (index = 0U; index < ARRAY_COUNT(required); ++index) {
+            free(values[index]);
+        }
+        return;
+    }
+    if (!is_hex_string(values[6], 64U)) {
+        list_add(errors, "TERMUX_PKG_SHA256 must be a verified 64-hex digest, never a placeholder");
+    }
+    if (!valid_recipe_version(values[4])) {
+        list_add(errors, "TERMUX_PKG_VERSION is not a valid package version");
+    }
+    if (!contains(values[5], "${TERMUX_PKG_VERSION}") || !contains(values[5], "/archive/refs/tags/v")) {
+        list_add(errors, "TERMUX_PKG_SRCURL must be a versioned upstream tag using TERMUX_PKG_VERSION");
+    }
+    if (strcmp(values[8], "true") != 0) {
+        list_add(errors, "TERMUX_PKG_BUILD_IN_SRC must be true for this source tree");
+    }
+    if (!contains(recipe_text, "termux_step_make()") || !contains(recipe_text, "termux_step_make_install()")) {
+        list_add(errors, "recipe must define official termux build/install steps");
+    }
+    if (!contains(recipe_text, "$TERMUX_PREFIX/bin/milena")) {
+        list_add(errors, "install path must use TERMUX_PREFIX, not a Debian prefix");
+    }
+    for (index = 0U; index < ARRAY_COUNT(forbidden); ++index) {
+        if (contains_case_insensitive_ascii(recipe_text, forbidden[index])) {
+            list_addf(errors, "recipe contains forbidden non-Termux token: %s", forbidden[index]);
+        }
+    }
+    if (recipe_has_debian_usr_bin(recipe_text)) {
+        list_add(errors, "recipe contains a Debian /usr/bin path");
+    }
+    for (index = 0U; index < ARRAY_COUNT(required); ++index) {
+        free(values[index]);
+    }
+}
+
+static void check_termux_packaging(void)
+{
+    static const char *const active[] = {
+        ".github/workflows/publish-apt.yml", ".github/workflows/termux-aarch64-contract.yml",
+        "Makefile", "packaging/termux/build-local-deb.sh", "packaging/termux/generate-apt-repo.sh",
+        "packaging/termux/README.md", "packaging/termux-packages/README.md",
+        "packaging/termux-packages/milena/build.sh", "scripts/termux-install-smoke.sh",
+        "scripts/termux-real-smoke.sh", "scripts/validate_termux_artifact.py",
+        "scripts/validate_termux_recipe.py", "scripts/test_termux_packaging.py"
+    };
+    static const char *const workflow_required[] = {
+        "workflow_dispatch:", "confirm_device:", "if: inputs.confirm_device == true",
+        "runs-on: [self-hosted, termux, aarch64, milena]", "TERMUX_PACKAGES_DIR", "build-package.sh",
+        "-I -f milena", "termux-runner-preflight.sh", "validate_termux_artifact.py", "termux-real-smoke.sh",
+        "upload-artifact@v4", "if-no-files-found: error"
+    };
+    static const char *const builder_required[] = {"validate_termux_elf.py", "README.md", "SOURCE_DATE_EPOCH", ".provenance.json", "TERMUX=1"};
+    static const char *const builder_forbidden[] = {"cp -R examples", "tests/", "include/", "src/compiler.c", "src/ir.c", "src/vm.c"};
+    static const char *const readmes[] = {"README.md", "packaging/README.md", "packaging/termux/README.md"};
+    StringList errors;
+    size_t index;
+    char *makefile;
+    char *recipe_text;
+    char *common;
+    char *workflow;
+    char *builder;
+    char *recipe_version;
+    char *runtime_version;
+    list_init(&errors);
+    for (index = 0U; index < ARRAY_COUNT(active); ++index) {
+        char *text;
+        const char *path = active[index];
+        if (!file_exists(path)) {
+            list_addf(&errors, "missing active packaging file: %s", path);
+            continue;
+        }
+        text = read_file(path);
+        if (contains_case_insensitive_ascii(path, "mano") || contains_case_insensitive_ascii(text, "mano")) {
+            list_addf(&errors, "unrelated historical package residue in %s", path);
+        }
+        free(text);
+    }
+    recipe_text = optional_read_file("packaging/termux-packages/milena/build.sh");
+    if (recipe_text != NULL) {
+        validate_termux_recipe_static(&errors, recipe_text);
+    }
+    makefile = optional_read_file("Makefile");
+    recipe_version = makefile == NULL ? NULL : capture_makefile_termux_version(makefile);
+    common = optional_read_file("include/common.h");
+    runtime_version = common == NULL ? NULL : capture_runtime_version(common);
+    if (recipe_version == NULL || runtime_version == NULL || strcmp(recipe_version, runtime_version) != 0) {
+        list_add(&errors, "Termux package version must match MILENA_VERSION exactly");
+    }
+    if (makefile == NULL || !contains(makefile, "TERMUX=1") || !contains(makefile, "TERMUX_PREFIX")) {
+        list_add(&errors, "Makefile lacks explicit Termux build/install variables");
+    }
+    if (makefile != NULL) {
+        static const char *const experimental[] = {"src/compiler.c", "src/ir.c", "src/vm.c"};
+        static const char *const forbidden_make[] = {"/usr/bin", "/usr/local", "apt-get", "__GLIBC__"};
+        for (index = 0U; index < ARRAY_COUNT(experimental); ++index) {
+            if (contains(makefile, experimental[index])) {
+                list_addf(&errors, "experimental source enters canonical Makefile: %s", experimental[index]);
+            }
+        }
+        for (index = 0U; index < ARRAY_COUNT(forbidden_make); ++index) {
+            if (contains_case_insensitive_ascii(makefile, forbidden_make[index])) {
+                list_addf(&errors, "Makefile contains Debian/glibc path or dependency: %s", forbidden_make[index]);
+            }
+        }
+    }
+    workflow = optional_read_file(".github/workflows/termux-aarch64-contract.yml");
+    if (workflow == NULL) {
+        list_add(&errors, "missing required file: .github/workflows/termux-aarch64-contract.yml");
+    } else {
+        for (index = 0U; index < ARRAY_COUNT(workflow_required); ++index) {
+            if (!contains(workflow, workflow_required[index])) {
+                list_addf(&errors, "workflow missing required contract: %s", workflow_required[index]);
+            }
+        }
+        {
+            const char *marker = "  termux-aarch64-contract:";
+            const char *device = strstr(workflow, marker);
+            device = device == NULL ? workflow : device + strlen(marker);
+            if (contains(device, "ubuntu-latest") || contains(device, "windows-latest")) {
+                list_add(&errors, "Termux device contract cannot use a hosted generic runner");
+            }
+        }
+        free(workflow);
+    }
+    builder = optional_read_file("packaging/termux/build-local-deb.sh");
+    if (builder != NULL) {
+        for (index = 0U; index < ARRAY_COUNT(builder_required); ++index) {
+            if (!contains(builder, builder_required[index])) {
+                list_addf(&errors, "local Termux builder missing: %s", builder_required[index]);
+            }
+        }
+        for (index = 0U; index < ARRAY_COUNT(builder_forbidden); ++index) {
+            if (contains(builder, builder_forbidden[index])) {
+                list_addf(&errors, "local Termux package builder contains forbidden payload/path: %s", builder_forbidden[index]);
+            }
+        }
+        free(builder);
+    }
+    for (index = 0U; index < ARRAY_COUNT(readmes); ++index) {
+        char *text;
+        if (!file_exists(readmes[index])) {
+            continue;
+        }
+        text = read_file(readmes[index]);
+        if (contains(text, "pkg install milena") &&
+            !contains_case_insensitive_ascii(text, "todavía no") &&
+            !contains_case_insensitive_ascii(text, "aún no") &&
+            !contains_case_insensitive_ascii(text, "no existe")) {
+            list_addf(&errors, "unqualified pkg install claim in %s", readmes[index]);
+        }
+        free(text);
+    }
+    free(recipe_text);
+    free(makefile);
+    free(common);
+    free(recipe_version);
+    free(runtime_version);
+    if (errors.count != 0U) {
+        for (index = 0U; index < errors.count; ++index) {
+            (void)fprintf(stderr, "ERROR: %s\n", errors.items[index]);
+        }
+        list_free(&errors);
+        exit(EXIT_FAILURE);
+    }
+    (void)printf("Termux packaging guardrails: OK\n");
+    list_free(&errors);
+}
+
+static bool span_contains_case_insensitive_ascii(const char *begin, const char *end, const char *needle)
+{
+    size_t length = strlen(needle);
+    const char *cursor;
+    if (length == 0U) {
+        return true;
+    }
+    if (end < begin || (size_t)(end - begin) < length) {
+        return false;
+    }
+    for (cursor = begin; (size_t)(end - cursor) >= length; ++cursor) {
+        if (ascii_equal_nocase(cursor, needle, length)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool documents_unregistered_runner(const char *text)
+{
+    const char *cursor = text;
+    size_t text_length = strlen(text);
+    while (*cursor != '\0') {
+        if ((size_t)(text + text_length - cursor) >= strlen("no crea ni registra un") &&
+            ascii_equal_nocase(cursor, "no crea ni registra un", strlen("no crea ni registra un"))) {
+            const char *after = cursor + strlen("no crea ni registra un");
+            while (*after != '\0' && isspace((unsigned char)*after) != 0) {
+                ++after;
+            }
+            if (strlen(after) >= strlen("runner") && ascii_equal_nocase(after, "runner", strlen("runner"))) {
+                return true;
+            }
+        }
+        if ((size_t)(text + text_length - cursor) >= strlen("no se registró") &&
+            ascii_equal_nocase(cursor, "no se registró", strlen("no se registró"))) {
+            const char *line_end = strchr(cursor, '\n');
+            if (line_end == NULL) {
+                line_end = text + text_length;
+            }
+            if (span_contains_case_insensitive_ascii(cursor + strlen("no se registró"), line_end, "hardware")) {
+                return true;
+            }
+        }
+        ++cursor;
+    }
+    return false;
+}
+
+static void check_termux_runner_contract(void)
+{
+    static const char *const workflow_fragments[] = {
+        "workflow_dispatch:", "confirm_device:", "if: inputs.confirm_device == true",
+        "runs-on: [self-hosted, termux, aarch64, milena]", "TERMUX_PACKAGES_DIR", "build-package.sh",
+        "-I -f milena", "termux-runner-preflight.sh", "validate_termux_recipe.py",
+        "validate_termux_artifact.py", "validate_termux_elf.py", "termux-real-smoke.sh",
+        "pkg install", "pkg upgrade", "pkg remove", "upload-artifact@v4", "if-no-files-found: error"
+    };
+    static const char *const preflight_fragments[] = {
+        "[[ \"$ARCH\" == aarch64 ]]", "[[ \"$DPKG_ARCH\" == aarch64 ]]",
+        "[[ \"$PREFIX_DIR\" == */usr", "TERMUX_PACKAGES_DIR", "termux-info", "preflight.txt"
+    };
+    static const char *const documentation_labels[] = {"self-hosted", "termux", "aarch64", "milena", "build-package.sh"};
+    StringList errors;
+    size_t index;
+    char *workflow;
+    char *preflight;
+    char *plan;
+    list_init(&errors);
+    workflow = optional_read_file(".github/workflows/termux-aarch64-contract.yml");
+    if (workflow == NULL) {
+        list_add(&errors, "missing manual Termux contract workflow");
+    } else {
+        for (index = 0U; index < ARRAY_COUNT(workflow_fragments); ++index) {
+            if (!contains(workflow, workflow_fragments[index])) {
+                list_addf(&errors, "workflow missing required contract: %s", workflow_fragments[index]);
+            }
+        }
+        {
+            const char *marker = "  termux-aarch64-contract:";
+            const char *device = strstr(workflow, marker);
+            device = device == NULL ? workflow + strlen(workflow) : device + strlen(marker);
+            if (contains(device, "ubuntu-latest") || contains(device, "windows-latest")) {
+                list_add(&errors, "Termux device contract cannot use a hosted generic runner");
+            }
+        }
+        free(workflow);
+    }
+    preflight = optional_read_file("scripts/termux-runner-preflight.sh");
+    if (preflight == NULL) {
+        list_add(&errors, "missing Termux runner preflight");
+    } else {
+        for (index = 0U; index < ARRAY_COUNT(preflight_fragments); ++index) {
+            if (!contains(preflight, preflight_fragments[index])) {
+                list_addf(&errors, "preflight missing required check: %s", preflight_fragments[index]);
+            }
+        }
+        free(preflight);
+    }
+    plan = optional_read_file("docs/TERMUX_VALIDATION_PLAN.md");
+    if (plan == NULL) {
+        list_add(&errors, "missing Termux validation documentation");
+    } else {
+        for (index = 0U; index < ARRAY_COUNT(documentation_labels); ++index) {
+            if (!contains(plan, documentation_labels[index])) {
+                list_addf(&errors, "documentation missing runner label/command: %s", documentation_labels[index]);
+            }
+        }
+        if (!documents_unregistered_runner(plan)) {
+            list_add(&errors, "documentation must state that no hardware was registered");
+        }
+    }
+    free(plan);
+    if (errors.count != 0U) {
+        for (index = 0U; index < errors.count; ++index) {
+            (void)fprintf(stderr, "ERROR: %s\n", errors.items[index]);
+        }
+        list_free(&errors);
+        exit(EXIT_FAILURE);
+    }
+    (void)printf("Termux aarch64 runner contract: OK (manual, official build-package, non-emulated)\n");
+    list_free(&errors);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        (void)fprintf(stderr, "usage: %s source-manifest|experimental-isolation|compiler-boundary|stream-architecture [src/*.c...]\n", argv[0]);
+        (void)fprintf(stderr, "usage: %s source-manifest|experimental-isolation|compiler-boundary|stream-architecture|markdown-links|termux-packaging|termux-runner-contract|termux-industrial [paths...]\n", argv[0]);
         return EXIT_FAILURE;
     }
     if (strcmp(argv[1], "source-manifest") == 0) {
@@ -929,6 +2064,14 @@ int main(int argc, char **argv)
         check_compiler_boundary(argc, argv);
     } else if (strcmp(argv[1], "stream-architecture") == 0) {
         check_stream_architecture();
+    } else if (strcmp(argv[1], "markdown-links") == 0) {
+        check_markdown_links(argc, argv);
+    } else if (strcmp(argv[1], "termux-packaging") == 0) {
+        check_termux_packaging();
+    } else if (strcmp(argv[1], "termux-runner-contract") == 0) {
+        check_termux_runner_contract();
+    } else if (strcmp(argv[1], "termux-industrial") == 0) {
+        termux_industrial_check();
     } else {
         (void)fprintf(stderr, "unknown check mode: %s\n", argv[1]);
         return EXIT_FAILURE;
