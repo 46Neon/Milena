@@ -1040,10 +1040,10 @@ static bool ir_scalar_lower_assignment_sequence(
             const size_t outer_binding_count = *binding_count;
             size_t then_binding_count = outer_binding_count;
             size_t else_binding_count = outer_binding_count;
-            if (!statement->as.conditional.else_body ||
-                statement->as.conditional.else_count == 0)
+            if (statement->as.conditional.else_count &&
+                !statement->as.conditional.else_body)
                 return ir_fail(error, error_capacity,
-                    "nested typed scalar si/sino merge requires an explicit nonempty sino branch");
+                    "nested typed scalar conditional has a missing sino body");
             if (!statement->as.conditional.condition || !next_block_id ||
                 *next_block_id == 0 || *next_block_id > UINT32_MAX - 3)
                 return ir_fail(error, error_capacity,

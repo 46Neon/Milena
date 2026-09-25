@@ -393,9 +393,13 @@ int main(void) {
           "sino { z = 0; } retornar z; }", &error) == MILENA_OK,
           error.message);
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
-              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
-          strstr(error.message, "sino") != NULL,
-          "una condición anidada sin sino debe fallar cerrado y sin IR parcial");
+              MILENA_OK && program.typed_ir != NULL, error.message);
+    {
+        char validation_error[256] = {0};
+        CHECK(milena_ir_program_validate(program.typed_ir, validation_error,
+                                         sizeof(validation_error)),
+              validation_error);
+    }
     milena_canonical_program_release(&program);
 
     milena_canonical_program_init(&program);
@@ -425,9 +429,13 @@ int main(void) {
           "si (x > 0) { y = x; } retornar y; }", &error) == MILENA_OK,
           error.message);
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
-              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
-          strstr(error.message, "sino") != NULL,
-          "el lowering debe rechazar cerrado un merge sin rama sino explícita");
+              MILENA_OK && program.typed_ir != NULL, error.message);
+    {
+        char validation_error[256] = {0};
+        CHECK(milena_ir_program_validate(program.typed_ir, validation_error,
+                                         sizeof(validation_error)),
+              validation_error);
+    }
     milena_canonical_program_release(&program);
 
     milena_canonical_program_init(&program);
@@ -1324,8 +1332,8 @@ int main(void) {
     milena_canonical_program_release(&program);
 
     /* Exercise every currently lowered scalar arithmetic/comparison operator,
-       both paths of assignment merges, nested si/sino, and terminal returns
-       through the one canonical source -> typed IR -> MLBC -> verified VM path. */
+       assignment merges with and without sino, nested conditionals, and terminal
+       returns through the canonical source -> typed IR -> MLBC -> verified VM path. */
     milena_canonical_program_init(&program);
     const char *scalar_vm_source =
         "funcion sumar(a, b) { retornar a + b; } "
@@ -1347,6 +1355,8 @@ int main(void) {
         "funcion elegir(x, y) { variable resultado = 0; "
         "si (x > y) { resultado = x; } sino { resultado = y; } "
         "retornar resultado; } "
+        "funcion sin_sino(x, y) { variable resultado = y; "
+        "si (x > 0) { resultado = x; } retornar resultado; } "
         "funcion clasificar(x) { variable nivel = 0; "
         "si (x > 0) { si (x > 10) { nivel = 2; } sino { nivel = 1; } } "
         "sino { nivel = 0; } retornar nivel; } "
@@ -1384,6 +1394,8 @@ int main(void) {
         {"mayor_igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
         {"elegir", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 6.0, false},
         {"elegir", {2.0, 9.0}, 2u, MILENA_IR_TYPE_F64, 9.0, false},
+        {"sin_sino", {5.0, 9.0}, 2u, MILENA_IR_TYPE_F64, 5.0, false},
+        {"sin_sino", {-1.0, 9.0}, 2u, MILENA_IR_TYPE_F64, 9.0, false},
         {"clasificar", {11.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 2.0, false},
         {"clasificar", {5.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 1.0, false},
         {"clasificar", {-1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false},
