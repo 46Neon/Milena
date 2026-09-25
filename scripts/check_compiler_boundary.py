@@ -32,6 +32,18 @@ if REFERENCE_VM in sources:
     errors.append("la VM interna de referencia no debe enlazarse en el binario oficial")
 if not (ROOT / "src" / REFERENCE_VM).is_file():
     errors.append("falta la VM interna de referencia probada sobre bytecode verificado")
+LEGACY_VM = "vm.c"
+if LEGACY_VM not in EXPERIMENTAL:
+    errors.append("la VM histórica de IR de cadenas debe permanecer experimental")
+if LEGACY_VM in sources:
+    errors.append("la VM histórica no debe enlazarse en el producto canónico")
+if (ROOT / "src" / REFERENCE_VM).is_file():
+    reference_source = (ROOT / "src" / REFERENCE_VM).read_text(encoding="utf-8")
+    if not re.search(r'#include\s+[<"]typed_vm\.h[>"]', reference_source):
+        errors.append("la VM de bytecode debe usar únicamente su API tipada/verificada")
+    for header in ("ir.h", "vm.h", "compiler.h"):
+        if re.search(rf'#include\s+[<"]{re.escape(header)}[>"]', reference_source):
+            errors.append(f"la VM tipada no debe depender de la pila histórica: {header}")
 WINDOWS_PACKAGE = (ROOT / "packaging" / "windows" / "build.ps1")
 if WINDOWS_PACKAGE.is_file() and REFERENCE_VM in WINDOWS_PACKAGE.read_text(encoding="utf-8"):
     errors.append("la VM interna de referencia no debe incluirse en el paquete Windows")

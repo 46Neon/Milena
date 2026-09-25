@@ -335,23 +335,25 @@ static MilenaIRModule *make_branch_merge_module(void) {
     assert(function->body != NULL);
     assert(milena_ir_program_set_function_signature(function->body, NULL, 0u,
                                                      MILENA_IR_TYPE_I64));
-    for (uint32_t block = 1u; block <= 4u; ++block)
-        assert(milena_ir_program_add_block(function->body, block));
-    assert(milena_ir_program_add_block_parameter(function->body, 4u, 4u,
-                                                  MILENA_IR_TYPE_I64));
+    /* Blocks are appended after the previous block has a terminator. */
+    assert(milena_ir_program_add_block(function->body, 1u));
     assert(append_instruction(function->body, 1u, MILENA_IR_CONST_BOOL, 1u,
         MILENA_IR_TYPE_BOOL, 0u, 0u, 0, 0.0, 0u, 0u));
-    function->body->instructions[0].integer_immediate = 0;
     assert(append_instruction(function->body, 1u, MILENA_IR_COND_BRANCH, 0u,
         MILENA_IR_TYPE_VOID, 1u, 0u, 0, 0.0, 2u, 3u));
+    assert(milena_ir_program_add_block(function->body, 2u));
     assert(append_instruction(function->body, 2u, MILENA_IR_CONST_I64, 2u,
         MILENA_IR_TYPE_I64, 0u, 0u, 41, 0.0, 0u, 0u));
     assert(append_instruction(function->body, 2u, MILENA_IR_BRANCH, 0u,
         MILENA_IR_TYPE_VOID, 0u, 0u, 0, 0.0, 4u, 0u));
+    assert(milena_ir_program_add_block(function->body, 3u));
     assert(append_instruction(function->body, 3u, MILENA_IR_CONST_I64, 3u,
         MILENA_IR_TYPE_I64, 0u, 0u, 42, 0.0, 0u, 0u));
     assert(append_instruction(function->body, 3u, MILENA_IR_BRANCH, 0u,
         MILENA_IR_TYPE_VOID, 0u, 0u, 0, 0.0, 4u, 0u));
+    assert(milena_ir_program_add_block(function->body, 4u));
+    assert(milena_ir_program_add_block_parameter(function->body, 4u, 4u,
+                                                  MILENA_IR_TYPE_I64));
     assert(milena_ir_block_add_edge_argument(function->body, 2u, 4u, 0u, 2u));
     assert(milena_ir_block_add_edge_argument(function->body, 3u, 4u, 0u, 3u));
     assert(append_instruction(function->body, 4u, MILENA_IR_RETURN, 0u,
