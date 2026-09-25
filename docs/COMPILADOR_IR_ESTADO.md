@@ -1,85 +1,90 @@
-# Estado verificable de la IR canónica
+#include "lexer.h"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
 
-Este registro complementa el contrato normativo de dos fases en `COMPILADOR_DOS_FASES.md`; no crea una fase, ruta ni IR adicional. Describe el estado parcial de la PR #33; la evidencia de CI debe consultarse contra el SHA exacto que publique estos cambios. La fase 1 continúa incompleta.
+int main(void) {
+    Lexer lexer;
+    lexer_init(&lexer, NULL);
+    assert(lexer.length == 0);
+    assert(lexer_next_token(&lexer).type == TOKEN_EOF);
 
-## Cobertura implementada en este incremento
+    lexer_init(&lexer, "suma media");
+    Token first = lexer_next_token(&lexer);
+    assert(first.type == TOKEN_FUNCION_SUMA);
+    lexer_advance_token(&lexer);
+    assert(lexer.current_token.type == TOKEN_FUNCION_MEDIA);
 
-El constructor tipado y el validador fail-closed operan sobre una representación canónica independiente, declarada en `include/typed_ir.h` e implementada en `src/canonical_ir.c`. `MilenaIRProgram` / `MilenaIRInstruction` contienen solo datos tipados, IDs SSA, bloques, parámetros y argumentos de arista; no incluyen las cadenas ni los opcodes del IR legado. El constructor y el verificador admiten exactamente:
+    char long_identifier[300];
+    memset(long_identifier, 'a', sizeof(long_identifier) - 1);
+    long_identifier[sizeof(long_identifier) - 1] = '\0';
+    lexer_init(&lexer, long_identifier);
+    Token token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(strstr(lexer.error.message, "255") != NULL);
 
-- Tipos: `I64`, `F64`, `BOOL` y `VOID` (más `INVALID` como valor de rechazo).
-- Constantes: `MILENA_IR_CONST_I64`, `MILENA_IR_CONST_F64`, `MILENA_IR_CONST_BOOL`.
-- Operaciones escalares: `MILENA_IR_ADD_I64`, `MILENA_IR_ADD_F64`, `MILENA_IR_SUB_F64`, `MILENA_IR_MUL_F64`, `MILENA_IR_DIV_F64`, `MILENA_IR_EQ_I64`, y comparaciones `MILENA_IR_EQ_F64`, `MILENA_IR_NE_F64`, `MILENA_IR_LT_F64`, `MILENA_IR_LE_F64`, `MILENA_IR_GT_F64`, `MILENA_IR_GE_F64`.
-- Terminadores: `MILENA_IR_BRANCH`, `MILENA_IR_COND_BRANCH`, `MILENA_IR_RETURN`.
-- Bloques contiguos con IDs no nulos y únicos, terminador obligatorio, sucesores explícitos existentes y consistencia entre aristas y terminador. El primer bloque es la entrada y todos los bloques deben ser alcanzables desde ella; bloques desconectados se rechazan.
-- IDs de valores únicos, operandos con tipo correcto, disponibilidad SSA dentro del bloque y dominancia de definiciones entre bloques. Se calcula dominancia iterativa sobre el CFG explícito, incluyendo ciclos/backedges; referencias desde bloques hermanos no dominantes se rechazan.
-- Parámetros tipados de bloque, usados como valores SSA tipo phi, y argumentos explícitos por arista (`milena_ir_program_add_block_parameter` / `milena_ir_block_add_edge_argument`). Cada arista entrante a un bloque parametrizado debe suministrar exactamente una vez cada argumento, con índice/tipo correctos; la definición usada debe dominar el origen de la arista. En una rama condicional cuyos dos destinos coinciden, el par origen/destino es una arista lógica única y comparte su bundle de argumentos.
-- La firma tipada de función (`parameter_types`, aridad y tipo de retorno) se representa en la misma IR. Sus entradas deben coincidir en cantidad y tipo, en orden, con las definiciones SSA declaradas como parámetros del bloque inicial; se rechazan entradas sin firma o firmas incompatibles. El lowerer emite definiciones de entrada explícitas, sin valores externos implícitos.
+    char long_string[300];
+    long_string[0] = '"';
+    memset(long_string + 1, 'x', sizeof(long_string) - 3);
+    long_string[sizeof(long_string) - 2] = '"';
+    long_string[sizeof(long_string) - 1] = '\0';
+    lexer_init(&lexer, long_string);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(strstr(lexer.error.message, "255") != NULL);
 
-Las APIs del IR tipado usan los tipos `MilenaIR*` y el prefijo `milena_ir_*`; sus opcodes están separados del enum legado. La extracción conserva el generador/opcodes originales en `include/ir.h` y `src/ir.c` para el compilador/assembler/VM experimentales y sus consumidores (`ir_generate`, `IRProgram`, `IROpCode` y `IR_*`). No se eliminaron ni se relabelaron como producción. Esa pila histórica queda aislada: `src/ir.c` permanece en la categoría `experimental`, está excluida de las fuentes oficiales del Makefile y de Windows/Termux, y los checks de arquitectura impiden que se filtre al producto. El producto enlaza la implementación tipada única `src/canonical_ir.c`; el workflow de Fase 1 usa las pruebas tipadas sobre esa fuente. No se enlaza la VM/backend incompletos.
+    /* Spans are half-open byte ranges; line/column positions are one-based
+       byte columns and refer to the token start and exclusive end. */
+    const char *span_source = " \n  12.5e-2 + \"á\"";
+    lexer_init(&lexer, span_source);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_NUMERO);
+    assert(strcmp(token.lexeme, "12.5e-2") == 0);
+    assert(token.number_value == 0.125);
+    assert(token.start_offset == 4 && token.end_offset == 11);
+    assert(token.line == 2 && token.column == 3);
+    assert(token.end_line == 2 && token.end_column == 10);
+    Token peeked = lexer_peek_token(&lexer);
+    assert(peeked.type == TOKEN_MAS);
+    assert(peeked.start_offset == 12 && peeked.end_offset == 13);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_MAS && token.start_offset == 12);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_CADENA);
+    assert(strcmp(token.lexeme, "á") == 0);
+    assert(token.start_offset == 14 && token.end_offset == 18);
+    assert(token.line == 2 && token.column == 13);
+    assert(token.end_line == 2 && token.end_column == 17);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_EOF);
+    assert(token.start_offset == strlen(span_source));
+    assert(token.end_offset == token.start_offset);
 
-## Lowering desde el frontend: slice parcial, cobertura completa pendiente
+    lexer_init(&lexer, "x-2");
+    assert(lexer_next_token(&lexer).type == TOKEN_IDENTIFICADOR);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_MENOS && token.start_offset == 1 && token.end_offset == 2);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_NUMERO && token.number_value == 2.0);
 
-La cobertura **completa y semánticamente fiel por variante AST** sigue siendo **0 de 72**; existe un primer lowering parcial de funciones escalares desde la HIR tipada del frontend hacia la IR tipada, ahora conectado a una entrada explícita de compilación canónica. `AST_NODE_TYPE_COUNT` es un sentinel, no una variante ni un nodo. El lowering canónico no es `ir_generate` (que conserva comportamiento experimental heredado): `milena_ir_program_lower_scalar_function_body` consume `MilenaHIRFunction`, que se construye desde AST después de parseo, resolución de bindings y análisis de tipos.
+    lexer_init(&lexer, "1e+");
+    token = lexer_peek_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.start_offset == 0 && token.end_offset == 3);
+    assert(lexer.position == 0 && lexer.error.code == MILENA_OK);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.start_offset == 0 && token.end_offset == 3);
+    assert(lexer.error.line == 1 && lexer.error.column == 1);
 
-El slice aceptado es deliberadamente cerrado: una función con parámetros escalares numéricos (`F64`), declaraciones locales y asignaciones numéricas/booleanas, seguida por un único `retornar` final, o por un único `si`/`sino` final cuyas dos ramas consisten cada una en un retorno inmediato. La firma tipada contiene tipos de parámetro, aridad y tipo de retorno; cada entrada se define como parámetro SSA del bloque inicial y los usos del parámetro se resuelven a esa definición. Acepta literales numéricos/booleanos, usos de variables ya enlazadas, `+`, `-`, `*`, `/` y las seis comparaciones numéricas; produce valores SSA tipados, y el condicional produce un CFG de tres bloques con ramas explícitas. Los IDs SSA de las asignaciones sucesivas distinguen los valores previos y actuales. El lowering es transaccional y rechaza tipos de parámetros no soportados, llamadas, condiciones sin `sino`, ramas no terminales/anidadas, y cualquier forma no admitida sin dejar IR parcial.
+    lexer_init(&lexer, "1e9999");
+    assert(lexer_next_token(&lexer).type == TOKEN_ERROR);
+    assert(lexer.error.code == MILENA_ERR_PARSE);
 
-La IR producida conserva la identidad/firma tipada de la única función compilada, incluyendo entradas numéricas `F64`, su definición como parámetros SSA de entrada y el tipo de retorno verificado. No representa ABI de plataforma o llamadas entre funciones, control de flujo de lenguaje general, spans de fuente, efectos o diagnósticos asociados a instrucciones; tampoco existe serialización de bytecode ni VM que la ejecute. `milena_canonical_program_compile_scalar_ir` conecta el frontend oficial con el lowerer para exactamente una función escalar soportada sin sentencias globales; la IR verificada queda poseída por `MilenaCanonicalProgram.typed_ir`, se reemplaza transaccionalmente en una recompilación exitosa y se destruye con `milena_canonical_program_release`. Las formas fuera de ese corte (incluidas llamadas, tipos de parámetro no numéricos, múltiples funciones o sentencias globales) fallan cerrado y no recurren al intérprete. Esto es una entrada de compilación explícita, aún no una ruta de ejecución del programa oficial ni un backend de bytecode. `tests/test_canonical_compiler.c` comprueba el trayecto parseo/semántica→HIR→entrada canónica→`MilenaIRProgram`, firmas, entradas SSA, usos y retornos, la verificación de tipos/aridad de firma, el reemplazo/liberación de ownership y rechazos fail-closed; `tests/test_ir_validation.c` cubre el constructor/verificador typed-IR y sus fallos de CFG/SSA. Los checks del SHA exacto y GCC/Clang/sanitizadores siguen siendo obligatorios.
+    lexer_init(&lexer, "\"escape\\q\"");
+    assert(lexer_next_token(&lexer).type == TOKEN_ERROR);
+    assert(strstr(lexer.error.message, "escape") != NULL);
 
-Por consiguiente, las 72 variantes reales enumeradas a continuación aún no están cubiertas completamente de extremo a extremo. Las variantes parcialmente recorridas por el slice (no equivalentes a soporte completo) son `AST_DECLARACION_VARIABLE`, `AST_ASIGNACION_VARIABLE`, `AST_COMANDO_RETORNAR`, `AST_CONDICION_SI`, `AST_EXPRESION_LITERAL`, `AST_EXPRESION_IDENTIFICADOR` y `AST_EXPRESION_OPERACION`; la envoltura/declaración de función no se conserva todavía en IR, y `AST_CONDICION_SI` solo admite el caso estrecho de una condición final con dos ramas de retorno inmediato, no control de flujo general. El inventario completo sigue siendo:
-
-`AST_PROGRAMA`, `AST_BLOQUE_ANALISIS`, `AST_DECLARACION_DATOS`, `AST_DECLARACION_ESTADISTICA`, `AST_ASIGNACION_DATASET`, `AST_LLAMADA_CARGAR`, `AST_BLOQUE_LIMPIAR`, `AST_BLOQUE_TRANSFORMAR`, `AST_BLOQUE_FILTRAR`, `AST_BLOQUE_AGRUPAR`, `AST_BLOQUE_RESUMIR`, `AST_BLOQUE_VISUALIZAR`, `AST_BLOQUE_EXPORTAR`, `AST_EXPRESION_OPERACION`, `AST_EXPRESION_LITERAL`, `AST_EXPRESION_IDENTIFICADOR`, `AST_EXPRESION_FUNCION`, `AST_EXPRESION_ARRAY`, `AST_EXPRESION_LLAMADA`, `AST_BLOQUE_FUNCION`, `AST_COMANDO_RETORNAR`, `AST_CONDICION_SI`, `AST_DECLARACION_FUNCION`, `AST_DECLARACION_ARRAY`, `AST_DECLARACION_VARIABLE`, `AST_ASIGNACION_VARIABLE`, `AST_COMANDO_NULOS`, `AST_COMANDO_DUPLICADOS`, `AST_COMANDO_CONDICION`, `AST_COMANDO_EXTRAER`, `AST_COMANDO_TOTAL`, `AST_COMANDO_PERIODO`, `AST_AGRUPACION_POR`, `AST_AGRUPACION_SPILL`, `AST_RESUMEN_METRICA`, `AST_OPERACION_ESTADISTICA`, `AST_DECLARACION_ENTRADA`, `AST_DECLARACION_SALIDA`, `AST_BLOQUE_SELECCIONAR`, `AST_COMANDO_COLUMNAS`, `AST_BLOQUE_UNIR`, `AST_COMANDO_DERECHA`, `AST_COMANDO_CLAVE`, `AST_COMANDO_SST`, `AST_STREAM_FILTER`, `AST_COLUMNAR_PROJECT`, `AST_COLUMNAR_FIELD`, `AST_SQL_PROGRAM`, `AST_SQL_QUERY`, `AST_SQL_EXECUTE`, `AST_SQL_BEGIN`, `AST_SQL_COMMIT`, `AST_SQL_ROLLBACK`, `AST_SQL_PARAMETER`, `AST_SQL_TABLE_SCHEMA`, `AST_SQL_SCHEMA_COLUMN`, `AST_SQL_TYPED_SELECT`, `AST_SQL_TABLE_REFERENCE`, `AST_SQL_PROJECTION_LIST`, `AST_SQL_PROJECTED_COLUMN`, `AST_SQL_FILTER`, `AST_SQL_FILTER_COLUMN`, `AST_SQL_FILTER_OPERATOR`, `AST_SQL_TYPED_INSERT`, `AST_SQL_INSERT_COLUMN_LIST`, `AST_SQL_INSERT_COLUMN`, `AST_SQL_INSERT_VALUE_LIST`, `AST_SQL_TYPED_UPDATE`, `AST_SQL_UPDATE_ASSIGNMENT_LIST`, `AST_SQL_UPDATE_ASSIGNMENT`, `AST_SQL_UPDATE_COLUMN`, `AST_SQL_UPDATE_FILTER`. `AST_NODE_TYPE_COUNT` (`include/ast.h:80`) es el sentinel de conteo; no forma parte de las 72 variantes.
-
-## Inventario AST y estado de contrato del parser
-
-La fuente primaria del inventario es `include/ast.h:8-80` (`ASTNodeType`); la comprobación de construcción/parser se hace contra `src/parser.c` y los constructores comunes de `src/ast.c`. Esta clasificación describe únicamente la gramática/estado documental actual; el alcance exacto del lowering parcial se limita a la subsección anterior y no equivale a cobertura completa ni a ejecución IR. Las referencias normativas examinadas son `docs/COMPILADOR_DOS_FASES.md`, `docs/MILENA_FUNCTIONS.md`, `docs/MILENA_ARRAY_LANGUAGE_SPEC.md`, `docs/MILENA_STATISTICAL_AST.md`, `docs/GROUPED_SPILL_CONTRACT.md`, `docs/SQLITE_NATIVE_BACKEND.md` y `docs/COMPATIBILITY.md`.
-
-### Contratos de sintaxis documentados
-
-Estos conjuntos están respaldados por los documentos indicados y tienen representación actual en el parser. Eso no significa que estén bajados a la IR nueva:
-
-- **Funciones y expresiones del intérprete numérico** (`docs/MILENA_FUNCTIONS.md`; parser `src/parser.c:234-408, 1729-2030`; nodos comunes de expresión creados por `ast_create_number` en `src/parser.c`): `AST_PROGRAMA`, `AST_DECLARACION_FUNCION`, `AST_BLOQUE_FUNCION` (contenedor de parámetros/cuerpo, no una operación), `AST_COMANDO_RETORNAR`, `AST_CONDICION_SI`, `AST_DECLARACION_VARIABLE`, `AST_ASIGNACION_VARIABLE`, `AST_EXPRESION_LITERAL`, `AST_EXPRESION_IDENTIFICADOR`, `AST_EXPRESION_OPERACION` y `AST_EXPRESION_LLAMADA`.
-- **Arrays y expresiones de array** (`docs/MILENA_ARRAY_LANGUAGE_SPEC.md`; parser `src/parser.c:83-214, 234-319`): `AST_DECLARACION_ARRAY` y `AST_EXPRESION_ARRAY`. El documento distingue expresamente sintaxis/representación de ejecución ya integrada.
-- **Operaciones estadísticas** (`docs/MILENA_STATISTICAL_AST.md`; parser `src/parser.c:456-620` y su llamada desde `src/parser.c:1120-1129`; constructor `ast_create_statistic`): `AST_OPERACION_ESTADISTICA`. Las ocho funciones y sus reglas sintácticas se documentan allí; el documento indica que este AST no está conectado al ejecutor de scripts.
-- **Agrupación/streaming y publicación de salida** (`docs/GROUPED_SPILL_CONTRACT.md`; parser `src/parser.c:622-1019, 1026-1070, 1372-1567`): `AST_BLOQUE_ANALISIS`, `AST_LLAMADA_CARGAR`, `AST_BLOQUE_AGRUPAR`, `AST_AGRUPACION_POR`, `AST_AGRUPACION_SPILL`, `AST_RESUMEN_METRICA`, `AST_BLOQUE_RESUMIR` y `AST_BLOQUE_EXPORTAR`. El contrato documenta cortes y límites específicos; no extiende por implicación la gramática a otras formas AST.
-- **SQL raw de compatibilidad y slice SQL tipado** (`docs/SQLITE_NATIVE_BACKEND.md`; parser `src/parser.c:2066-2688`): `AST_SQL_PROGRAM`, `AST_SQL_QUERY`, `AST_SQL_EXECUTE`, `AST_SQL_BEGIN`, `AST_SQL_COMMIT`, `AST_SQL_ROLLBACK`, `AST_SQL_PARAMETER`, `AST_SQL_TABLE_SCHEMA`, `AST_SQL_SCHEMA_COLUMN`, `AST_SQL_TYPED_SELECT`, `AST_SQL_TABLE_REFERENCE`, `AST_SQL_PROJECTION_LIST`, `AST_SQL_PROJECTED_COLUMN`, `AST_SQL_FILTER`, `AST_SQL_FILTER_COLUMN`, `AST_SQL_FILTER_OPERATOR`, `AST_SQL_TYPED_INSERT`, `AST_SQL_INSERT_COLUMN_LIST`, `AST_SQL_INSERT_COLUMN`, `AST_SQL_INSERT_VALUE_LIST`, `AST_SQL_TYPED_UPDATE`, `AST_SQL_UPDATE_ASSIGNMENT_LIST`, `AST_SQL_UPDATE_ASSIGNMENT`, `AST_SQL_UPDATE_COLUMN` y `AST_SQL_UPDATE_FILTER`. El raw SQL es una superficie de compatibilidad explícita separada del slice tipado acotado; ninguno de los dos debe confundirse con un ORM completo.
-
-### Parser-reachable, pero con contrato público por cerrar
-
-El parser crea o puede crear los siguientes tipos, pero esta revisión no encontró para cada forma un contrato oficial suficientemente completo para declararla sintaxis soportada sin reservas. Se mantienen como **resolución pendiente**, no como afirmación de soporte o exclusión. Las referencias dan la ubicación del constructor/rama: `src/parser.c:1026-1710` para bloques de análisis/tablas; `src/parser.c:83-408` para expresiones/arrays; y `src/parser.c:2066-2688` para SQL. En concreto:
-
-- `AST_BLOQUE_LIMPIAR`, `AST_BLOQUE_TRANSFORMAR`, `AST_BLOQUE_FILTRAR`, `AST_COMANDO_NULOS`, `AST_COMANDO_DUPLICADOS`, `AST_COMANDO_CONDICION`, `AST_COMANDO_TOTAL`, `AST_COMANDO_PERIODO` (`src/parser.c:1216-1369, 1273-1308`): hay ramas del parser, pero falta reconciliar todas sus formas, semántica y compatibilidad con la especificación oficial antes de fijar su estado de soporte.
-- `AST_DECLARACION_ENTRADA`, `AST_DECLARACION_SALIDA`, `AST_BLOQUE_SELECCIONAR`, `AST_COMANDO_COLUMNAS`, `AST_BLOQUE_UNIR`, `AST_COMANDO_DERECHA`, `AST_COMANDO_CLAVE` (`src/parser.c:1079-1107, 1586-1705`): los constructores existen; sus gramáticas y el alcance de soporte quedan pendientes de validación documental independiente.
-- `AST_COMANDO_SST` (`src/parser.c:1131-1163`): el parser lo construye desde una lista cerrada de nombres, pero eso por sí solo no prueba que cada nombre sea una operación de lenguaje aceptada ni su semántica.
-- `AST_STREAM_FILTER`, `AST_COLUMNAR_PROJECT`, `AST_COLUMNAR_FIELD` (`src/parser.c:918-1006`): tienen constructores de parser de flujo/columnas; queda pendiente resolver su contrato oficial y relación con la ruta canónica.
-- `AST_DECLARACION_DATOS` y `AST_DECLARACION_ESTADISTICA` (`src/parser.c:1131-1139`) son **marcadores vacíos** creados para `#datos` y `#estadistica` dentro del análisis; no son una gramática de declaración completa. Su papel y cualquier requisito de compatibilidad son ambiguos y quedan sin resolver.
-
-### Variantes declaradas sin constructor actual del parser
-
-La búsqueda de constructores/rutas de creación en `src/parser.c` para estas cuatro variantes no halló una construcción actual: `AST_ASIGNACION_DATASET`, `AST_BLOQUE_VISUALIZAR`, `AST_EXPRESION_FUNCION` y `AST_COMANDO_EXTRAER` (`include/ast.h:12,19,24,37`). Algunas tienen ramas consumidoras o casos semánticos en `src/semantic.c`, `src/language_semantic.c`, `src/interpreter.c` o `src/canonical_compiler.c`, lo cual no demuestra que sean sintaxis activa. Se clasifican como **variantes enum-only / candidatas a legado o compatibilidad, con estado histórico no confirmado**; se conservan y no se recomienda eliminarlas/deprecarlas sin política de versión y evidencia. En particular, `docs/MILENA_FUNCTIONS.md` excluye explícitamente las funciones como valores, y `src/parser.c:1292-1294` convierte la forma antigua `#periodo extraer(...)` al nodo `AST_COMANDO_PERIODO`, no a `AST_COMANDO_EXTRAER`.
-
-### Compatibilidad y ambigüedades que no se convierten en cambios de gramática
-
-`src/parser.c:1292-1294` acepta explícitamente `#periodo extraer(...)` como forma histórica y la normaliza al nodo `AST_COMANDO_PERIODO`; `docs/COMPATIBILITY.md` exige que la compatibilidad histórica esté identificada explícitamente. La sintaxis de entrada debe permanecer anotada como **compatibilidad observada en implementación; aprobación normativa pendiente** hasta que la política del lenguaje la confirme.
-
-En `src/parser.c:1586-1705`, un bloque con un nombre arbitrario seguido de `{` cae actualmente en la rama que usa `AST_BLOQUE_FILTRAR` salvo los nombres especiales `seleccionar` y `unir`; dentro de esos bloques hay caminos que avanzan sobre tokens no reconocidos sin emitir error. Esto colisiona con la regla fail-closed de `docs/COMPATIBILITY.md`, pero no se cambia aquí: decidir si es sintaxis histórica, extensibilidad accidental o error del parser requiere una decisión normativa. No se añade una regresión que congele esa conducta ambigua ni se inventa un diagnóstico nuevo para una sintaxis no resuelta.
-
-### Clasificación del sentinel y límite de lowering
-
-`AST_NODE_TYPE_COUNT` (`include/ast.h:80`) es exclusivamente el sentinel. Por tanto, el inventario es **72 variantes reales + 1 sentinel** y la cobertura de lowering de este slice es **0/72**, no 0/73. `AST_EXPRESION_LITERAL` y `AST_OPERACION_ESTADISTICA` son construidos mediante helpers (`ast_create_number` y `ast_create_statistic`), por lo que la ausencia de menciones literales directas en la llamada a `ast_create` no los convierte en variantes sin constructor.
-
-## Restante de la fase 1
-
-El lowering de HIR→IR sigue limitado al cuerpo de una sola función con parámetros numéricos `F64`, variables locales/reatribuciones y expresiones escalares; la firma de función escalar y los valores SSA de entrada ya se representan/verifican, pero no existe aún ABI de plataforma ni llamadas entre funciones o recursión. Los condicionales solo se aceptan al final con dos ramas de retorno inmediato. Faltan control de flujo general y merges/valores phi generados desde el lenguaje, bloques/retornos múltiples, conversión de tipos y arrays/nulos/cadenas/datasets/tablas/joins/estadísticas/CSV-I/O/SQL/streams. El slice actual no produce parámetros de bloque/argumentos tipo phi ni ciclos desde el control de flujo del lenguaje. Tampoco se propagan spans, efectos, errores, ownership o límites de recursos a instrucciones IR; no hay bytecode portable serializable/versionado, lector/validador de bytecode, VM de referencia, ejecución diferencial ni cobertura completa por constructo.
-
-Este incremento añade pruebas para merge de valores en un diamante y valor de bucle transferido por backedge, uso de valor dominante entre bloques, rechazo de argumentos de arista faltantes/duplicados/de tipo incorrecto, rechazo de valor definido en bloque hermano y de uso no dominante, y rechazo de bloques inalcanzables. Debe ejecutarse el target dedicado en GCC, Clang y sanitizadores contra el SHA publicado; las pruebas locales no sustituyen CI.
-
-## Continuación necesaria para el gate de salida de fase 1
-
-1. Fijar el inventario normativo de sintaxis/AST contra gramática, parser y semántica oficiales; por cada forma, probar lowering completo o retirarla/deprecarla formalmente de la superficie oficial y actualizar pruebas/documentación.
-2. Completar el frontend tipado y sus contratos (tipos, nombres/ámbitos, firmas completas, ABI, conversiones, errores y spans) e implementar lowering AST→esta única IR, ampliando las entradas de función existentes y añadiendo llamadas y control de flujo; incorporar tests de cobertura AST con matriz inventariada sin casos omitidos.
-3. Completar contrato de tipos, efectos, errores, ownership, límites de memoria/recursos y operaciones de dominio antes de congelar la representación portable; validar aristas, ciclos y terminadores bajo casos positivos y negativos.
-4. Definir y probar formato/versionado canónico de bytecode; serializador/lector con límites, corrupción, truncamiento y verificación fail-closed, incluida la IR convertida a bytecode.
-5. Implementar VM de referencia consumiendo únicamente bytecode verificado, y pruebas diferenciales frontend→IR→bytecode→VM frente al comportamiento oficial, más errores y limpieza bajo fallos.
-6. Ejecutar pruebas completas y CI GCC/Clang/sanitizadores/plataformas contra el SHA exacto; documentar evidencia física Android/Termux donde el gate de dos fases la requiera. Solo con toda esa evidencia puede cerrarse fase 1. AOT/JIT nativo corresponde únicamente a fase 2 y queda fuera de alcance.
-
-Este incremento no satisface ni declara satisfecho el gate de salida de fase 1. La fase 2 (AOT/JIT nativo) permanece fuera de alcance.
+    puts("lexer safety: ok");
+    return 0;
+}

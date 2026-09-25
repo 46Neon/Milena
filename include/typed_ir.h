@@ -1,147 +1,28 @@
-#ifndef MILENA_TYPED_IR_H
-#define MILENA_TYPED_IR_H
+#ifndef MILENA_LEXER_H
+#define MILENA_LEXER_H
 
 #include "common.h"
-#include <stdint.h>
+#include "token.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+typedef struct Lexer {
+    const char *source;
+    size_t position;
+    size_t length;
+    int line;
+    int column;
+    size_t token_start_offset;
+    int token_start_line;
+    int token_start_column;
+    Token current_token;
+    Token previous_token;
+    MilenaError error;
+} Lexer;
 
-typedef struct MilenaHIRFunction MilenaHIRFunction;
-
-typedef enum {
-    MILENA_IR_CONST_I64,
-    MILENA_IR_CONST_F64,
-    MILENA_IR_ADD_I64,
-    MILENA_IR_ADD_F64,
-    MILENA_IR_EQ_I64,
-    MILENA_IR_BRANCH,
-    MILENA_IR_COND_BRANCH,
-    MILENA_IR_RETURN,
-    MILENA_IR_CONST_BOOL,
-    MILENA_IR_SUB_F64,
-    MILENA_IR_MUL_F64,
-    MILENA_IR_DIV_F64,
-    MILENA_IR_EQ_F64,
-    MILENA_IR_NE_F64,
-    MILENA_IR_LT_F64,
-    MILENA_IR_LE_F64,
-    MILENA_IR_GT_F64,
-    MILENA_IR_GE_F64,
-    MILENA_IR_OPCODE_COUNT
-} MilenaIROpCode;
-
-typedef enum {
-    MILENA_IR_TYPE_INVALID = 0,
-    MILENA_IR_TYPE_I64,
-    MILENA_IR_TYPE_F64,
-    MILENA_IR_TYPE_BOOL,
-    MILENA_IR_TYPE_VOID
-} MilenaIRType;
-
-typedef struct MilenaIRInstruction {
-    MilenaIROpCode opcode;
-    MilenaIRType result_type;
-    uint32_t result_id;
-    uint32_t operand1_id;
-    uint32_t operand2_id;
-    uint32_t block_id;
-    int64_t integer_immediate;
-    double float_immediate;
-    uint32_t target_true;
-    uint32_t target_false;
-} MilenaIRInstruction;
-
-typedef struct MilenaIRBasicBlock {
-    uint32_t id;
-    size_t first_instruction;
-    size_t instruction_count;
-    uint32_t successor_true;
-    uint32_t successor_false;
-    bool terminated;
-} MilenaIRBasicBlock;
-
-typedef struct MilenaIRBlockParameter {
-    uint32_t block_id;
-    uint32_t value_id;
-    MilenaIRType type;
-} MilenaIRBlockParameter;
-
-typedef struct MilenaIREdgeArgument {
-    uint32_t source_block_id;
-    uint32_t target_block_id;
-    uint32_t parameter_index;
-    uint32_t value_id;
-} MilenaIREdgeArgument;
-
-typedef struct MilenaIRFunctionSignature {
-    MilenaIRType *parameter_types;
-    size_t parameter_count;
-    MilenaIRType return_type;
-} MilenaIRFunctionSignature;
-
-typedef struct MilenaIRProgram {
-    MilenaIRInstruction *instructions;
-    size_t count;
-    size_t capacity;
-    MilenaIRBasicBlock *blocks;
-    size_t block_count;
-    size_t block_capacity;
-    MilenaIRBlockParameter *parameters;
-    size_t parameter_count;
-    size_t parameter_capacity;
-    MilenaIREdgeArgument *edge_arguments;
-    size_t edge_argument_count;
-    size_t edge_argument_capacity;
-    MilenaIRFunctionSignature signature;
-    bool has_function_signature;
-} MilenaIRProgram;
-
-/* This canonical typed representation is independent of the experimental
- * string-based IRProgram declared by ir.h. */
-MilenaIRProgram *milena_ir_program_create(void);
-void milena_ir_program_destroy(MilenaIRProgram *program);
-bool milena_ir_program_set_function_signature(MilenaIRProgram *program,
-                                               const MilenaIRType *parameter_types,
-                                               size_t parameter_count,
-                                               MilenaIRType return_type);
-bool milena_ir_program_add_block(MilenaIRProgram *program, uint32_t block_id);
-bool milena_ir_program_add_block_parameter(MilenaIRProgram *program,
-                                            uint32_t block_id,
-                                            uint32_t value_id,
-                                            MilenaIRType type);
-bool milena_ir_block_add_edge_argument(MilenaIRProgram *program,
-                                        uint32_t source_block_id,
-                                        uint32_t target_block_id,
-                                        uint32_t parameter_index,
-                                        uint32_t value_id);
-bool milena_ir_block_append_instruction(MilenaIRProgram *program,
-                                         uint32_t block_id,
-                                         MilenaIROpCode opcode,
-                                         uint32_t result_id,
-                                         MilenaIRType result_type,
-                                         uint32_t operand1_id,
-                                         uint32_t operand2_id,
-                                         int64_t integer_immediate,
-                                         double float_immediate,
-                                         uint32_t target_true,
-                                         uint32_t target_false);
-bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
-                                size_t error_capacity);
-
-/* Lower one canonical scalar-HIR function body into a fresh, verified typed-IR
- * body. The current slice accepts typed numeric (F64) input parameters and numeric/bool locals, and
- * either one final return or a final si/sino whose two arms each return
- * immediately. The IR carries an explicit signature and entry-block parameter
- * definitions. Calls and other control-flow shapes fail closed. `program`
- * must be empty. */
-bool milena_ir_program_lower_scalar_function_body(
-    MilenaIRProgram *program, const MilenaHIRFunction *function, char *error,
-    size_t error_capacity);
-
-#ifdef __cplusplus
-}
-#endif
+void lexer_init(Lexer *lexer, const char *source);
+Token lexer_next_token(Lexer *lexer);
+Token lexer_peek_token(Lexer *lexer);
+void lexer_advance_token(Lexer *lexer);
+bool lexer_match(Lexer *lexer, TokenType type);
+bool lexer_expect(Lexer *lexer, TokenType type, const char *error_msg);
 
 #endif
