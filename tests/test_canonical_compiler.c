@@ -1502,7 +1502,7 @@ int main(void) {
     input = (MilenaCanonicalCompilerInput){0};
     CHECK(milena_canonical_hir_input(&program, &input, &error) == MILENA_ERR_TYPE &&
           input.ast == NULL && input.arrow_plan == NULL &&
-          strstr(error.message, "Arrow projected fields") != NULL,
+          strstr(error.message, "Cada campo Arrow proyectado") != NULL,
           "un plan Arrow inválido debe fallar cerrado con su diagnóstico tipado");
     milena_canonical_program_release(&program);
 
