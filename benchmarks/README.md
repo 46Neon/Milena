@@ -27,10 +27,9 @@ memoria RSS global.
 Desde la raíz del repositorio:
 
 ```bash
-python3 benchmarks/benchmark.py
+make benchmark
 # Más muestras y un archivo JSON reproducible para adjuntar al informe:
-python3 benchmarks/benchmark.py --compile-repetitions 3 --run-repetitions 10 \
-  --output benchmark-results.json
+make benchmark BENCHMARK_ARGS="--compile-repetitions 3 --run-repetitions 10 --output benchmark-results.json"
 # Resumen global CSV (small + medium; CI usa este camino):
 make benchmark-stream
 # Agrupación streaming, memoria acotada (small + medium; CI la valida):
@@ -42,12 +41,13 @@ python3 benchmarks/grouped_stream_benchmark.py --large-rows 1000000 --output gro
 python3 benchmarks/grouped_spill_benchmark.py --large-rows 1000000 --output grouped-spill-results.json
 ```
 
-El resultado JSON incluye muestras, mínimo, mediana, media, máximo, fixture,
-comandos, plataforma, arquitectura y commit si `GITHUB_SHA` está disponible.
-El reloj es `time.perf_counter()` y mide tiempo de pared del proceso completo;
-se deben conservar los resultados junto con el compilador, flags, carga del
-sistema y commit. Los benchmarks no forman parte del binario ni del paquete
-Termux.
+El resultado JSON conserva el esquema `milena-benchmark-v1`: incluye muestras,
+mínimo, mediana, media, máximo, fixture, comandos, plataforma, arquitectura y
+commit si `GITHUB_SHA` está disponible. Para compatibilidad, el campo `python`
+se emite como `null` y se agrega `harness: C17`. El reloj usa el contador
+monotónico del sistema y mide el proceso completo; conserva los resultados junto
+con compilador, flags, carga y commit. El ejecutable auxiliar no forma parte del
+binario ni del paquete Termux.
 
 ## Hito de un millón de filas (opt-in)
 

@@ -355,8 +355,11 @@ tests/test_termux_packaging: tests/test_termux_packaging.c tools/milena_sha256.c
 all: $(TARGET)
 
 # Reproducible compile/runtime measurements; see benchmarks/README.md.
-benchmark:
-	python3 benchmarks/benchmark.py
+benchmark: benchmarks/benchmark
+	@status=0; ./benchmarks/benchmark $(BENCHMARK_ARGS) || status=$$?; rm -f benchmarks/benchmark; exit $$status
+
+benchmarks/benchmark: benchmarks/benchmark.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion $< $(LDFLAGS) -o $@
 
 # Small and medium deterministic CSV workloads; large runs require --large-rows.
 benchmark-stream: $(TARGET)
@@ -410,9 +413,10 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
 	./tests/run_tests.sh
 	./tests/run_tests.sh
+	./benchmarks/benchmark --help && rm -f benchmarks/benchmark
 
 clean:
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tools/check_architecture tools/check_repository_contracts tools/validate_termux_elf tests/test_sst_modules \
