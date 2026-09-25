@@ -5,8 +5,6 @@
 #include "table.h"
 #include "typed_ir.h"
 
-typedef struct MilenaArrowIpcExecutionPlan MilenaArrowIpcExecutionPlan;
-
 /* Provenance key stamped by the canonical loader before a data-HIR table is bound. */
 #define MILENA_HIR_DATASET_PATH_METADATA "milena.hir.dataset.path"
 
@@ -208,15 +206,59 @@ typedef struct {
     bool schema_bound;
 } MilenaDataHIR;
 
+typedef enum {
+    MILENA_ARROW_HIR_NUMERIC,
+    MILENA_ARROW_HIR_TEXT
+} MilenaArrowHIRValueType;
+
+typedef struct {
+    char *name;
+    MilenaArrowHIRValueType type;
+    MilenaHIRSourceSpan span;
+} MilenaArrowHIRProjection;
+
+typedef enum {
+    MILENA_ARROW_HIR_FILTER_TEXT_EQUAL,
+    MILENA_ARROW_HIR_FILTER_NUMERIC_GREATER
+} MilenaArrowHIRFilterKind;
+
+typedef struct {
+    char *column;
+    MilenaArrowHIRFilterKind kind;
+    char *text_value;
+    double numeric_threshold;
+    MilenaArrowHIRValueType column_type;
+    MilenaHIRSourceSpan span;
+} MilenaArrowHIRFilter;
+
+/* Owned typed contract for the candidate Arrow IPC STREAM vertical. It is
+ * independent of AST storage, but intentionally is not yet lowered to the
+ * portable typed IR or bytecode. */
+typedef struct {
+    char *source_path;
+    char *output_path;
+    size_t batch_rows;
+    size_t max_batch_bytes;
+    size_t max_rows;
+    size_t max_columns;
+    size_t max_input_bytes;
+    size_t max_output_bytes;
+    double max_elapsed_milliseconds;
+    MilenaArrowHIRProjection *projections;
+    size_t projection_count;
+    bool has_filter;
+    MilenaArrowHIRFilter filter;
+    MilenaHIRSourceSpan span;
+} MilenaArrowHIR;
+
 typedef struct {
     const ASTNode *ast;
     const MilenaTable *table;
     const MilenaTable *right_table; /* Borrowed second dataset for a typed join. */
     const MilenaScalarHIR *hir;
     const MilenaDataHIR *data_hir; /* NULL outside the typed data subset. */
-    /* Borrowed typed execution plan for the candidate Arrow STREAM vertical;
-     * not a typed IR module or portable bytecode. */
-    const MilenaArrowIpcExecutionPlan *arrow_plan;
+    /* Borrowed owned HIR for the candidate Arrow STREAM vertical. */
+    const MilenaArrowHIR *arrow_hir;
 } MilenaCanonicalCompilerInput;
 
 typedef struct {
@@ -225,7 +267,7 @@ typedef struct {
     const MilenaTable *right_table; /* Borrowed second dataset when HIR has a join. */
     MilenaScalarHIR *hir; /* Owned scalar HIR, when the scalar subset applies. */
     MilenaDataHIR *data_hir; /* Owned data HIR, when the table subset applies. */
-    MilenaArrowIpcExecutionPlan *arrow_plan; /* Owned plan; its AST refs borrow program->ast. */
+    MilenaArrowHIR *arrow_hir; /* Owned and independent from program->ast. */
     MilenaIRProgram *typed_ir; /* Borrowed compatibility view of the first compiled body. */
     MilenaIRModule *typed_module; /* Owned interprocedural IR when the source has calls. */
 } MilenaCanonicalProgram;

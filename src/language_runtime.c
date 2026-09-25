@@ -1691,20 +1691,10 @@ MilenaStatus milena_run_dataset_program(const char *source,
     }
 
     MilenaStreamExecutionPlan stream_plan = {0};
-    MilenaArrowIpcExecutionPlan arrow_plan = {0};
     bool arrow_stream = load->type_name &&
         strcmp(load->type_name, "arrow_ipc_stream") == 0;
     bool streaming = load->type_name && strcmp(load->type_name, "flujo") == 0;
-    if (arrow_stream) {
-        MilenaStatus plan_status = milena_arrow_ipc_execution_plan_build(
-            analysis, &arrow_plan, error);
-        if (plan_status != MILENA_OK) {
-            ast_destroy(program);
-            parser_release(&parser);
-            return plan_status;
-        }
-        load = arrow_plan.source;
-    } else if (streaming) {
+    if (streaming) {
         MilenaStatus plan_status = milena_stream_execution_plan_build(
             analysis, &stream_plan, error);
         if (plan_status != MILENA_OK) {
@@ -1720,40 +1710,60 @@ MilenaStatus milena_run_dataset_program(const char *source,
     milena_canonical_program_init(&source_program);
     MilenaStatus status = milena_canonical_program_parse(&source_program, source, error);
     const char *source_path = load->value;
-    if (status == MILENA_OK && source_program.data_hir)
+    if (status == MILENA_OK && arrow_stream) {
+        if (source_program.arrow_hir) {
+            source_path = source_program.arrow_hir->source_path;
+        } else {
+            const ASTNode *canonical_analysis = source_program.ast &&
+                source_program.ast->child_count == 1
+                    ? source_program.ast->children[0] : NULL;
+            MilenaArrowIpcExecutionPlan rejected_plan = {0};
+            status = milena_arrow_ipc_execution_plan_build(
+                canonical_analysis, &rejected_plan, error);
+            if (status == MILENA_OK) {
+                runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                              "No se pudo construir la HIR Arrow IPC canónica");
+                status = MILENA_ERR_UNSUPPORTED;
+            }
+        }
+    } else if (status == MILENA_OK && source_program.data_hir) {
         source_path = source_program.data_hir->source.path;
+    }
     if (status == MILENA_OK)
         status = dataset_runtime_path(source_path, script_filename, false,
                                       input, sizeof(input), error);
-    milena_canonical_program_release(&source_program);
     if (status != MILENA_OK) {
+        milena_canonical_program_release(&source_program);
         ast_destroy(program);
         parser_release(&parser);
         return status;
     }
 
     if (arrow_stream) {
+        const MilenaArrowHIR *arrow_hir = source_program.arrow_hir;
         char output_path[2048];
-        const ASTNode *export_node = arrow_plan.sink;
-        status = dataset_runtime_path(export_node->value, script_filename, true,
+        status = dataset_runtime_path(arrow_hir->output_path, script_filename, true,
                                       output_path, sizeof(output_path), error);
         if (status == MILENA_OK) {
+            if (arrow_hir->projection_count == 0 ||
+                arrow_hir->projection_count > MILENA_ARROW_PLAN_MAX_COLUMNS) {
+                runtime_error(error, MILENA_ERR_OVERFLOW,
+                              "La proyección Arrow HIR excede el límite validado");
+                status = MILENA_ERR_OVERFLOW;
+            }
             const char *projection[MILENA_ARROW_PLAN_MAX_COLUMNS];
             MilenaArrowValueType projection_types[MILENA_ARROW_PLAN_MAX_COLUMNS];
-            for (size_t i = 0; i < arrow_plan.projection->child_count; ++i) {
-                projection[i] = arrow_plan.projection->children[i]->value;
-                const ASTNode *declaration = arrow_plan.projection_declarations[i];
-                if (declaration && declaration->type_name &&
-                    strcmp(declaration->type_name, "numerica") == 0)
+            for (size_t i = 0; status == MILENA_OK &&
+                 i < arrow_hir->projection_count; ++i) {
+                projection[i] = arrow_hir->projections[i].name;
+                if (arrow_hir->projections[i].type == MILENA_ARROW_HIR_NUMERIC)
                     projection_types[i] = MILENA_ARROW_VALUE_NUMERICA;
-                else if (declaration && declaration->type_name &&
-                         strcmp(declaration->type_name, "texto") == 0)
+                else if (arrow_hir->projections[i].type == MILENA_ARROW_HIR_TEXT)
                     projection_types[i] = MILENA_ARROW_VALUE_TEXTO;
                 else {
                     runtime_error(error, MILENA_ERR_TYPE,
-                                  "Tipo de columna proyectada Arrow no admitido");
+                                  "Tipo de columna Arrow HIR no admitido");
                     status = MILENA_ERR_TYPE;
-                    break;
                 }
             }
             MilenaArrowIpcOptions options = {0};
@@ -1761,28 +1771,29 @@ MilenaStatus milena_run_dataset_program(const char *source,
             options.output_path = output_path;
             options.projection = projection;
             options.projection_types = projection_types;
-            options.projection_count = arrow_plan.projection->child_count;
-            options.max_batch_rows = load->stream_chunk_rows;
-            options.max_rows = load->stream_row_limit;
-            options.max_batch_bytes = load->stream_batch_limit_bytes;
-            options.max_columns = load->stream_column_limit;
-            options.max_input_bytes = load->stream_input_limit_bytes;
-            options.max_output_bytes = load->stream_output_limit_bytes;
-            options.max_elapsed_milliseconds = load->stream_time_limit_ms;
-            if (arrow_plan.filter) {
-                options.filter_column = arrow_plan.filter->value;
-                if (arrow_plan.filter->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+            options.projection_count = arrow_hir->projection_count;
+            options.max_batch_rows = arrow_hir->batch_rows;
+            options.max_rows = arrow_hir->max_rows;
+            options.max_batch_bytes = arrow_hir->max_batch_bytes;
+            options.max_columns = arrow_hir->max_columns;
+            options.max_input_bytes = arrow_hir->max_input_bytes;
+            options.max_output_bytes = arrow_hir->max_output_bytes;
+            options.max_elapsed_milliseconds =
+                arrow_hir->max_elapsed_milliseconds;
+            if (arrow_hir->has_filter) {
+                options.filter_column = arrow_hir->filter.column;
+                if (arrow_hir->filter.kind == MILENA_ARROW_HIR_FILTER_TEXT_EQUAL) {
                     options.filter_kind = MILENA_ARROW_FILTER_TEXT_EQUAL;
                     options.filter_column_type = MILENA_ARROW_VALUE_TEXTO;
-                    options.filter_text = arrow_plan.filter->type_name;
-                } else if (arrow_plan.filter->stream_filter_kind ==
-                           AST_STREAM_FILTER_NUMERIC_GREATER) {
+                    options.filter_text = arrow_hir->filter.text_value;
+                } else if (arrow_hir->filter.kind ==
+                           MILENA_ARROW_HIR_FILTER_NUMERIC_GREATER) {
                     options.filter_kind = MILENA_ARROW_FILTER_NUMERIC_GREATER;
                     options.filter_column_type = MILENA_ARROW_VALUE_NUMERICA;
-                    options.filter_number = arrow_plan.filter->number_value;
+                    options.filter_number = arrow_hir->filter.numeric_threshold;
                 } else {
                     runtime_error(error, MILENA_ERR_UNSUPPORTED,
-                                  "Predicado de Arrow IPC no registrado en el planner");
+                                  "Predicado Arrow HIR no registrado");
                     status = MILENA_ERR_UNSUPPORTED;
                 }
             }
@@ -1797,6 +1808,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
                         report.input_bytes, report.output_bytes, output_path);
             }
         }
+        milena_canonical_program_release(&source_program);
         ast_destroy(program);
         parser_release(&parser);
         return status;
@@ -1841,11 +1853,13 @@ MilenaStatus milena_run_dataset_program(const char *source,
             status = run_stream_dataset_with_options(&stream_plan, input, output_path,
                                                      &options, output, error);
         }
+        milena_canonical_program_release(&source_program);
         ast_destroy(program);
         parser_release(&parser);
         return status;
     }
 
+    milena_canonical_program_release(&source_program);
     MilenaDatasetRuntime runtime = {0};
     dataset_init(&runtime.dataset);
     status = dataset_load_csv(&runtime.dataset, input, ',', error);

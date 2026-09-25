@@ -1,7 +1,6 @@
 #include "canonical_compiler.h"
 #include "typed_ir.h"
 #include "typed_bytecode.h"
-#include "query_plan.h"
 #include "vm.h"
 
 #include <stdio.h>
@@ -1443,8 +1442,9 @@ int main(void) {
     free(scalar_bytecode);
     milena_canonical_program_release(&program);
 
-    /* Arrow IPC plans are owned by the canonical program and exposed only
-     * through the compatibility view; they are not typed HIR/IR compiler input. */
+    /* Arrow's typed contract now owns source, projection, filter, and limits
+     * independently of AST storage; strict compiler input still waits for IR
+     * lowering and portable bytecode. */
     const char *arrow_source =
         ".analisis arrow_hir { "
         "variable id numerica "
@@ -1459,30 +1459,54 @@ int main(void) {
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program, arrow_source, &error) ==
               MILENA_OK, error.message);
-    CHECK(program.arrow_plan != NULL && program.hir == NULL &&
+    CHECK(program.arrow_hir != NULL && program.hir == NULL &&
           program.data_hir == NULL,
-          "Arrow IPC debe conservar un plan tipado separado de las HIR escalar y tabular");
-    CHECK(program.arrow_plan->source->type == AST_LLAMADA_CARGAR &&
-          program.arrow_plan->projection->child_count == 1 &&
-          program.arrow_plan->filter != NULL &&
-          program.arrow_plan->sink->type == AST_BLOQUE_EXPORTAR,
-          "el plan Arrow debe representar fuente, filtro, proyección y salida");
-    CHECK(milena_arrow_ipc_execution_plan_validate(program.arrow_plan, &error) ==
-              MILENA_OK, error.message);
+          "Arrow IPC debe conservar una HIR tipada separada de las HIR escalar y tabular");
+    CHECK(strcmp(program.arrow_hir->source_path, "entrada.arrow") == 0 &&
+          strcmp(program.arrow_hir->output_path, "salida.arrow") == 0 &&
+          program.arrow_hir->batch_rows == 32u &&
+          program.arrow_hir->max_batch_bytes == 33554432u &&
+          program.arrow_hir->max_rows == 100000u &&
+          program.arrow_hir->max_columns == 32u &&
+          program.arrow_hir->max_input_bytes == 67108864u &&
+          program.arrow_hir->max_output_bytes == 67108864u &&
+          program.arrow_hir->max_elapsed_milliseconds == 30000.0,
+          "la HIR Arrow debe poseer rutas y límites configurados");
+    CHECK(program.arrow_hir->projection_count == 1u &&
+          strcmp(program.arrow_hir->projections[0].name, "id") == 0 &&
+          program.arrow_hir->projections[0].type == MILENA_ARROW_HIR_NUMERIC &&
+          program.arrow_hir->has_filter &&
+          strcmp(program.arrow_hir->filter.column, "id") == 0 &&
+          program.arrow_hir->filter.kind ==
+              MILENA_ARROW_HIR_FILTER_NUMERIC_GREATER &&
+          program.arrow_hir->filter.numeric_threshold == 10.0,
+          "la HIR Arrow debe tipar proyección y filtro");
+    const ASTNode *arrow_analysis = program.ast->children[0];
+    const ASTNode *arrow_source_node = arrow_analysis->children[1];
+    const ASTNode *arrow_filter_node = NULL;
+    for (size_t i = 0; i < arrow_analysis->child_count; ++i)
+        if (arrow_analysis->children[i]->type == AST_STREAM_FILTER)
+            arrow_filter_node = arrow_analysis->children[i];
+    CHECK(arrow_filter_node &&
+          program.arrow_hir->source_path != arrow_source_node->value &&
+          program.arrow_hir->projections[0].name !=
+              arrow_analysis->children[arrow_analysis->child_count - 2]->children[0]->value &&
+          program.arrow_hir->filter.column != arrow_filter_node->value,
+          "la HIR Arrow no debe tomar ownership ni depender de strings del AST");
     input = (MilenaCanonicalCompilerInput){0};
     CHECK(milena_canonical_compatibility_input(&program, &input, &error) ==
-              MILENA_OK && input.arrow_plan == program.arrow_plan &&
+              MILENA_OK && input.arrow_hir == program.arrow_hir &&
           input.ast == program.ast && input.hir == NULL && input.data_hir == NULL,
-          "la vista de compatibilidad debe exponer el plan Arrow tipado prestado");
+          "la vista de compatibilidad debe exponer la HIR Arrow prestada");
     input = (MilenaCanonicalCompilerInput){0};
     CHECK(milena_canonical_hir_input(&program, &input, &error) ==
               MILENA_ERR_UNSUPPORTED && input.ast == NULL &&
-          input.arrow_plan == NULL &&
+          input.arrow_hir == NULL &&
           strstr(error.message, "no representa todavía el nodo") != NULL,
-          "la entrada estricta debe rechazar Arrow hasta su lowering HIR real");
+          "la entrada estricta debe esperar al lowering HIR→IR real");
     milena_canonical_program_release(&program);
-    CHECK(program.arrow_plan == NULL,
-          "liberar el programa canónico debe liberar su plan Arrow");
+    CHECK(program.arrow_hir == NULL,
+          "liberar el programa canónico debe liberar la HIR Arrow");
 
     const char *arrow_invalid_source =
         ".analisis arrow_tipo_invalido { "
@@ -1496,11 +1520,11 @@ int main(void) {
         "guardar resultado en \"salida.arrow\" }";
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program, arrow_invalid_source, &error) ==
-              MILENA_ERR_PARSE && program.ast == NULL && program.arrow_plan == NULL &&
+              MILENA_ERR_PARSE && program.ast == NULL && program.arrow_hir == NULL &&
           strstr(error.message, "Cada campo Arrow proyectado") != NULL,
           "el frontend canónico debe rechazar el tipo Arrow inválido con diagnóstico tipado");
     milena_canonical_program_release(&program);
 
-    puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, Arrow typed plan, binding, execution and diagnostics");
+    puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, Arrow owned HIR, binding, execution and diagnostics");
     return 0;
 }

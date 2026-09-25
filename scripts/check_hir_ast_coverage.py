@@ -147,22 +147,33 @@ if arrow_cases != expected_arrow_cases:
 if "AST_COLUMNAR_FIELD" not in arrow_builder or \
    "MILENA_ERR_UNSUPPORTED" not in arrow_builder or "default:" not in arrow_builder:
     fail("Arrow IPC plan must validate projected fields and reject unknown AST nodes")
+arrow_hir_builder = function_body(HIR_SOURCE, "static HIRBuildResult arrow_hir_build(")
+for token in (
+    "milena_strdup(plan->source->value)", "milena_strdup(plan->sink->value)",
+    "MILENA_ARROW_HIR_NUMERIC", "MILENA_ARROW_HIR_TEXT",
+    "MILENA_ARROW_HIR_FILTER_TEXT_EQUAL",
+    "MILENA_ARROW_HIR_FILTER_NUMERIC_GREATER",
+    "stream_batch_limit_bytes", "stream_input_limit_bytes",
+):
+    if token not in arrow_hir_builder:
+        fail(f"Arrow HIR builder is missing required typed ownership field {token!r}")
 canonical_parse = function_body(
     HIR_SOURCE, "MilenaStatus milena_canonical_program_parse("
 )
 if "milena_arrow_ipc_execution_plan_build" not in canonical_parse or \
-   "program->arrow_plan = arrow_plan" not in canonical_parse:
-    fail("the canonical parser must own the validated Arrow IPC typed plan")
+   "program->arrow_hir = arrow_hir" not in canonical_parse:
+    fail("the canonical parser must build and own Arrow IPC HIR")
 compatibility_entry = function_body(
     HIR_SOURCE, "MilenaStatus milena_canonical_compatibility_input("
 )
-if "input->arrow_plan = program->arrow_plan" not in compatibility_entry:
-    fail("the compiler input must expose the Arrow plan as a borrowed view")
+if "input->arrow_hir = program->arrow_hir" not in compatibility_entry:
+    fail("the compatibility input must expose the Arrow HIR as a borrowed view")
 hir_entry = function_body(HIR_SOURCE, "MilenaStatus milena_canonical_hir_input(")
 if "MILENA_ERR_UNSUPPORTED" not in hir_entry or "hir_first_unsupported_node" not in hir_entry:
     fail("the public HIR-only entry point must fail closed and locate an unsupported node")
-if "if (!program->hir && !program->data_hir)" not in hir_entry:
-    fail("an Arrow plan must not bypass the strict HIR lowering requirement")
+if "if (!program->hir && !program->data_hir)" not in hir_entry or \
+   "program->arrow_hir" in hir_entry:
+    fail("an Arrow HIR must not bypass the strict HIR-to-IR lowering requirement")
 if "milena_canonical_compatibility_input(program, input, error)" not in hir_entry:
     fail("the strict HIR entry must delegate only after a real HIR exists")
 
@@ -170,6 +181,6 @@ print(
     "HIR AST coverage: "
     f"scalar={len(represented)} represented/{len(rejected)} outside scalar HIR; "
     f"data={len(data_represented)} represented/{len(ast_nodes - data_represented)} outside data HIR; "
-    f"Arrow plan={len(expected_arrow_cases) + 1} typed node kinds; "
+    f"Arrow HIR={len(expected_arrow_cases) + 1} typed node kinds; "
     "all ASTNodeType values classified in the closed subsets."
 )
