@@ -61,18 +61,21 @@ interpretarse como una construcción Debian.
 
 ## Ciclo de vida en Android
 
-En el runner dedicado, el smoke test ejecuta realmente:
+En el runner dedicado, el smoke test instala, ejecuta y elimina únicamente
+Milena:
 
 ```bash
 pkg install -y dist/termux/milena_..._aarch64.deb
-pkg upgrade -y
+milena --self-check
 pkg remove -y milena
 ```
 
-La prueba se niega a continuar si `milena` ya estaba instalado. Una URL HTTPS
-opcional permite probar además un repositorio APT previamente configurado; PR23
-no inventa host, source-list, clave ni secreto. Sin URL, ese tramo queda marcado
-como `apt_smoke=not-run (fail-closed)`.
+El gate nunca ejecuta `pkg upgrade`, porque eso puede actualizar paquetes ajenos
+a la prueba en el dispositivo. La prueba se niega a continuar si `milena` ya
+estaba instalado. Una URL HTTPS opcional permite probar además un repositorio
+APT previamente configurado con `pkg update`, instalación y eliminación de
+Milena; PR23 no inventa host, source-list, clave ni secreto. Sin URL, ese tramo
+queda marcado como `apt_smoke=not-run (fail-closed)`.
 
 ## Runner y pruebas virtuales
 
@@ -110,8 +113,9 @@ el artefacto de Actions cuando la prueba se ejecuta realmente.
 1. Ejecutar lint y `build-package.sh -I -f milena` en el checkout oficial.
 2. Registrar modelo Android, versión de Termux, commit, `PREFIX`, arquitectura,
    versión de Clang, checksum y logs sin secretos.
-3. Completar `pkg install`, `pkg upgrade`, ejecución y `pkg remove` en una sesión
-   limpia; verificar también el caso de actualización desde la versión previa.
+3. Completar `pkg install`, ejecución y `pkg remove` en un runner aislado;
+   verificar también el caso de actualización desde la versión previa sin
+   actualizar los demás paquetes del dispositivo.
 4. Revisar licencia, dependencias vacías, rutas `$TERMUX_PREFIX` y el contenido
    mínimo del paquete.
 5. Preparar el cambio para `termux/termux-packages` siguiendo su revisión; no
