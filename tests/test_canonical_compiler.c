@@ -3,6 +3,18 @@
 #include <stdio.h>
 #include <string.h>
 
+static const ASTNode *find_aggregate_metric(const ASTNode *node,
+                                            ASTAggregateOperation operation) {
+    if (!node) return NULL;
+    if (node->type == AST_RESUMEN_METRICA && node->has_aggregate_metric &&
+        node->aggregate_operation == operation) return node;
+    for (size_t i = 0; i < node->child_count; ++i) {
+        const ASTNode *found = find_aggregate_metric(node->children[i], operation);
+        if (found) return found;
+    }
+    return NULL;
+}
+
 #define CHECK(condition, message) \
     do { \
         if (!(condition)) { \
@@ -382,6 +394,12 @@ int main(void) {
           program.data_hir->operations[0].kind == MILENA_HIR_DATA_GROUP &&
           program.data_hir->operations[0].as.group.aggregate_count == 1,
           "la agrupación debe bajar a claves y agregados HIR tipados");
+    const ASTNode *group_metric = find_aggregate_metric(
+        program.ast, AST_AGGREGATE_OPERATION_SUM);
+    CHECK(group_metric && group_metric->has_source_span &&
+          strcmp(group_metric->aggregate_column, "precio") == 0 &&
+          strcmp(group_metric->value, "suma:precio") == 0,
+          "el parser debe preservar payload typed, spelling legado y span de la métrica");
     CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) == MILENA_OK,
           error.message);
     MilenaTable grouped_output;
@@ -416,12 +434,19 @@ int main(void) {
     milena_canonical_program_init(&program);
     const char *summary_source =
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
-        ".resumir dataset { #suma(\"precio\") #conteo(\"ciudad\") } }";
+        ".resumir dataset { #suma(\"precio\") #media(\"precio\") "
+        "#minimo(\"precio\") #maximo(\"precio\") #conteo(\"ciudad\") } }";
     CHECK(milena_canonical_program_parse(&program, summary_source, &error) == MILENA_OK,
           error.message);
     CHECK(program.data_hir && program.data_hir->operation_count == 1 &&
-          program.data_hir->operations[0].kind == MILENA_HIR_DATA_SUMMARIZE,
-          "el resumen debe bajar a agregados HIR tipados");
+          program.data_hir->operations[0].kind == MILENA_HIR_DATA_SUMMARIZE &&
+          program.data_hir->operations[0].as.summarize.aggregate_count == 5,
+          "las cinco operaciones admitidas deben bajar a agregados HIR tipados");
+    const ASTNode *summary_count_metric = find_aggregate_metric(
+        program.ast, AST_AGGREGATE_OPERATION_COUNT);
+    CHECK(summary_count_metric && summary_count_metric->has_source_span &&
+          strcmp(summary_count_metric->aggregate_column, "ciudad") == 0,
+          "conteo debe bajar desde el payload tipado con su span de llamada");
     CHECK(milena_canonical_program_bind_table(&program, &data_table, &error) == MILENA_OK,
           error.message);
     MilenaTable summary_output;
@@ -431,8 +456,11 @@ int main(void) {
           error.message);
     int summary_sum = milena_table_column_index(&summary_output, "precio_suma");
     int summary_count = milena_table_column_index(&summary_output, "ciudad_conteo");
-    CHECK(summary_output.row_count == 1 && summary_sum >= 0 && summary_count >= 0,
-          "el resumen HIR debe materializar una fila con nombres estables");
+    CHECK(summary_output.row_count == 1 && summary_sum >= 0 && summary_count >= 0 &&
+          milena_table_column_index(&summary_output, "precio_media") >= 0 &&
+          milena_table_column_index(&summary_output, "precio_minimo") >= 0 &&
+          milena_table_column_index(&summary_output, "precio_maximo") >= 0,
+          "el resumen HIR debe materializar las cinco operaciones con nombres estables");
     CHECK(milena_table_get_array_value(&summary_output, (size_t)summary_sum, 0,
           &cell, &error) == MILENA_OK && *(const double *)cell == 11.0,
           "la suma HIR debe calcular el total de la columna");
@@ -441,6 +469,26 @@ int main(void) {
           "el conteo HIR debe aceptar columnas de texto enlazadas");
     milena_canonical_program_release(&program);
     milena_table_destroy(&summary_output);
+
+    /* Unsupported aggregate operations remain represented but fail closed. */
+    milena_canonical_program_init(&program);
+    const char *unsupported_aggregate_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".resumir dataset { #varianza(\"precio\") } }";
+    CHECK(milena_canonical_program_parse(&program, unsupported_aggregate_source,
+                                         &error) == MILENA_OK, error.message);
+    const ASTNode *variance_metric = find_aggregate_metric(
+        program.ast, AST_AGGREGATE_OPERATION_VARIANCE);
+    CHECK(variance_metric && variance_metric->has_source_span &&
+          strcmp(variance_metric->aggregate_column, "precio") == 0 &&
+          program.data_hir == NULL,
+          "una métrica no soportada debe conservarse tipada sin publicar HIR parcial");
+    MilenaCanonicalCompilerInput unsupported_input = {0};
+    CHECK(milena_canonical_hir_input(&program, &unsupported_input, &error) ==
+              MILENA_ERR_UNSUPPORTED && unsupported_input.ast == NULL &&
+          unsupported_input.data_hir == NULL,
+          "el límite HIR debe rechazar el agregado no soportado de forma fail-closed");
+    milena_canonical_program_release(&program);
 
     milena_canonical_program_init(&program);
     const char *unknown_group_column =

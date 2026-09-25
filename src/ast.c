@@ -193,6 +193,33 @@ ASTFilterPredicateStatus ast_set_filter_predicate(ASTNode *node,
     return AST_FILTER_PREDICATE_OK;
 }
 
+static const char *ast_aggregate_operation_name(ASTAggregateOperation operation);
+
+bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
+                              const char *column) {
+    if (!node || node->type != AST_RESUMEN_METRICA || !node->value ||
+        !column || !column[0] || node->stream_operation !=
+            AST_STREAM_OPERATION_NONE || operation <= AST_AGGREGATE_OPERATION_NONE ||
+        operation >= AST_AGGREGATE_OPERATION_LIMIT) return false;
+    const char *name = ast_aggregate_operation_name(operation);
+    if (!name) return false;
+    size_t name_length = strlen(name);
+    size_t column_length = strlen(column);
+    if (column_length > SIZE_MAX - name_length - 2 ||
+        strlen(node->value) != name_length + 1 + column_length ||
+        memcmp(node->value, name, name_length) != 0 ||
+        node->value[name_length] != ':' ||
+        memcmp(node->value + name_length + 1, column, column_length) != 0)
+        return false;
+    char *copy = milena_strdup(column);
+    if (!copy) return false;
+    free(node->aggregate_column);
+    node->aggregate_column = copy;
+    node->aggregate_operation = operation;
+    node->has_aggregate_metric = true;
+    return true;
+}
+
 static bool ast_is_filter_comparison(ASTOperatorKind operation) {
     return operation == AST_OPERATOR_EQUAL ||
            operation == AST_OPERATOR_NOT_EQUAL ||
@@ -200,6 +227,31 @@ static bool ast_is_filter_comparison(ASTOperatorKind operation) {
            operation == AST_OPERATOR_GREATER_EQUAL ||
            operation == AST_OPERATOR_LESS ||
            operation == AST_OPERATOR_LESS_EQUAL;
+}
+
+static const char *ast_aggregate_operation_name(ASTAggregateOperation operation) {
+    switch (operation) {
+        case AST_AGGREGATE_OPERATION_SUM: return "suma";
+        case AST_AGGREGATE_OPERATION_MEAN: return "media";
+        case AST_AGGREGATE_OPERATION_MIN: return "minimo";
+        case AST_AGGREGATE_OPERATION_MAX: return "maximo";
+        case AST_AGGREGATE_OPERATION_COUNT: return "conteo";
+        case AST_AGGREGATE_OPERATION_VARIANCE: return "varianza";
+        case AST_AGGREGATE_OPERATION_STDDEV: return "desviacion_estandar";
+        case AST_AGGREGATE_OPERATION_MEDIAN: return "mediana";
+        case AST_AGGREGATE_OPERATION_PERCENTILE: return "percentil";
+        default: return NULL;
+    }
+}
+
+static bool ast_aggregate_legacy_matches(const ASTNode *node) {
+    if (!node || !node->value || !node->aggregate_column) return false;
+    const char *name = ast_aggregate_operation_name(node->aggregate_operation);
+    if (!name) return false;
+    size_t name_length = strlen(name);
+    return strncmp(node->value, name, name_length) == 0 &&
+           node->value[name_length] == ':' &&
+           strcmp(node->value + name_length + 1, node->aggregate_column) == 0;
 }
 
 bool ast_validate(const ASTNode *root, MilenaError *error) {
@@ -239,7 +291,11 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
         }
         if ((unsigned)node->value_type >= (unsigned)AST_VALUE_TYPE_COUNT ||
             (unsigned)node->operator_kind >= (unsigned)AST_OPERATOR_COUNT ||
-            (unsigned)node->filter_operator >= (unsigned)AST_OPERATOR_COUNT) {
+            (unsigned)node->filter_operator >= (unsigned)AST_OPERATOR_COUNT ||
+            (unsigned)node->aggregate_operation >=
+                (unsigned)AST_AGGREGATE_OPERATION_LIMIT ||
+            (unsigned)node->stream_operation >
+                (unsigned)AST_STREAM_OPERATION_STDDEV) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                                          "Anotación de tipo u operador AST fuera de rango");
             break;
@@ -268,6 +324,30 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
                    node->filter_threshold != 0.0) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                 "Payload de predicado sin etiqueta en el AST");
+            break;
+        }
+        if (node->has_aggregate_metric) {
+            if (node->type != AST_RESUMEN_METRICA || node->stream_operation !=
+                    AST_STREAM_OPERATION_NONE || !node->aggregate_column ||
+                !node->aggregate_column[0] ||
+                node->aggregate_operation <= AST_AGGREGATE_OPERATION_NONE ||
+                node->aggregate_operation >= AST_AGGREGATE_OPERATION_LIMIT ||
+                !ast_aggregate_legacy_matches(node)) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload de métrica agregada inconsistente en el AST");
+                break;
+            }
+        } else if (node->aggregate_column || node->aggregate_operation !=
+                   AST_AGGREGATE_OPERATION_NONE) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de métrica agregada sin etiqueta en el AST");
+            break;
+        }
+        if (node->stream_operation != AST_STREAM_OPERATION_NONE &&
+            (node->type != AST_RESUMEN_METRICA || node->has_aggregate_metric ||
+             !node->value || !node->value[0])) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Métrica de resumen de flujo inconsistente en el AST");
             break;
         }
         if (node->parent != entry.expected_parent) {
@@ -496,6 +576,7 @@ void ast_print(ASTNode *node, int depth) {
 void ast_destroy(ASTNode *node) {
     if (!node) return;
     free(node->filter_column);
+    free(node->aggregate_column);
     for (size_t i = 0; i < node->child_count; i++) {
         ast_destroy(node->children[i]);
     }

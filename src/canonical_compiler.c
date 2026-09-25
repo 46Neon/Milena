@@ -560,36 +560,66 @@ static bool hir_parse_selection(const char *text, MilenaHIRDataOperation *op,
     return true;
 }
 
-static HIRBuildResult hir_parse_aggregate(const ASTNode *node,
-                                                  MilenaHIRAggregate *aggregate) {
-    if (!node || node->type != AST_RESUMEN_METRICA || !node->value || !aggregate)
-        return HIR_BUILD_UNSUPPORTED;
-    char metric[32] = {0}, column[128] = {0}, extra;
-    if (sscanf(node->value, "%31[^:]:%127s %c", metric, column, &extra) != 2)
-        return HIR_BUILD_UNSUPPORTED;
-    const char *suffix = NULL;
-    if (strcmp(metric, "suma") == 0) {
-        aggregate->operation = MILENA_AGG_SUM;
-        suffix = "suma";
-    } else if (strcmp(metric, "media") == 0) {
-        aggregate->operation = MILENA_AGG_MEAN;
-        suffix = "media";
-    } else if (strcmp(metric, "minimo") == 0) {
-        aggregate->operation = MILENA_AGG_MIN;
-        suffix = "minimo";
-    } else if (strcmp(metric, "maximo") == 0) {
-        aggregate->operation = MILENA_AGG_MAX;
-        suffix = "maximo";
-    } else if (strcmp(metric, "conteo") == 0) {
-        aggregate->operation = MILENA_AGG_COUNT;
-        suffix = "conteo";
-    } else {
-        return HIR_BUILD_UNSUPPORTED;
+static const char *hir_aggregate_legacy_name(ASTAggregateOperation operation) {
+    switch (operation) {
+        case AST_AGGREGATE_OPERATION_SUM: return "suma";
+        case AST_AGGREGATE_OPERATION_MEAN: return "media";
+        case AST_AGGREGATE_OPERATION_MIN: return "minimo";
+        case AST_AGGREGATE_OPERATION_MAX: return "maximo";
+        case AST_AGGREGATE_OPERATION_COUNT: return "conteo";
+        case AST_AGGREGATE_OPERATION_VARIANCE: return "varianza";
+        case AST_AGGREGATE_OPERATION_STDDEV: return "desviacion_estandar";
+        case AST_AGGREGATE_OPERATION_MEDIAN: return "mediana";
+        case AST_AGGREGATE_OPERATION_PERCENTILE: return "percentil";
+        default: return NULL;
     }
-    aggregate->input = hir_unresolved_column(column, node);
+}
+
+static HIRBuildResult hir_parse_aggregate(const ASTNode *node,
+                                          MilenaHIRAggregate *aggregate) {
+    if (!node || node->type != AST_RESUMEN_METRICA || !aggregate ||
+        !node->has_aggregate_metric || !node->aggregate_column ||
+        !node->aggregate_column[0] || !node->value)
+        return HIR_BUILD_UNSUPPORTED;
+    const char *legacy_name =
+        hir_aggregate_legacy_name(node->aggregate_operation);
+    if (!legacy_name) return HIR_BUILD_UNSUPPORTED;
+    size_t legacy_name_length = strlen(legacy_name);
+    if (strncmp(node->value, legacy_name, legacy_name_length) != 0 ||
+        node->value[legacy_name_length] != ':' ||
+        strcmp(node->value + legacy_name_length + 1,
+               node->aggregate_column) != 0)
+        return HIR_BUILD_UNSUPPORTED;
+
+    const char *suffix = NULL;
+    switch (node->aggregate_operation) {
+        case AST_AGGREGATE_OPERATION_SUM:
+            aggregate->operation = MILENA_AGG_SUM;
+            suffix = "suma";
+            break;
+        case AST_AGGREGATE_OPERATION_MEAN:
+            aggregate->operation = MILENA_AGG_MEAN;
+            suffix = "media";
+            break;
+        case AST_AGGREGATE_OPERATION_MIN:
+            aggregate->operation = MILENA_AGG_MIN;
+            suffix = "minimo";
+            break;
+        case AST_AGGREGATE_OPERATION_MAX:
+            aggregate->operation = MILENA_AGG_MAX;
+            suffix = "maximo";
+            break;
+        case AST_AGGREGATE_OPERATION_COUNT:
+            aggregate->operation = MILENA_AGG_COUNT;
+            suffix = "conteo";
+            break;
+        default:
+            return HIR_BUILD_UNSUPPORTED;
+    }
+    aggregate->input = hir_unresolved_column(node->aggregate_column, node);
     if (!aggregate->input.name) return HIR_BUILD_MEMORY;
     hir_source_span(&aggregate->span, node);
-    size_t column_len = strlen(column), suffix_len = strlen(suffix);
+    size_t column_len = strlen(node->aggregate_column), suffix_len = strlen(suffix);
     if (column_len > SIZE_MAX - suffix_len - 2) {
         hir_column_ref_release(&aggregate->input);
         return HIR_BUILD_MEMORY;
@@ -600,7 +630,8 @@ static HIRBuildResult hir_parse_aggregate(const ASTNode *node,
         hir_column_ref_release(&aggregate->input);
         return HIR_BUILD_MEMORY;
     }
-    (void)snprintf(aggregate->output_name, name_len, "%s_%s", column, suffix);
+    (void)snprintf(aggregate->output_name, name_len, "%s_%s",
+                   node->aggregate_column, suffix);
     return HIR_BUILD_OK;
 }
 

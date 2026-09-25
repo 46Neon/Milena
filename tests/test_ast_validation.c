@@ -3,6 +3,17 @@
 #include <assert.h>
 #include <string.h>
 
+static ASTNode *find_metric(ASTNode *node, ASTAggregateOperation operation) {
+    if (!node) return NULL;
+    if (node->type == AST_RESUMEN_METRICA && node->has_aggregate_metric &&
+        node->aggregate_operation == operation) return node;
+    for (size_t i = 0; i < node->child_count; ++i) {
+        ASTNode *found = find_metric(node->children[i], operation);
+        if (found) return found;
+    }
+    return NULL;
+}
+
 int main(void) {
     const char *source =
         ". analisis demo {\n"
@@ -145,6 +156,53 @@ int main(void) {
 
     ast_destroy(program);
     parser_release(&parser);
+
+    /* Canonical group/summary metrics carry an owned typed payload and call span. */
+    const char *aggregate_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".agrupar dataset { #por(\"ciudad\") #suma(\"precio\") } "
+        ".resumir dataset { #media(\"precio\") } }";
+    lexer_init(&lexer, aggregate_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program != NULL && !parser.has_error);
+    ASTNode *sum_metric = find_metric(program, AST_AGGREGATE_OPERATION_SUM);
+    ASTNode *mean_metric = find_metric(program, AST_AGGREGATE_OPERATION_MEAN);
+    assert(sum_metric && mean_metric);
+    assert(sum_metric->has_aggregate_metric && sum_metric->aggregate_column &&
+           strcmp(sum_metric->aggregate_column, "precio") == 0 &&
+           strcmp(sum_metric->value, "suma:precio") == 0);
+    assert(sum_metric->aggregate_column != sum_metric->value);
+    assert(sum_metric->has_source_span &&
+           strncmp(aggregate_source + sum_metric->start_offset,
+                   "suma(\"precio\")", sum_metric->end_offset -
+                       sum_metric->start_offset) == 0 &&
+           sum_metric->end_offset - sum_metric->start_offset ==
+               strlen("suma(\"precio\")"));
+    assert(mean_metric->has_source_span &&
+           mean_metric->aggregate_operation == AST_AGGREGATE_OPERATION_MEAN);
+    assert(ast_validate(program, &error));
+    ASTAggregateOperation saved_aggregate_operation = sum_metric->aggregate_operation;
+    sum_metric->aggregate_operation = AST_AGGREGATE_OPERATION_MAX;
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT);
+    sum_metric->aggregate_operation = saved_aggregate_operation;
+    assert(ast_validate(program, &error));
+    ast_destroy(program);
+    parser_release(&parser);
+
+    ASTNode *typed_metric = ast_create_leaf(AST_RESUMEN_METRICA, "conteo:ciudad");
+    assert(typed_metric && ast_set_aggregate_metric(typed_metric,
+           AST_AGGREGATE_OPERATION_COUNT, "ciudad"));
+    assert(ast_validate(typed_metric, &error));
+    ast_destroy(typed_metric); /* frees the independently owned aggregate column */
+
+    /* Natural-language stream summaries retain their distinct legacy payload. */
+    ASTNode *stream_metric = ast_create_leaf(AST_RESUMEN_METRICA, "importe");
+    assert(stream_metric);
+    stream_metric->stream_operation = AST_STREAM_OPERATION_SUM;
+    assert(!stream_metric->has_aggregate_metric && !stream_metric->aggregate_column &&
+           ast_validate(stream_metric, &error));
+    ast_destroy(stream_metric);
 
     assert(!ast_validate(NULL, &error));
     assert(error.code == MILENA_ERR_ARGUMENT);

@@ -617,6 +617,50 @@ static ASTStreamOperation stream_operation_from_token(Parser *parser) {
     return AST_STREAM_OPERATION_NONE;
 }
 
+static ASTAggregateOperation aggregate_operation_from_token(const Token *token) {
+    if (!token) return AST_AGGREGATE_OPERATION_NONE;
+    switch (token->type) {
+        case TOKEN_FUNCION_SUMA: return AST_AGGREGATE_OPERATION_SUM;
+        case TOKEN_FUNCION_MEDIA: return AST_AGGREGATE_OPERATION_MEAN;
+        case TOKEN_FUNCION_MINIMO: return AST_AGGREGATE_OPERATION_MIN;
+        case TOKEN_FUNCION_MAXIMO: return AST_AGGREGATE_OPERATION_MAX;
+        case TOKEN_FUNCION_VARIANZA: return AST_AGGREGATE_OPERATION_VARIANCE;
+        case TOKEN_FUNCION_DESVIACION: return AST_AGGREGATE_OPERATION_STDDEV;
+        case TOKEN_FUNCION_MEDIANA: return AST_AGGREGATE_OPERATION_MEDIAN;
+        case TOKEN_FUNCION_PERCENTIL: return AST_AGGREGATE_OPERATION_PERCENTILE;
+        case TOKEN_IDENTIFICADOR:
+            return strcmp(token->lexeme, "conteo") == 0
+                ? AST_AGGREGATE_OPERATION_COUNT : AST_AGGREGATE_OPERATION_NONE;
+        default: return AST_AGGREGATE_OPERATION_NONE;
+    }
+}
+
+static ASTNode *parser_create_aggregate_metric(Parser *parser,
+                                               const Token *operation_token,
+                                               ASTAggregateOperation operation,
+                                               const Token *column_token,
+                                               const Token *closing_token) {
+    if (!parser || !operation_token || !column_token || !closing_token ||
+        operation == AST_AGGREGATE_OPERATION_NONE) return NULL;
+    char specification[MAX_TOKEN_LEN * 2];
+    int written = snprintf(specification, sizeof(specification), "%s:%s",
+                           operation_token->lexeme, column_token->lexeme);
+    if (written < 0 || (size_t)written >= sizeof(specification)) {
+        parser_error_at(parser, operation_token, "Métrica agregada demasiado larga");
+        return NULL;
+    }
+    ASTNode *metric = ast_create_leaf(AST_RESUMEN_METRICA, specification);
+    if (!metric || !ast_set_aggregate_metric(metric, operation,
+                                              column_token->lexeme) ||
+        !ast_set_source_span(metric, operation_token, closing_token)) {
+        ast_destroy(metric);
+        parser_error_at(parser, operation_token,
+                        "No se pudo construir la métrica agregada estructurada");
+        return NULL;
+    }
+    return metric;
+}
+
 /* Forma legible: resumir { suma de "importe"; contar de "importe"; }.
  * Cada métrica queda tipada en el AST; el runtime no vuelve a escanearla. */
 static ASTNode *parse_stream_summary(Parser *parser) {
@@ -1471,34 +1515,31 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         } else if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
                                    parser_match(parser, TOKEN_FUNCION_MEDIA) ||
                                    parser_match(parser, TOKEN_FUNCION_MINIMO) ||
-                                   parser_match(parser, TOKEN_FUNCION_MAXIMO)) {
-                            char metric[MAX_TOKEN_LEN];
-                            strncpy(metric, parser->current.lexeme, sizeof(metric) - 1);
-                            metric[sizeof(metric) - 1] = '\0';
+                                   parser_match(parser, TOKEN_FUNCION_MAXIMO) ||
+                                   parser_match(parser, TOKEN_FUNCION_VARIANZA) ||
+                                   parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
+                                   parser_match(parser, TOKEN_FUNCION_MEDIANA) ||
+                                   parser_match(parser, TOKEN_FUNCION_PERCENTIL) ||
+                                   (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                                    strcmp(parser->current.lexeme, "conteo") == 0)) {
+                            Token operation_token = parser->current;
+                            ASTAggregateOperation operation =
+                                aggregate_operation_from_token(&operation_token);
                             parser_advance(parser);
-                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                                if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de resumen")) {
-                                    char specification[MAX_TOKEN_LEN * 2];
-                                    (void)snprintf(specification, sizeof(specification),
-                                                   "%s:%s", metric, parser->previous.lexeme);
+                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") &&
+                                parser_expect(parser, TOKEN_CADENA,
+                                              operation == AST_AGGREGATE_OPERATION_COUNT
+                                                ? "Se esperaba columna de conteo"
+                                                : "Se esperaba columna de resumen")) {
+                                Token column_token = parser->previous;
+                                if (parser_expect(parser, TOKEN_PAR_DER,
+                                                  "Se esperaba ')' después de la métrica")) {
+                                    Token closing_token = parser->previous;
+                                    ASTNode *metric = parser_create_aggregate_metric(
+                                        parser, &operation_token, operation,
+                                        &column_token, &closing_token);
                                     if (agrupar && !parser_add_child(parser, agrupar,
-                                        ast_create_leaf(AST_RESUMEN_METRICA, specification),
-                                        "Sin memoria para métrica de agrupación")) break;
-                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del resumen");
-                                }
-                            }
-                        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
-                                   strcmp(parser->current.lexeme, "conteo") == 0) {
-                            parser_advance(parser);
-                            if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                                if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de conteo")) {
-                                    char specification[MAX_TOKEN_LEN * 2];
-                                    (void)snprintf(specification, sizeof(specification),
-                                                   "conteo:%s", parser->previous.lexeme);
-                                    if (agrupar && !parser_add_child(parser, agrupar,
-                                        ast_create_leaf(AST_RESUMEN_METRICA, specification),
-                                        "Sin memoria para métrica de agrupación")) break;
-                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del conteo");
+                                        metric, "Sin memoria para métrica de agrupación")) break;
                                 }
                             }
                         } else {
@@ -1523,36 +1564,35 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             continue;
                         }
                         parser_advance(parser);
-                        char metric_buffer[MAX_TOKEN_LEN] = {0};
-                        const char *metric = NULL;
-                        if (parser_match(parser, TOKEN_FUNCION_SUMA) ||
-                            parser_match(parser, TOKEN_FUNCION_MEDIA) ||
-                            parser_match(parser, TOKEN_FUNCION_MINIMO) ||
-                            parser_match(parser, TOKEN_FUNCION_MAXIMO) ||
-                            parser_match(parser, TOKEN_FUNCION_VARIANZA) ||
-                            parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
-                            parser_match(parser, TOKEN_FUNCION_MEDIANA) ||
-                            parser_match(parser, TOKEN_FUNCION_PERCENTIL)) {
-                            strncpy(metric_buffer, parser->current.lexeme, sizeof(metric_buffer) - 1);
-                            metric = metric_buffer;
-                        } else if (parser_match(parser, TOKEN_IDENTIFICADOR) &&
-                                   strcmp(parser->current.lexeme, "conteo") == 0) {
-                            metric = "conteo";
-                        }
-                        if (!metric) {
+                        if (!(parser_match(parser, TOKEN_FUNCION_SUMA) ||
+                              parser_match(parser, TOKEN_FUNCION_MEDIA) ||
+                              parser_match(parser, TOKEN_FUNCION_MINIMO) ||
+                              parser_match(parser, TOKEN_FUNCION_MAXIMO) ||
+                              parser_match(parser, TOKEN_FUNCION_VARIANZA) ||
+                              parser_match(parser, TOKEN_FUNCION_DESVIACION) ||
+                              parser_match(parser, TOKEN_FUNCION_MEDIANA) ||
+                              parser_match(parser, TOKEN_FUNCION_PERCENTIL) ||
+                              (parser_match(parser, TOKEN_IDENTIFICADOR) &&
+                               strcmp(parser->current.lexeme, "conteo") == 0))) {
                             parser_error(parser, "Métrica desconocida en resumir");
                             break;
                         }
+                        Token operation_token = parser->current;
+                        ASTAggregateOperation operation =
+                            aggregate_operation_from_token(&operation_token);
                         parser_advance(parser);
-                        if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
-                            if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de resumen")) {
-                                char specification[MAX_TOKEN_LEN * 2];
-                                (void)snprintf(specification, sizeof(specification),
-                                               "%s:%s", metric, parser->previous.lexeme);
+                        if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") &&
+                            parser_expect(parser, TOKEN_CADENA,
+                                          "Se esperaba columna de resumen")) {
+                            Token column_token = parser->previous;
+                            if (parser_expect(parser, TOKEN_PAR_DER,
+                                              "Se esperaba ')' después del resumen")) {
+                                Token closing_token = parser->previous;
+                                ASTNode *metric = parser_create_aggregate_metric(
+                                    parser, &operation_token, operation,
+                                    &column_token, &closing_token);
                                 if (resumir && !parser_add_child(parser, resumir,
-                                    ast_create_leaf(AST_RESUMEN_METRICA, specification),
-                                    "Sin memoria para métrica de resumen")) break;
-                                parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después del resumen");
+                                    metric, "Sin memoria para métrica de resumen")) break;
                             }
                         }
                     }
