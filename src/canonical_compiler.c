@@ -514,6 +514,21 @@ static bool hir_parse_product(const char *text, char left[128], char right[128])
     return text && sscanf(text, " %127s * %127s %c", left, right, &extra) == 2;
 }
 
+static bool hir_parse_filter(const char *text, char column[128],
+                             ASTOperatorKind *operation, double *threshold) {
+    char token[3] = {0}, extra;
+    if (!text || sscanf(text, " %127s %2s %lf %c", column, token,
+                        threshold, &extra) != 3 || !isfinite(*threshold)) return false;
+    if (strcmp(token, "==") == 0) *operation = AST_OPERATOR_EQUAL;
+    else if (strcmp(token, "!=") == 0) *operation = AST_OPERATOR_NOT_EQUAL;
+    else if (strcmp(token, ">") == 0) *operation = AST_OPERATOR_GREATER;
+    else if (strcmp(token, ">=") == 0) *operation = AST_OPERATOR_GREATER_EQUAL;
+    else if (strcmp(token, "<") == 0) *operation = AST_OPERATOR_LESS;
+    else if (strcmp(token, "<=") == 0) *operation = AST_OPERATOR_LESS_EQUAL;
+    else return false;
+    return true;
+}
+
 static char *hir_trim(char *text) {
     if (!text) return NULL;
     while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') text++;
@@ -718,17 +733,20 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
         if (node->type == AST_BLOQUE_FILTRAR) {
             if (node->child_count != 1 || !node->children[0] ||
                 node->children[0]->type != AST_COMANDO_CONDICION ||
-                !node->children[0]->has_filter_predicate ||
-                !node->children[0]->filter_column) {
+                !node->children[0]->value) {
                 data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
             }
             const ASTNode *condition = node->children[0];
+            char column[128] = {0};
             MilenaHIRDataOperation op = {0};
             op.kind = MILENA_HIR_DATA_FILTER_NUMERIC;
-            op.as.filter.operation = condition->filter_operator;
-            op.as.filter.threshold = condition->filter_threshold;
+            if (!hir_parse_filter(condition->value, column,
+                                  &op.as.filter.operation,
+                                  &op.as.filter.threshold)) {
+                data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+            }
             hir_source_span(&op.span, condition->has_source_span ? condition : node);
-            op.as.filter.column = hir_unresolved_column(condition->filter_column, condition);
+            op.as.filter.column = hir_unresolved_column(column, condition);
             if (!op.as.filter.column.name || !hir_append_data_operation(hir, &op)) {
                 hir_column_ref_release(&op.as.filter.column);
                 data_hir_release(hir);
@@ -1611,8 +1629,6 @@ static const ASTNode *hir_first_unsupported_node(const ASTNode *node) {
 static bool hir_supports_data_ast_node(const ASTNode *node) {
     if (!node) return false;
     switch (node->type) {
-        case AST_COMANDO_CONDICION:
-            return node->has_filter_predicate && node->filter_column != NULL;
         case AST_PROGRAMA:
         case AST_BLOQUE_ANALISIS:
         case AST_LLAMADA_CARGAR:
@@ -1623,6 +1639,7 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_COMANDO_NULOS:
         case AST_COMANDO_DUPLICADOS:
         case AST_BLOQUE_FILTRAR:
+        case AST_COMANDO_CONDICION:
         case AST_BLOQUE_AGRUPAR:
         case AST_AGRUPACION_POR:
         case AST_RESUMEN_METRICA:
