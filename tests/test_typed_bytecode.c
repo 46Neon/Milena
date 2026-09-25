@@ -1,5 +1,5 @@
 #include "typed_bytecode.h"
-#include "typed_vm.h"
+#include "vm.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -176,14 +176,14 @@ static void test_roundtrip_module_with_direct_call(void) {
 
     /* The reference VM accepts only verified portable bytecode and executes
        the Spanish-named three-argument function through the canonical module. */
-    MilenaTypedVMValue result = {0};
-    assert(milena_typed_vm_execute(encoded, encoded_size, 200u, NULL, 0u,
+    MilenaVMValue result = {0};
+    assert(vm_run(encoded, encoded_size, 200u, NULL, 0u,
                                    NULL, &result, error, sizeof(error)));
     assert(result.type == MILENA_IR_TYPE_F64 && result.as.f64 == 6.0);
-    MilenaTypedVMValue previous = {MILENA_IR_TYPE_BOOL, {.boolean = true}};
+    MilenaVMValue previous = {MILENA_IR_TYPE_BOOL, {.boolean = true}};
     result = previous;
-    MilenaTypedVMValue unexpected_argument = {MILENA_IR_TYPE_F64, {.f64 = 1.0}};
-    assert(!milena_typed_vm_execute(encoded, encoded_size, 200u,
+    MilenaVMValue unexpected_argument = {MILENA_IR_TYPE_F64, {.f64 = 1.0}};
+    assert(!vm_run(encoded, encoded_size, 200u,
                                     &unexpected_argument, 1u, NULL, &result,
                                     error, sizeof(error)));
     assert(result.type == previous.type && result.as.boolean == previous.as.boolean);
@@ -367,11 +367,11 @@ static void test_vm_branch_ssa_merge(void) {
     uint8_t *bytes = NULL;
     size_t size = 0;
     MilenaIRModule *module = make_branch_merge_module();
-    MilenaTypedVMValue result = {0};
+    MilenaVMValue result = {0};
     assert(milena_ir_module_validate(module, error, sizeof(error)));
     assert(milena_bytecode_encode_module(module, &bytes, &size,
                                          error, sizeof(error)));
-    assert(milena_typed_vm_execute(bytes, size, 400u, NULL, 0u, NULL,
+    assert(vm_run(bytes, size, 400u, NULL, 0u, NULL,
                                    &result, error, sizeof(error)));
     assert(result.type == MILENA_IR_TYPE_I64 && result.as.i64 == 42);
     free(bytes);
@@ -389,16 +389,16 @@ static void test_vm_forward_call_and_call_depth_limit(void) {
     module->functions[1] = swap;
     module->functions[0].body->module_context = module;
     module->functions[1].body->module_context = module;
-    MilenaTypedVMValue result = {0};
+    MilenaVMValue result = {0};
     assert(milena_bytecode_encode_module(module, &bytes, &size,
                                          error, sizeof(error)));
-    assert(milena_typed_vm_execute(bytes, size, 200u, NULL, 0u, NULL,
+    assert(vm_run(bytes, size, 200u, NULL, 0u, NULL,
                                    &result, error, sizeof(error)));
     assert(result.type == MILENA_IR_TYPE_F64 && result.as.f64 == 6.0);
-    MilenaTypedVMValue previous = {MILENA_IR_TYPE_I64, {.i64 = 99}};
+    MilenaVMValue previous = {MILENA_IR_TYPE_I64, {.i64 = 99}};
     result = previous;
-    MilenaTypedVMOptions shallow = {100u, 1u};
-    assert(!milena_typed_vm_execute(bytes, size, 200u, NULL, 0u, &shallow,
+    MilenaVMOptions shallow = {100u, 1u};
+    assert(!vm_run(bytes, size, 200u, NULL, 0u, &shallow,
                                     &result, error, sizeof(error)));
     assert(strstr(error, "call depth") != NULL);
     assert(result.type == previous.type && result.as.i64 == previous.as.i64);
@@ -413,9 +413,9 @@ static void test_vm_errors_and_limits(void) {
     MilenaIRModule *division = make_division_by_zero_module();
     assert(milena_bytecode_encode_module(division, &bytes, &size,
                                          error, sizeof(error)));
-    MilenaTypedVMValue previous = {MILENA_IR_TYPE_F64, {.f64 = 17.0}};
-    MilenaTypedVMValue result = previous;
-    assert(!milena_typed_vm_execute(bytes, size, 300u, NULL, 0u, NULL,
+    MilenaVMValue previous = {MILENA_IR_TYPE_F64, {.f64 = 17.0}};
+    MilenaVMValue result = previous;
+    assert(!vm_run(bytes, size, 300u, NULL, 0u, NULL,
                                     &result, error, sizeof(error)));
     assert(strstr(error, "division by zero") != NULL);
     assert(result.type == previous.type && result.as.f64 == previous.as.f64);
@@ -427,9 +427,9 @@ static void test_vm_errors_and_limits(void) {
     size = 0;
     assert(milena_bytecode_encode_module(loop, &bytes, &size,
                                          error, sizeof(error)));
-    MilenaTypedVMOptions short_budget = {3u, 8u};
+    MilenaVMOptions short_budget = {3u, 8u};
     result = previous;
-    assert(!milena_typed_vm_execute(bytes, size, 301u, NULL, 0u,
+    assert(!vm_run(bytes, size, 301u, NULL, 0u,
                                     &short_budget, &result, error, sizeof(error)));
     assert(strstr(error, "step limit") != NULL);
     assert(result.type == previous.type && result.as.f64 == previous.as.f64);
@@ -446,24 +446,24 @@ static void test_vm_errors_and_limits(void) {
     memcpy(malformed, bytes, size);
     malformed[0] ^= 0x01u;
     result = previous;
-    assert(!milena_typed_vm_execute(malformed, size, 200u, NULL, 0u, NULL,
+    assert(!vm_run(malformed, size, 200u, NULL, 0u, NULL,
                                     &result, error, sizeof(error)));
     assert(error[0] != '\0' && result.type == previous.type &&
            result.as.f64 == previous.as.f64);
     free(malformed);
 
-    MilenaTypedVMValue bad_arguments[] = {
+    MilenaVMValue bad_arguments[] = {
         {MILENA_IR_TYPE_F64, {.f64 = 1.0}},
         {MILENA_IR_TYPE_BOOL, {.boolean = true}},
         {MILENA_IR_TYPE_F64, {.f64 = 3.0}}
     };
     result = previous;
-    assert(!milena_typed_vm_execute(bytes, size, 100u, bad_arguments, 3u,
+    assert(!vm_run(bytes, size, 100u, bad_arguments, 3u,
                                     NULL, &result, error, sizeof(error)));
     assert(strstr(error, "argument type mismatch") != NULL);
     assert(result.type == previous.type && result.as.f64 == previous.as.f64);
     result = previous;
-    assert(!milena_typed_vm_execute(bytes, size, 999u, NULL, 0u, NULL,
+    assert(!vm_run(bytes, size, 999u, NULL, 0u, NULL,
                                     &result, error, sizeof(error)));
     assert(strstr(error, "entry function") != NULL);
     assert(result.type == previous.type && result.as.f64 == previous.as.f64);

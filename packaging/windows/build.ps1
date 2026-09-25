@@ -17,8 +17,8 @@ New-Item -ItemType Directory -Force -Path $ObjectDir | Out-Null
 & (Join-Path $PSScriptRoot 'array-link-smoke.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Falló el smoke test de portabilidad de MilenaArray' }
 
-# The verified-bytecode reference VM is compiler test infrastructure, not a shipped runtime.
-# It is built by the C17 compiler workflow tests, not linked into milena.exe.
+# The canonical bytecode VM is compiler-only test infrastructure, not a shipped runtime;
+# C17 compiler workflow tests build and exercise it through the existing VM API.
 $SourceNames = @(
     'common.c', 'array.c', 'table.c', 'finance.c', 'schema.c', 'dataset.c',
     'analysis.c', 'script.c', 'entrypoints.c', 'interpreter.c', 'main.c', 'lexer.c', 'ast.c', 'parser.c',

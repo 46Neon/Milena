@@ -335,13 +335,13 @@ test-typed-bytecode: tests/test_typed_bytecode
 	./tests/test_typed_bytecode
 
 .PHONY: test-typed-bytecode
-tests/test_typed_bytecode: tests/test_typed_bytecode.c src/typed_vm.c src/typed_bytecode.c src/canonical_ir.c src/common.c include/typed_vm.h include/typed_bytecode.h include/typed_ir.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_typed_bytecode.c src/typed_vm.c src/typed_bytecode.c src/canonical_ir.c src/common.c $(LDFLAGS) -o $@
+tests/test_typed_bytecode: tests/test_typed_bytecode.c src/vm.c src/typed_bytecode.c src/canonical_ir.c src/common.c include/vm.h include/typed_bytecode.h include/typed_ir.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_typed_bytecode.c src/vm.c src/typed_bytecode.c src/canonical_ir.c src/common.c $(LDFLAGS) -o $@
 
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
-tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/canonical_ir.c src/typed_bytecode.c src/typed_vm.c include/typed_vm.h include/typed_bytecode.h include/typed_ir.h
+tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/canonical_ir.c src/typed_bytecode.c src/vm.c include/vm.h include/typed_bytecode.h include/typed_ir.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
 
 test-termux-packaging: check-termux-packaging

@@ -1,7 +1,7 @@
 #include "canonical_compiler.h"
 #include "typed_ir.h"
 #include "typed_bytecode.h"
-#include "typed_vm.h"
+#include "vm.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1258,8 +1258,8 @@ int main(void) {
     CHECK(milena_bytecode_encode_module(program.typed_module,
           &canonical_bytecode, &canonical_bytecode_size, error.message,
           sizeof(error.message)), error.message);
-    MilenaTypedVMValue vm_result = {0};
-    CHECK(milena_typed_vm_execute(canonical_bytecode, canonical_bytecode_size,
+    MilenaVMValue vm_result = {0};
+    CHECK(vm_run(canonical_bytecode, canonical_bytecode_size,
           entry_symbol, NULL, 0, NULL, &vm_result, error.message,
           sizeof(error.message)), error.message);
     CHECK(vm_result.type == MILENA_IR_TYPE_F64 && vm_result.as.f64 == 6.0,

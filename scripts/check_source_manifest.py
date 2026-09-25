@@ -20,11 +20,11 @@ CATEGORIES = {
     "funciones": {
         "function_parser.c", "user_functions.c", "symbol.c",
     },
-    "compilador_referencia": {"typed_vm.c"},
+    "compilador_referencia": {"vm.c"},
     "experimental": {
         "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c",
         "instructions.c", "ir.c", "module.c", "semantic.c",
-        "temp_scope.c", "vm.c",
+        "temp_scope.c",
     },
 }
 

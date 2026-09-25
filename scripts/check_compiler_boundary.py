@@ -8,14 +8,14 @@ ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = (ROOT / "Makefile").read_text(encoding="utf-8")
 
 EXPERIMENTAL = {
-    "compiler.c", "ir.c", "vm.c", "semantic.c", "gc.c", "assembler.c",
+    "compiler.c", "ir.c", "semantic.c", "gc.c", "assembler.c",
     "instructions.c", "module.c", "arena.c", "temp_scope.c", "forest.c",
 }
 CANONICAL = {
     "lexer.c", "parser.c", "ast.c", "language_semantic.c", "language_runtime.c",
     "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "table.c", "dataset.c",
 }
-REFERENCE_VM = "typed_vm.c"
+REFERENCE_VM = "vm.c"
 errors = []
 # Capture the complete SOURCES assignment, including its continuation lines.
 match = re.search(r"^SOURCES\s*=\s*(.*?)(?=^OBJECTS\s*=)", MAKEFILE, re.MULTILINE | re.DOTALL)
@@ -32,21 +32,20 @@ if REFERENCE_VM in sources:
     errors.append("la VM interna de referencia no debe enlazarse en el binario oficial")
 if not (ROOT / "src" / REFERENCE_VM).is_file():
     errors.append("falta la VM interna de referencia probada sobre bytecode verificado")
-LEGACY_VM = "vm.c"
-if LEGACY_VM not in EXPERIMENTAL:
-    errors.append("la VM histórica de IR de cadenas debe permanecer experimental")
-if LEGACY_VM in sources:
-    errors.append("la VM histórica no debe enlazarse en el producto canónico")
 if (ROOT / "src" / REFERENCE_VM).is_file():
     reference_source = (ROOT / "src" / REFERENCE_VM).read_text(encoding="utf-8")
-    if not re.search(r'#include\s+[<"]typed_vm\.h[>"]', reference_source):
-        errors.append("la VM de bytecode debe usar únicamente su API tipada/verificada")
-    for header in ("ir.h", "vm.h", "compiler.h"):
+    if not re.search(r'#include\s+[<"]vm\.h[>"]', reference_source):
+        errors.append("el punto de entrada VM debe usar el contrato canónico de bytecode verificado")
+    for header in ("ir.h", "gc.h", "dataset.h", "compiler.h"):
         if re.search(rf'#include\s+[<"]{re.escape(header)}[>"]', reference_source):
-            errors.append(f"la VM tipada no debe depender de la pila histórica: {header}")
+            errors.append(f"la VM canónica no debe depender de la pila histórica: {header}")
 WINDOWS_PACKAGE = (ROOT / "packaging" / "windows" / "build.ps1")
-if WINDOWS_PACKAGE.is_file() and REFERENCE_VM in WINDOWS_PACKAGE.read_text(encoding="utf-8"):
-    errors.append("la VM interna de referencia no debe incluirse en el paquete Windows")
+if WINDOWS_PACKAGE.is_file():
+    package_text = WINDOWS_PACKAGE.read_text(encoding="utf-8")
+    source_list = re.search(r"\$SourceNames\s*=\s*@\((.*?)\n\)",
+                            package_text, re.DOTALL)
+    if source_list and REFERENCE_VM in source_list.group(1):
+        errors.append("la VM canónica interna no debe incluirse en el paquete Windows")
 
 # The product sources may not accidentally pull the orphan compiler stack through
 # a header include. Headers remain in the tree for future work, but are not active.
