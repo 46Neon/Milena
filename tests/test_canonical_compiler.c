@@ -15,6 +15,62 @@
         } \
     } while (0)
 
+static bool run_vm_case(const MilenaCanonicalProgram *program,
+                        const uint8_t *bytecode, size_t bytecode_size,
+                        const char *function_name, const double *numeric_arguments,
+                        size_t argument_count, MilenaIRType expected_type,
+                        double expected_number, bool expected_boolean,
+                        char *diagnostic, size_t diagnostic_capacity) {
+    MilenaVMValue arguments[3] = {{0}};
+    MilenaVMValue result = {0};
+    uint32_t entry_symbol = 0;
+    if (!program || !program->typed_module || !bytecode || !function_name ||
+        (argument_count && !numeric_arguments) ||
+        argument_count > sizeof(arguments) / sizeof(arguments[0])) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "invalid source-to-VM test fixture");
+        return false;
+    }
+    for (size_t i = 0; i < program->typed_module->function_count; ++i)
+        if (strcmp(program->typed_module->functions[i].name, function_name) == 0) {
+            entry_symbol = program->typed_module->functions[i].symbol_id;
+            break;
+        }
+    if (!entry_symbol) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "VM fixture function %s was not found", function_name);
+        return false;
+    }
+    for (size_t i = 0; i < argument_count; ++i) {
+        arguments[i].type = MILENA_IR_TYPE_F64;
+        arguments[i].as.f64 = numeric_arguments[i];
+    }
+    if (!vm_run(bytecode, bytecode_size, entry_symbol,
+                argument_count ? arguments : NULL, argument_count,
+                NULL, &result, diagnostic, diagnostic_capacity)) return false;
+    if (result.type != expected_type) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "%s returned type %d, expected %d", function_name,
+                       (int)result.type, (int)expected_type);
+        return false;
+    }
+    if (expected_type == MILENA_IR_TYPE_F64 && result.as.f64 != expected_number) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "%s returned %.17g, expected %.17g", function_name,
+                       result.as.f64, expected_number);
+        return false;
+    }
+    if (expected_type == MILENA_IR_TYPE_BOOL &&
+        result.as.boolean != expected_boolean) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "%s returned %s, expected %s", function_name,
+                       result.as.boolean ? "true" : "false",
+                       expected_boolean ? "true" : "false");
+        return false;
+    }
+    return true;
+}
+
 int main(void) {
     MilenaError error;
     MilenaCanonicalProgram program;
@@ -1265,6 +1321,77 @@ int main(void) {
     CHECK(vm_result.type == MILENA_IR_TYPE_F64 && vm_result.as.f64 == 6.0,
           "fuente española→IR tipada→bytecode MLBC→VM debe devolver 6");
     free(canonical_bytecode);
+    milena_canonical_program_release(&program);
+
+    /* Exercise every currently lowered scalar arithmetic/comparison operator,
+       both paths of assignment merges, nested si/sino, and terminal returns
+       through the one canonical source -> typed IR -> MLBC -> verified VM path. */
+    milena_canonical_program_init(&program);
+    const char *scalar_vm_source =
+        "funcion sumar(a, b) { retornar a + b; } "
+        "funcion restar(a, b) { retornar a - b; } "
+        "funcion multiplicar(a, b) { retornar a * b; } "
+        "funcion dividir(a, b) { retornar a / b; } "
+        "funcion igual(a, b) { retornar a == b; } "
+        "funcion distinto(a, b) { retornar a != b; } "
+        "funcion menor(a, b) { retornar a < b; } "
+        "funcion menor_igual(a, b) { retornar a <= b; } "
+        "funcion mayor(a, b) { retornar a > b; } "
+        "funcion mayor_igual(a, b) { retornar a >= b; } "
+        "funcion elegir(x, y) { variable resultado = 0; "
+        "si (x > y) { resultado = x; } sino { resultado = y; } "
+        "retornar resultado; } "
+        "funcion clasificar(x) { variable nivel = 0; "
+        "si (x > 0) { si (x > 10) { nivel = 2; } sino { nivel = 1; } } "
+        "sino { nivel = 0; } retornar nivel; } "
+        "funcion positivo(x) { si (x > 0) { retornar x; } "
+        "sino { retornar 0; } } "
+        "funcion verdadero_fijo() { retornar verdadero; }";
+    CHECK(milena_canonical_program_parse(&program, scalar_vm_source, &error) ==
+              MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module, error.message);
+    uint8_t *scalar_bytecode = NULL;
+    size_t scalar_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(program.typed_module, &scalar_bytecode,
+          &scalar_bytecode_size, error.message, sizeof(error.message)),
+          error.message);
+    const struct {
+        const char *name;
+        double arguments[2];
+        size_t argument_count;
+        MilenaIRType result_type;
+        double expected_number;
+        bool expected_boolean;
+    } scalar_cases[] = {
+        {"sumar", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 9.0, false},
+        {"restar", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 3.0, false},
+        {"multiplicar", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 18.0, false},
+        {"dividir", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 2.0, false},
+        {"igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
+        {"igual", {6.0, 3.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, false},
+        {"distinto", {6.0, 3.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
+        {"menor", {3.0, 6.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
+        {"menor_igual", {3.0, 3.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
+        {"mayor", {6.0, 3.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
+        {"mayor_igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
+        {"elegir", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 6.0, false},
+        {"elegir", {2.0, 9.0}, 2u, MILENA_IR_TYPE_F64, 9.0, false},
+        {"clasificar", {11.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 2.0, false},
+        {"clasificar", {5.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"clasificar", {-1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false},
+        {"positivo", {2.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 2.0, false},
+        {"positivo", {-2.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false},
+        {"verdadero_fijo", {0.0, 0.0}, 0u, MILENA_IR_TYPE_BOOL, 0.0, true}
+    };
+    char scalar_vm_error[256] = {0};
+    for (size_t i = 0; i < sizeof(scalar_cases) / sizeof(scalar_cases[0]); ++i)
+        CHECK(run_vm_case(&program, scalar_bytecode, scalar_bytecode_size,
+              scalar_cases[i].name, scalar_cases[i].arguments,
+              scalar_cases[i].argument_count, scalar_cases[i].result_type,
+              scalar_cases[i].expected_number, scalar_cases[i].expected_boolean,
+              scalar_vm_error, sizeof(scalar_vm_error)), scalar_vm_error);
+    free(scalar_bytecode);
     milena_canonical_program_release(&program);
 
     puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, binding, execution and diagnostics");
