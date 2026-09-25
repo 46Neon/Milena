@@ -14,7 +14,8 @@ La receta declara `TERMUX_PKG_HOMEPAGE`, `DESCRIPTION`, `LICENSE`, `MAINTAINER`,
 regenerar y comprobar sin confiar en una copia local:
 
 ```bash
-python3 scripts/validate_termux_recipe.py \
+make tools/check_repository_contracts CC=clang
+./tools/check_repository_contracts termux-recipe \
   packaging/termux-packages/milena/build.sh --fetch
 ```
 
@@ -35,7 +36,7 @@ git clone --filter=blob:none --no-checkout \
 cd "$HOME/termux-packages"
 git sparse-checkout set build-package.sh scripts packages
 cd -
-python3 scripts/validate_termux_recipe.py \
+./tools/check_repository_contracts termux-recipe \
   packaging/termux-packages/milena/build.sh \
   --official-dir "$HOME/termux-packages"
 ```
