@@ -263,14 +263,14 @@ static void test_rejects_bad_headers_and_lengths(void) {
     expect_invalid(mutated, size);
 
     memcpy(mutated, bytes, size);
-    /* Program counts follow the 16-byte header and function record. Their
-       exact offsets are block=42, parameters=46, edges=50, call args=54,
-       instructions=58. Each count fits alone; their combined wire size does
-       not, so decoding must reject before allocating arrays. */
-    set_u32_le(mutated, 46u, 35u);  /* block parameter count */
-    set_u32_le(mutated, 50u, 29u);  /* edge argument count */
-    set_u32_le(mutated, 54u, 100u); /* call argument count */
-    set_u32_le(mutated, 58u, 8u);   /* instruction count */
+    /* The 16-byte header is followed by module function_count (4 bytes),
+       function metadata and body counts. For the 10-byte name, body counts
+       are block=46, parameters=50, edges=54, call args=58, instructions=62.
+       Each count fits alone; their combined wire size does not. */
+    set_u32_le(mutated, 50u, 35u);  /* block parameter count */
+    set_u32_le(mutated, 54u, 29u);  /* edge argument count */
+    set_u32_le(mutated, 58u, 100u); /* call argument count */
+    set_u32_le(mutated, 62u, 8u);   /* instruction count */
     char resource_error[256] = {0};
     assert(!milena_bytecode_verify(mutated, size, resource_error,
                                    sizeof(resource_error)));
@@ -281,7 +281,7 @@ static void test_rejects_bad_headers_and_lengths(void) {
     memcpy(mutated, bytes, size);
     /* Locate the first opcode from the format's fixed-width field sizes and
        this fixture's three F64 signature/block parameters. */
-    const size_t first_opcode_offset = 16u + 4u + 4u +
+    const size_t first_opcode_offset = 16u + 4u + 4u + 4u +
         (sizeof("sumar_tres") - 1u) + 4u + 1u + 3u + 5u * 4u + 1u + 4u + 3u +
         24u + 3u * 12u;
     assert(first_opcode_offset + 1u < size);
@@ -303,8 +303,8 @@ static void test_rejects_signature_mismatch_and_invalid_source_module(void) {
     uint8_t *mutated = (uint8_t *)malloc(size);
     assert(mutated != NULL);
     memcpy(mutated, bytes, size);
-    /* Function return type is after symbol ID, name length/name and arity. */
-    mutated[38u] = (uint8_t)MILENA_IR_TYPE_BOOL;
+    /* Module function_count precedes the first function's symbol/name/arity. */
+    mutated[42u] = (uint8_t)MILENA_IR_TYPE_BOOL;
     expect_invalid(mutated, size);
 
     module->functions[1].body->instructions[3].integer_immediate = 999u;
