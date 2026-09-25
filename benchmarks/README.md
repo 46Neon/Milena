@@ -9,7 +9,7 @@ Estos benchmarks miden, sin prometer un umbral, dos operaciones observables:
    el programa de arreglos; no sustituye una medición de tablas o datasets.
 
 La fixture de arrays es deliberadamente pequeña. Para CSV, PR25 ofrece
-`stream_benchmark.py` (resumen global), `grouped_stream_benchmark.py`
+`stream_benchmark.py` (resumen global), `grouped_stream_benchmark.c`
 (agrupación acotada en memoria) y `grouped_spill_benchmark.py` (spill opt-in),
 con cargas deterministas. La agrupación habitual mantiene su mapa en memoria;
 la ruta spill es opt-in y se evalúa por separado. La carga `large` se habilita explícitamente con
@@ -36,7 +36,7 @@ make benchmark-stream
 make benchmark-stream-grouped
 # Cargas grandes explícitas y opt-in:
 python3 benchmarks/stream_benchmark.py --large-rows 1000000 --output stream-results.json
-python3 benchmarks/grouped_stream_benchmark.py --large-rows 1000000 --output grouped-results.json
+make benchmark-stream-grouped BENCHMARK_STREAM_GROUPED_ARGS="--large-rows 1000000 --output grouped-results.json"
 # Spill explícito, comparado contra agrupación en memoria:
 python3 benchmarks/grouped_spill_benchmark.py --large-rows 1000000 --output grouped-spill-results.json
 ```
