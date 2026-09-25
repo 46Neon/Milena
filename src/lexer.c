@@ -9,7 +9,7 @@ static char lexer_current(Lexer *lexer) {
     return lexer->source[lexer->position];
 }
 
-static char lexer_peek_char(Lexer *lexer, size_t offset) {
+static char lexer_peek_char(Lexer *lexer, int offset) {
     size_t pos = lexer->position + offset;
     if (pos >= lexer->length) return '\0';
     return lexer->source[pos];
@@ -37,7 +37,26 @@ static bool is_identifier_char(char c) {
     return isalnum((unsigned char)c) || c == '_' || (unsigned char)c >= 0x80;
 }
 
-static MilenaTokenType keyword_type(const char *str) {
+static bool is_keyword(const char *str) {
+    static const char *keywords[] = {
+        "analisis", "datos", "estadistica", "dataset", "limpiar",
+        "transformar", "visualizar", "exportar", "filtrar", "agrupar",
+        "resumir", "cargar", "nulos", "duplicados", "condicion",
+        "extraer", "total", "periodo", "verdadero", "falso",
+        "forma", "dimensiones", "tamaño", "suma", "media", "minimo",
+        "maximo", "varianza", "desviacion_estandar", "mediana", "percentil",
+        "eje", "conservar", "sin", "variable", "funcion", "función", "retornar", "si", "sino",
+        "desde", "procesar", "por", "lotes", "filas", "guardar", "registros", "hasta", "MiB", "contar"
+    };
+    static const int num_keywords = 50;
+    
+    for (int i = 0; i < num_keywords; i++) {
+        if (strcmp(str, keywords[i]) == 0) return true;
+    }
+    return false;
+}
+
+static TokenType keyword_type(const char *str) {
     if (strcmp(str, "analisis") == 0) return TOKEN_KW_ANALISIS;
     if (strcmp(str, "datos") == 0) return TOKEN_KW_DATOS;
     if (strcmp(str, "estadistica") == 0) return TOKEN_KW_ESTADISTICA;
@@ -89,7 +108,7 @@ static MilenaTokenType keyword_type(const char *str) {
     return TOKEN_IDENTIFICADOR;
 }
 
-static Token lexer_create_token(Lexer *lexer, MilenaTokenType type, const char *lexeme) {
+static Token lexer_create_token(Lexer *lexer, TokenType type, const char *lexeme) {
     Token token;
     token.type = type;
     strncpy(token.lexeme, lexeme, MAX_TOKEN_LEN - 1);
@@ -353,7 +372,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (too_long) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "cadena demasiado larga");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             token.line, token.column, 0,
+                             (size_t)token.line, (size_t)token.column, 0,
                              "La cadena supera el límite de 255 caracteres");
             lexer->current_token = token;
             return token;
@@ -361,12 +380,12 @@ Token lexer_next_token(Lexer *lexer) {
         if (invalid_escape) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "escape no válido");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             token.line, token.column, 0,
+                             (size_t)token.line, (size_t)token.column, 0,
                              "La cadena contiene una secuencia de escape no admitida");
         } else if (!closed) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "cadena sin cerrar");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             token.line, token.column, 0,
+                             (size_t)token.line, (size_t)token.column, 0,
                              "Cadena sin cerrar");
         } else {
             buffer[idx] = '\0';
@@ -417,7 +436,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (too_long) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "número demasiado largo");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             token.line, token.column, 0,
+                             (size_t)token.line, (size_t)token.column, 0,
                              "El número supera el límite de 255 caracteres");
             lexer->current_token = token;
             return token;
@@ -425,7 +444,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (malformed_exponent) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "exponente numérico no válido");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             token.line, token.column, 0,
+                             (size_t)token.line, (size_t)token.column, 0,
                              "El exponente de un número debe contener dígitos");
             lexer->current_token = token;
             return token;
@@ -436,7 +455,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (end != buffer + idx || errno == ERANGE || !isfinite(number)) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "número fuera de rango");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             token.line, token.column, 0,
+                             (size_t)token.line, (size_t)token.column, 0,
                              "El literal numérico no es finito o está fuera de rango");
             lexer->current_token = token;
             return token;
@@ -462,13 +481,13 @@ Token lexer_next_token(Lexer *lexer) {
         if (too_long) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "identificador demasiado largo");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             token.line, token.column, 0,
+                             (size_t)token.line, (size_t)token.column, 0,
                              "El identificador supera el límite de 255 caracteres");
             lexer->current_token = token;
             return token;
         }
         buffer[idx] = '\0';
-        MilenaTokenType type = keyword_type(buffer);
+        TokenType type = keyword_type(buffer);
         token = lexer_create_token(lexer, type, buffer);
         
         if (type == TOKEN_BOOLEANO) {
@@ -484,18 +503,18 @@ Token lexer_next_token(Lexer *lexer) {
     token = lexer_create_token(lexer, TOKEN_ERROR, "carácter desconocido");
     char err_msg[64];
     snprintf(err_msg, sizeof(err_msg), "Carácter inesperado: '%c'", c);
-    milena_error_set(&lexer->error, MILENA_ERR_PARSE, token.line, token.column, 0, err_msg);
+    milena_error_set(&lexer->error, MILENA_ERR_PARSE, (size_t)token.line, (size_t)token.column, 0, err_msg);
     lexer->current_token = token;
     return token;
 }
 
 Token lexer_peek_token(Lexer *lexer) {
     size_t old_pos = lexer->position;
-    size_t old_line = lexer->line;
-    size_t old_col = lexer->column;
+    int old_line = lexer->line;
+    int old_col = lexer->column;
     size_t old_token_start_offset = lexer->token_start_offset;
-    size_t old_token_start_line = lexer->token_start_line;
-    size_t old_token_start_column = lexer->token_start_column;
+    int old_token_start_line = lexer->token_start_line;
+    int old_token_start_column = lexer->token_start_column;
     Token prev = lexer->previous_token;
     Token curr = lexer->current_token;
     MilenaError old_error = lexer->error;
@@ -520,19 +539,19 @@ void lexer_advance_token(Lexer *lexer) {
     lexer->current_token = lexer_next_token(lexer);
 }
 
-bool lexer_match(Lexer *lexer, MilenaTokenType type) {
+bool lexer_match(Lexer *lexer, TokenType type) {
     return lexer->current_token.type == type;
 }
 
-bool lexer_expect(Lexer *lexer, MilenaTokenType type, const char *error_msg) {
+bool lexer_expect(Lexer *lexer, TokenType type, const char *error_msg) {
     if (lexer->current_token.type != type) {
-        milena_error_set(&lexer->error, MILENA_ERR_PARSE, lexer->current_token.line, lexer->current_token.column, 0, error_msg);
+        milena_error_set(&lexer->error, MILENA_ERR_PARSE, (size_t)lexer->current_token.line, (size_t)lexer->current_token.column, 0, error_msg);
         return false;
     }
     return true;
 }
 
-const char *token_type_name(MilenaTokenType type) {
+const char *token_type_name(TokenType type) {
     static const char *const names[TOKEN_TYPE_COUNT] = {
         "EOF", "ERROR", "ANALISIS", "DATOS", "ESTADISTICA", "DATASET",
         "LIMPIAR", "TRANSFORMAR", "VISUALIZAR", "EXPORTAR", "FILTRAR",
@@ -556,11 +575,11 @@ const char *token_type_name(MilenaTokenType type) {
     return names[type];
 }
 
-bool token_is_keyword(MilenaTokenType type) {
+bool token_is_keyword(TokenType type) {
     return type >= TOKEN_KW_ANALISIS && type <= TOKEN_KW_CONTAR;
 }
 
-bool token_is_operator(MilenaTokenType type) {
+bool token_is_operator(TokenType type) {
     return (type >= TOKEN_IGUAL && type <= TOKEN_DIV) || 
            type == TOKEN_ASIGNACION;
 }
