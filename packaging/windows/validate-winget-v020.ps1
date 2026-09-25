@@ -110,7 +110,8 @@ if ($process.ExitCode -ne 2 -or $programOutput -notmatch 'Milena 0\.2\.0') {
     throw "Installed WinGet package failed its version smoke test (exit $($process.ExitCode)): $programOutput"
 }
 
-& $winget.Source uninstall --id '46Neon.Milena' --exact --disable-interactivity
+# Constrain removal to the community source and avoid the unrelated Store source.
+& $winget.Source uninstall --id '46Neon.Milena' --exact --source winget --disable-interactivity
 if ($LASTEXITCODE -ne 0) {
     throw "winget uninstall failed with exit code $LASTEXITCODE."
 }
