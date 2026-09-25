@@ -482,118 +482,113 @@ cleanup:
 }
 
 
+static bool vm_legacy_dataset_error(VirtualMachine *vm, MilenaStatus status,
+                                    const char *message) {
+    if (!vm) return false;
+    vm->has_error = true;
+    milena_error_set(&vm->error, status, 0u, 0u, 0u, message);
+    return false;
+}
+
 static bool vm_execute_instruction(VirtualMachine *vm, IRInstruction *ins) {
-    if (!ins) return false;
-    
+    if (!vm || !ins) return false;
+
     switch (ins->opcode) {
         case IR_LOAD_DATASET:
             if (ins->arg1) {
-                if (vm->dataset) {
-                    dataset_destruir(vm->dataset);
-                    free(vm->dataset);
-                }
-                
-                vm->dataset = (Dataset *)gc_alloc(vm->gc, sizeof(Dataset));
-                if (!vm->dataset) {
-                    vm->has_error = true;
-                    milena_error_set(&vm->error, MILENA_ERROR_MEMORY,
-                                  "No se pudo asignar dataset", 0, 0);
-                    return false;
-                }
-                
-                if (!dataset_cargar_csv(vm->dataset, ins->arg1)) {
-                    vm->has_error = true;
-                    milena_error_set(&vm->error, MILENA_ERROR_IO,
-                                  "No se pudo cargar CSV", 0, 0);
-                    return false;
-                }
-                
+                if (vm->dataset) dataset_destroy(vm->dataset);
+                vm->dataset = (Dataset *)gc_alloc(vm->gc, sizeof(*vm->dataset));
+                if (!vm->dataset)
+                    return vm_legacy_dataset_error(vm, MILENA_ERR_MEMORY,
+                                                   "No se pudo asignar dataset");
+                dataset_init(vm->dataset);
+                if (!dataset_cargar_csv(vm->dataset, ins->arg1))
+                    return vm_legacy_dataset_error(vm, MILENA_ERR_IO,
+                                                   "No se pudo cargar CSV");
                 printf("VM: Dataset cargado: %s\n", ins->arg1);
             }
             break;
-            
+
         case IR_CLEAN_NULLS:
             if (vm->dataset && ins->arg1) {
-                dataset_clean_nulls(vm->dataset, ins->arg1);
+                MilenaStatus status = dataset_remove_null_rows(vm->dataset,
+                                                               &vm->error);
+                if (status != MILENA_OK) {
+                    vm->has_error = true;
+                    return false;
+                }
                 printf("VM: Nulos limpiados\n");
             }
             break;
-            
+
         case IR_CLEAN_DUPLICATES:
             if (vm->dataset && ins->arg1) {
-                dataset_clean_duplicates(vm->dataset, ins->arg1);
+                MilenaStatus status = dataset_remove_duplicates(vm->dataset,
+                                                               &vm->error);
+                if (status != MILENA_OK) {
+                    vm->has_error = true;
+                    return false;
+                }
                 printf("VM: Duplicados limpiados\n");
             }
             break;
-            
+
+        /* These historical opcodes do not have matching argument contracts or
+           implementations in the current Dataset API. Reject instead of
+           silently inventing a transform/filter/grouping meaning. */
         case IR_TRANSFORM_TOTAL:
-            if (vm->dataset && ins->arg1) {
-                dataset_transform_total(vm->dataset, ins->arg1);
-                printf("VM: Total transformado\n");
-            }
+            if (vm->dataset && ins->arg1)
+                return vm_legacy_dataset_error(vm, MILENA_ERR_UNSUPPORTED,
+                    "La transformación de total no está soportada por el Dataset actual");
             break;
-            
         case IR_TRANSFORM_PERIOD:
-            if (vm->dataset && ins->arg1) {
-                dataset_transform_period(vm->dataset, ins->arg1);
-                printf("VM: Periodo transformado\n");
-            }
+            if (vm->dataset && ins->arg1)
+                return vm_legacy_dataset_error(vm, MILENA_ERR_UNSUPPORTED,
+                    "La transformación de periodo no está soportada por el Dataset actual");
             break;
-            
         case IR_FILTER_CONDITION:
-            if (vm->dataset && ins->arg1) {
-                dataset_filter_condition(vm->dataset, ins->arg1);
-                printf("VM: Filtro aplicado\n");
-            }
+            if (vm->dataset && ins->arg1)
+                return vm_legacy_dataset_error(vm, MILENA_ERR_UNSUPPORTED,
+                    "El filtro condicional no está soportado por el Dataset actual");
             break;
-            
         case IR_GROUP_BY:
-            if (vm->dataset && ins->arg1) {
-                dataset_group_by(vm->dataset, ins->arg1);
-                printf("VM: Agrupación por %s\n", ins->arg1);
-            }
+            if (vm->dataset && ins->arg1)
+                return vm_legacy_dataset_error(vm, MILENA_ERR_UNSUPPORTED,
+                    "La agrupación no está soportada por el Dataset actual");
             break;
-            
+
         case IR_AGGREGATE_SUM:
         case IR_AGGREGATE_AVG:
         case IR_AGGREGATE_MIN:
         case IR_AGGREGATE_MAX:
-            if (vm->dataset && ins->arg1) {
-                // Realizar agregación
+            if (vm->dataset && ins->arg1)
                 printf("VM: Agregación aplicada\n");
-            }
             break;
-            
+
         case IR_VISUALIZE:
-            if (vm->dataset) {
-                dataset_imprimir(vm->dataset, 10);
-            }
+            if (vm->dataset) dataset_print(vm->dataset, 10u, stdout);
             break;
-            
+
         case IR_EXPORT_JSON:
             if (vm->dataset && ins->arg1) {
                 if (dataset_guardar_json(vm->dataset, ins->arg1)) {
                     printf("VM: Datos exportados a %s\n", ins->arg1);
                 } else {
-                    vm->has_error = true;
-                    milena_error_set(&vm->error, MILENA_ERROR_IO,
-                                  "No se pudo exportar JSON", 0, 0);
-                    return false;
+                    return vm_legacy_dataset_error(vm, MILENA_ERR_IO,
+                                                   "No se pudo exportar JSON");
                 }
             }
             break;
-            
+
         case IR_PRINT:
-            if (vm->dataset) {
-                dataset_imprimir(vm->dataset, 5);
-            }
+            if (vm->dataset) dataset_print(vm->dataset, 5u, stdout);
             break;
-            
+
         default:
             printf("VM: Instrucción desconocida: %d\n", ins->opcode);
             break;
     }
-    
+
     return true;
 }
 
@@ -795,10 +790,7 @@ const char *vm_bytecode_error(const VirtualMachine *vm) {
 void vm_destroy(VirtualMachine *vm) {
     if (!vm) return;
     if (vm->mode == MILENA_VM_MODE_ORIGINAL_IR) {
-        if (vm->dataset) {
-            dataset_destruir(vm->dataset);
-            free(vm->dataset);
-        }
+        if (vm->dataset) dataset_destroy(vm->dataset);
         if (vm->result) {
             dataset_destruir(vm->result);
             free(vm->result);

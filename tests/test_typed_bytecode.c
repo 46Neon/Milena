@@ -525,8 +525,28 @@ static void test_original_vm_lifecycle(void) {
     vm_destroy(&vm);
 }
 
+static void test_legacy_vm_fails_closed_for_unavailable_dataset_ops(void) {
+    IRInstruction instruction = {0};
+    instruction.opcode = IR_TRANSFORM_TOTAL;
+    instruction.arg1 = "total";
+    IRProgram program = {0};
+    program.instructions = &instruction;
+    program.count = 1u;
+    VirtualMachine vm = {0};
+    assert(vm_init(&vm, &program));
+    vm.dataset = (Dataset *)gc_alloc(vm.gc, sizeof(*vm.dataset));
+    assert(vm.dataset != NULL);
+    dataset_init(vm.dataset);
+    vm_step(&vm);
+    assert(vm.has_error && !vm.running && vm.pc == 1u);
+    assert(vm.error.code == MILENA_ERR_UNSUPPORTED);
+    assert(strstr(vm.error.message, "Dataset actual") != NULL);
+    vm_destroy(&vm);
+}
+
 int main(void) {
     test_original_vm_lifecycle();
+    test_legacy_vm_fails_closed_for_unavailable_dataset_ops();
     test_roundtrip_module_with_direct_call();
     test_rejects_bad_headers_and_lengths();
     test_rejects_signature_mismatch_and_invalid_source_module();
