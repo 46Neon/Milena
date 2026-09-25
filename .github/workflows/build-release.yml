@@ -37,11 +37,25 @@ jobs:
         run: |
           set -euxo pipefail
           timeout 900 ./packaging/debian/build-local-deb.sh
+      - name: Create and verify Debian package checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(find dist/debian -maxdepth 1 -type f -name 'milena_*_amd64.deb' -print)
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+          checksum="${package}.sha256"
+          (cd "$(dirname "$package")" && sha256sum "$(basename "$package")" > "$(basename "$checksum")")
+          (cd "$(dirname "$package")" && sha256sum --check "$(basename "$checksum")")
+          test "$(dpkg-deb -f "$package" Package)" = 'milena'
+          test "$(dpkg-deb -f "$package" Architecture)" = 'amd64'
       - name: Upload Debian artifact
         uses: actions/upload-artifact@v4
         with:
           name: milena-debian-amd64
-          path: dist/debian/*.deb
+          path: |
+            dist/debian/*.deb
+            dist/debian/*.deb.sha256
           if-no-files-found: error
 
   windows-x64:
@@ -212,6 +226,18 @@ jobs:
         with:
           name: milena-windows-x64
           path: dist
+      - name: Verify downloaded Debian package checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(find dist -type f -name 'milena_*_amd64.deb' -print)
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+          checksum="${package}.sha256"
+          test -f "$checksum"
+          (cd "$(dirname "$package")" && sha256sum --check "$(basename "$checksum")")
+          test "$(dpkg-deb -f "$package" Package)" = 'milena'
+          test "$(dpkg-deb -f "$package" Architecture)" = 'amd64'
       - name: Verify downloaded checksums
         shell: pwsh
         run: |
