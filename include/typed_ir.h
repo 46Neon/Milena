@@ -48,6 +48,9 @@ typedef struct MilenaIRInstruction {
     uint32_t result_id;
     uint32_t operand1_id;
     uint32_t operand2_id;
+    /* Slice into MilenaIRProgram.call_arguments; used only by MILENA_IR_CALL. */
+    size_t call_argument_offset;
+    size_t call_argument_count;
     uint32_t block_id;
     int64_t integer_immediate;
     double float_immediate;
@@ -89,6 +92,9 @@ typedef struct MilenaIRProgram {
     MilenaIRInstruction *instructions;
     size_t count;
     size_t capacity;
+    uint32_t *call_arguments;
+    size_t call_argument_count;
+    size_t call_argument_capacity;
     MilenaIRBasicBlock *blocks;
     size_t block_count;
     size_t block_capacity;
@@ -146,6 +152,13 @@ bool milena_ir_block_append_instruction(MilenaIRProgram *program,
                                          double float_immediate,
                                          uint32_t target_true,
                                          uint32_t target_false);
+/* Append a call with a copied, owned argument vector. The target is a stable
+ * module symbol ID; call arguments are not stored in the fixed scalar operands. */
+bool milena_ir_block_append_call(MilenaIRProgram *program, uint32_t block_id,
+                                 uint32_t result_id, MilenaIRType result_type,
+                                 uint32_t target_symbol_id,
+                                 const uint32_t *argument_ids,
+                                 size_t argument_count);
 bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                                 size_t error_capacity);
 void milena_ir_module_destroy(MilenaIRModule *module);

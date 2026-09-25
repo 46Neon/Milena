@@ -12,6 +12,7 @@ MilenaIRProgram *milena_ir_program_create(void) {
 void milena_ir_program_destroy(MilenaIRProgram *program) {
     if (!program) return;
     free(program->instructions);
+    free(program->call_arguments);
     free(program->blocks);
     free(program->parameters);
     free(program->edge_arguments);
@@ -25,8 +26,10 @@ bool milena_ir_program_set_function_signature(MilenaIRProgram *program,
                                                MilenaIRType return_type) {
     MilenaIRType *copy = NULL;
     if (!program || program->has_function_signature ||
-        program->instructions || program->blocks || program->parameters ||
-        program->edge_arguments || program->count || program->block_count ||
+        program->instructions || program->call_arguments || program->blocks ||
+        program->parameters || program->edge_arguments || program->count ||
+        program->call_argument_count || program->call_argument_capacity ||
+        program->block_count ||
         program->parameter_count || program->edge_argument_count ||
         program->signature.parameter_types || program->signature.parameter_count ||
         program->signature.return_type != MILENA_IR_TYPE_INVALID ||
@@ -71,6 +74,24 @@ static bool ir_reserve_instructions(MilenaIRProgram *program) {
     if (!grown) return false;
     program->instructions = grown;
     program->capacity = capacity;
+    return true;
+}
+
+static bool ir_reserve_call_arguments(MilenaIRProgram *program, size_t required) {
+    uint32_t *grown;
+    size_t capacity;
+    if (required <= program->call_argument_capacity) return true;
+    capacity = program->call_argument_capacity == 0 ? 8 :
+               program->call_argument_capacity;
+    while (capacity < required) {
+        if (capacity > SIZE_MAX / 2) { capacity = required; break; }
+        capacity *= 2;
+    }
+    if (capacity < required || capacity > SIZE_MAX / sizeof(*grown)) return false;
+    grown = realloc(program->call_arguments, capacity * sizeof(*grown));
+    if (!grown) return false;
+    program->call_arguments = grown;
+    program->call_argument_capacity = capacity;
     return true;
 }
 
@@ -184,6 +205,49 @@ bool milena_ir_block_append_instruction(MilenaIRProgram *program, uint32_t block
     return true;
 }
 
+bool milena_ir_block_append_call(MilenaIRProgram *program, uint32_t block_id,
+                                 uint32_t result_id, MilenaIRType result_type,
+                                 uint32_t target_symbol_id,
+                                 const uint32_t *argument_ids,
+                                 size_t argument_count) {
+    uint32_t *copy = NULL;
+    size_t start;
+    size_t required;
+    if (!program || !target_symbol_id || (argument_count && !argument_ids) ||
+        argument_count > SIZE_MAX / sizeof(*copy) ||
+        program->call_argument_count > SIZE_MAX - argument_count ||
+        (program->call_argument_count && !program->call_arguments) ||
+        program->call_argument_capacity < program->call_argument_count ||
+        program->call_argument_capacity > SIZE_MAX / sizeof(*program->call_arguments))
+        return false;
+    if (argument_count) {
+        copy = malloc(argument_count * sizeof(*copy));
+        if (!copy) return false;
+        memcpy(copy, argument_ids, argument_count * sizeof(*copy));
+    }
+    start = program->call_argument_count;
+    required = start + argument_count;
+    if (!ir_reserve_call_arguments(program, required)) {
+        free(copy);
+        return false;
+    }
+    if (!milena_ir_block_append_instruction(program, block_id, MILENA_IR_CALL,
+            result_id, result_type, 0, 0, (int64_t)target_symbol_id,
+            0.0, 0, 0)) {
+        free(copy);
+        return false;
+    }
+    if (argument_count)
+        memcpy(program->call_arguments + start, copy,
+               argument_count * sizeof(*copy));
+    free(copy);
+    program->call_argument_count = required;
+    MilenaIRInstruction *instruction = &program->instructions[program->count - 1];
+    instruction->call_argument_offset = start;
+    instruction->call_argument_count = argument_count;
+    return true;
+}
+
 static const MilenaIRModuleFunction *ir_module_find_function(
     const MilenaIRModule *module, uint32_t symbol_id) {
     if (!module || !symbol_id) return NULL;
@@ -191,14 +255,6 @@ static const MilenaIRModuleFunction *ir_module_find_function(
         if (module->functions[i].symbol_id == symbol_id)
             return &module->functions[i];
     return NULL;
-}
-
-static MilenaIRType ir_module_parameter_type(const MilenaIRModule *module,
-                                              uint32_t symbol_id,
-                                              size_t index) {
-    const MilenaIRModuleFunction *function = ir_module_find_function(module, symbol_id);
-    return function && index < function->parameter_count && function->parameter_types
-        ? function->parameter_types[index] : MILENA_IR_TYPE_INVALID;
 }
 
 typedef struct {
@@ -288,7 +344,11 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
     if (!program || !program->instructions || !program->blocks ||
         program->count == 0 || program->block_count == 0 ||
         (program->parameter_count && !program->parameters) ||
-        (program->edge_argument_count && !program->edge_arguments))
+        (program->edge_argument_count && !program->edge_arguments) ||
+        (program->call_argument_capacity && !program->call_arguments) ||
+        (!program->call_argument_capacity && program->call_arguments) ||
+        program->call_argument_count > program->call_argument_capacity ||
+        program->call_argument_capacity > SIZE_MAX / sizeof(*program->call_arguments))
         return ir_fail(error, error_capacity,
                        "typed IR must contain valid instructions and blocks");
     if (program->has_function_signature) {
@@ -393,6 +453,9 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
             if (ins->block_id != block->id ||
                 ins->opcode < MILENA_IR_CONST_I64 || ins->opcode >= MILENA_IR_OPCODE_COUNT)
                 IR_REJECT("unsupported or malformed opcode/instruction at %zu", ii);
+            if (ins->opcode != MILENA_IR_CALL &&
+                (ins->call_argument_offset || ins->call_argument_count))
+                IR_REJECT("non-call instruction contains call argument metadata");
             switch (ins->opcode) {
                 case MILENA_IR_CONST_I64:
                     defines = true;
@@ -447,11 +510,12 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                 case MILENA_IR_CALL:
                     defines = true;
                     if (!program->module_context || !ins->integer_immediate ||
-                        ins->integer_immediate > UINT32_MAX || ins->target_true > 2 ||
-                        ins->target_false || ins->float_immediate != 0.0 ||
-                        (ins->target_true == 0 && (ins->operand1_id || ins->operand2_id)) ||
-                        (ins->target_true == 1 && (!ins->operand1_id || ins->operand2_id)) ||
-                        (ins->target_true == 2 && (!ins->operand1_id || !ins->operand2_id)))
+                        ins->integer_immediate > UINT32_MAX || ins->operand1_id ||
+                        ins->operand2_id || ins->target_true || ins->target_false ||
+                        ins->float_immediate != 0.0 ||
+                        ins->call_argument_offset > program->call_argument_count ||
+                        ins->call_argument_count > program->call_argument_count -
+                                                   ins->call_argument_offset)
                         goto bad_shape;
                     break;
                 case MILENA_IR_BRANCH:
@@ -586,15 +650,23 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                 case MILENA_IR_CALL: {
                     const MilenaIRModuleFunction *callee = ir_module_find_function(
                         program->module_context, (uint32_t)ins->integer_immediate);
-                    if (!callee || ins->target_true != callee->parameter_count ||
+                    if (!callee || ins->call_argument_count != callee->parameter_count ||
                         ins->result_type != callee->return_type ||
-                        callee->parameter_count > 2 ||
                         (callee->parameter_count && !callee->parameter_types)) {
                         free(values); free(reachable); free(queue); free(dominators);
                         return ir_fail(error, error_capacity,
                                        "call target, arity, or return type does not match module signature");
                     }
-                    if (callee->parameter_count) operand_type = callee->parameter_types[0];
+                    for (size_t ai = 0; ai < callee->parameter_count; ++ai) {
+                        uint32_t argument_id = program->call_arguments[
+                            ins->call_argument_offset + ai];
+                        if (!ir_use_is_valid(values, value_count, argument_id,
+                                callee->parameter_types[ai], bi, ii, n,
+                                dominators, error, error_capacity)) {
+                            free(values); free(reachable); free(queue); free(dominators);
+                            return false;
+                        }
+                    }
                     break;
                 }
                 case MILENA_IR_COND_BRANCH: operand_type = MILENA_IR_TYPE_BOOL; break;
@@ -609,18 +681,13 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                 free(values); free(reachable); free(queue); free(dominators);
                 return false;
             }
-            if (((ins->opcode == MILENA_IR_CALL && ins->target_true == 2) ||
-                 (ins->opcode != MILENA_IR_CALL &&
-                  (ins->opcode == MILENA_IR_ADD_I64 || ins->opcode == MILENA_IR_EQ_I64 ||
-                   ins->opcode == MILENA_IR_ADD_F64 || ins->opcode == MILENA_IR_SUB_F64 ||
-                   ins->opcode == MILENA_IR_MUL_F64 || ins->opcode == MILENA_IR_DIV_F64 ||
-                   ins->opcode == MILENA_IR_EQ_F64 || ins->opcode == MILENA_IR_NE_F64 ||
-                   ins->opcode == MILENA_IR_LT_F64 || ins->opcode == MILENA_IR_LE_F64 ||
-                   ins->opcode == MILENA_IR_GT_F64 || ins->opcode == MILENA_IR_GE_F64))) &&
+            if ((ins->opcode == MILENA_IR_ADD_I64 || ins->opcode == MILENA_IR_EQ_I64 ||
+                 ins->opcode == MILENA_IR_ADD_F64 || ins->opcode == MILENA_IR_SUB_F64 ||
+                 ins->opcode == MILENA_IR_MUL_F64 || ins->opcode == MILENA_IR_DIV_F64 ||
+                 ins->opcode == MILENA_IR_EQ_F64 || ins->opcode == MILENA_IR_NE_F64 ||
+                 ins->opcode == MILENA_IR_LT_F64 || ins->opcode == MILENA_IR_LE_F64 ||
+                 ins->opcode == MILENA_IR_GT_F64 || ins->opcode == MILENA_IR_GE_F64) &&
                 !ir_use_is_valid(values, value_count, ins->operand2_id,
-                    ins->opcode == MILENA_IR_CALL ?
-                        ir_module_parameter_type(program->module_context,
-                            (uint32_t)ins->integer_immediate, 1) :
                     (ins->opcode == MILENA_IR_ADD_I64 || ins->opcode == MILENA_IR_EQ_I64) ?
                         MILENA_IR_TYPE_I64 : MILENA_IR_TYPE_F64,
                     bi, ii, n, dominators, error, error_capacity)) {
@@ -820,43 +887,62 @@ static bool ir_scalar_lower_expression(MilenaIRProgram *program, uint32_t block_
         }
         case MILENA_HIR_EXPR_CALL: {
             const MilenaIRModule *module = program->module_context;
-            const MilenaIRModuleFunction *callee = ir_module_find_function(
-                module, (uint32_t)expression->resolved_symbol_id);
-            uint32_t argument_ids[2] = {0, 0};
+            const MilenaIRModuleFunction *callee;
+            uint32_t *argument_ids = NULL;
+            size_t argument_count = expression->as.call.argument_count;
             MilenaIRType expected_return;
-            if (!module || !callee || expression->resolved_symbol_id > UINT32_MAX)
+            if (!module || !expression->resolved_symbol_id ||
+                expression->resolved_symbol_id > UINT32_MAX)
                 return ir_fail(error, error_capacity,
                                "unresolved function call in canonical IR module");
-            if (expression->as.call.argument_count > 2 ||
-                expression->as.call.argument_count != callee->parameter_count)
+            callee = ir_module_find_function(module,
+                         (uint32_t)expression->resolved_symbol_id);
+            if (!callee)
                 return ir_fail(error, error_capacity,
-                               "function call arity is outside the verified direct-call subset");
-            if (callee->parameter_count && !expression->as.call.arguments)
+                               "unresolved function call in canonical IR module");
+            if (argument_count != callee->parameter_count)
                 return ir_fail(error, error_capacity,
-                               "function call arguments are missing");
+                               "function call arity disagrees with the resolved signature");
+            if (argument_count && (!expression->as.call.arguments ||
+                !callee->parameter_types ||
+                argument_count > SIZE_MAX / sizeof(*argument_ids)))
+                return ir_fail(error, error_capacity,
+                               "function call arguments or signature are missing");
             if (!ir_hir_value_type(expression->value_type, &expected_return) ||
                 expected_return != callee->return_type)
                 return ir_fail(error, error_capacity,
                                "function call return type disagrees with its resolved signature");
-            for (size_t i = 0; i < callee->parameter_count; ++i) {
+            if (argument_count) {
+                argument_ids = malloc(argument_count * sizeof(*argument_ids));
+                if (!argument_ids)
+                    return ir_fail(error, error_capacity,
+                                   "out of memory lowering function call arguments");
+            }
+            for (size_t i = 0; i < argument_count; ++i) {
                 MilenaIRType actual_type;
                 if (!expression->as.call.arguments[i] ||
                     !ir_scalar_lower_expression(program, block_id,
                         expression->as.call.arguments[i], bindings, binding_count,
                         next_value, &argument_ids[i], &actual_type, error,
-                        error_capacity)) return false;
-                if (!callee->parameter_types || actual_type != callee->parameter_types[i])
+                        error_capacity)) {
+                    free(argument_ids);
+                    return false;
+                }
+                if (actual_type != callee->parameter_types[i]) {
+                    free(argument_ids);
                     return ir_fail(error, error_capacity,
                                    "function call argument type disagrees with its resolved signature");
+                }
             }
             if (*next_value == UINT32_MAX ||
-                !milena_ir_block_append_instruction(program, block_id,
-                    MILENA_IR_CALL, *next_value, expected_return,
-                    argument_ids[0], argument_ids[1],
-                    (int64_t)callee->symbol_id, 0.0,
-                    (uint32_t)callee->parameter_count, 0))
+                !milena_ir_block_append_call(program, block_id, *next_value,
+                    expected_return, callee->symbol_id, argument_ids,
+                    argument_count)) {
+                free(argument_ids);
                 return ir_fail(error, error_capacity,
                                "could not append typed direct call");
+            }
+            free(argument_ids);
             *result = (*next_value)++;
             *result_type = expected_return;
             return true;
@@ -1163,12 +1249,17 @@ static bool ir_program_lower_scalar_function_body_context(
         program->signature.parameter_count ||
         program->signature.return_type != MILENA_IR_TYPE_INVALID ||
         program->has_function_signature || program->count || program->capacity ||
-        program->block_count || program->block_capacity || program->parameter_count ||
+        program->call_arguments || program->call_argument_count ||
+        program->call_argument_capacity || program->block_count ||
+        program->block_capacity || program->parameter_count ||
         program->parameter_capacity || program->edge_argument_count ||
         program->edge_argument_capacity)
         return ir_fail(error, error_capacity,
                        "scalar IR lowering requires a supported HIR function and fresh output");
-    if (!ir_scalar_count_statement_tree(
+    if (!function->parameters && function->parameter_count) return ir_fail(
+        error, error_capacity, "scalar HIR parameter list is missing");
+    if (function->parameter_count >= UINT32_MAX ||
+        !ir_scalar_count_statement_tree(
             (const MilenaHIRStatement *const *)function->body,
             function->body_count, 0, &statement_capacity) ||
         function->parameter_count > SIZE_MAX - statement_capacity)
@@ -1546,8 +1637,10 @@ bool milena_ir_module_validate(const MilenaIRModule *module, char *error,
     for (size_t i = 0; i < module->function_count; ++i) {
         const MilenaIRModuleFunction *function = &module->functions[i];
         if (!function->name || !function->symbol_id || !function->body ||
-            function->parameter_count > 2 ||
-            (function->parameter_count && !function->parameter_types) ||
+            (function->parameter_count &&
+             (!function->parameter_types ||
+              !function->body->signature.parameter_types)) ||
+            function->parameter_count > SIZE_MAX / sizeof(*function->parameter_types) ||
             !function->body->has_function_signature ||
             function->body->signature.parameter_count != function->parameter_count ||
             function->body->signature.return_type != function->return_type) {
@@ -1555,6 +1648,13 @@ bool milena_ir_module_validate(const MilenaIRModule *module, char *error,
             return ir_fail(error, error_capacity,
                            "invalid function identity or signature in IR module");
         }
+        for (size_t pi = 0; pi < function->parameter_count; ++pi)
+            if (function->parameter_types[pi] !=
+                function->body->signature.parameter_types[pi]) {
+                free(state);
+                return ir_fail(error, error_capacity,
+                               "module and body parameter signatures disagree");
+            }
         for (size_t prior = 0; prior < i; ++prior)
             if (module->functions[prior].symbol_id == function->symbol_id ||
                 strcmp(module->functions[prior].name, function->name) == 0) {
@@ -1600,10 +1700,12 @@ bool milena_ir_module_lower_scalar_hir(MilenaIRModule **output,
         const MilenaHIRFunction *source = &hir->functions[i];
         MilenaIRModuleFunction *target = &module->functions[i];
         if (!source->name || !source->resolved_symbol_id ||
-            source->resolved_symbol_id > UINT32_MAX || source->parameter_count > 2 ||
-            (source->parameter_count && !source->parameters)) {
+            source->resolved_symbol_id > UINT32_MAX ||
+            source->parameter_count >= UINT32_MAX ||
+            (source->parameter_count && !source->parameters) ||
+            source->parameter_count > SIZE_MAX / sizeof(*target->parameter_types)) {
             ir_fail(error, error_capacity,
-                    "function identity or parameter list exceeds the direct-call subset");
+                    "function identity or parameter list is invalid or too large");
             goto fail;
         }
         target->name = malloc(strlen(source->name) + 1);

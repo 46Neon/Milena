@@ -975,8 +975,9 @@ int main(void) {
     milena_canonical_program_release(&program);
 
     /* A source module with a direct scalar call lowers only on the canonical
-       lexer/parser/semantic -> HIR -> typed-IR path. Calls are nonrecursive,
-       numeric-parameter, scalar-returning, and currently support arity <= 2. */
+       Spanish lexer/parser/semantic -> HIR -> typed-IR path. Calls are
+       nonrecursive, numeric-parameter, scalar-returning, and carry owned,
+       arbitrary-length SSA argument slices. */
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
           "funcion combinar(x, z) { retornar x + z; } "
@@ -1002,41 +1003,73 @@ int main(void) {
             direct_call = &program.typed_module->functions[1].body->instructions[i];
     CHECK(direct_call && direct_call->integer_immediate ==
               (int64_t)program.typed_module->functions[0].symbol_id &&
-          direct_call->target_true == 2 && direct_call->operand1_id == 1 &&
-          direct_call->operand2_id == 1 &&
+          direct_call->target_true == 0 && direct_call->operand1_id == 0 &&
+          direct_call->operand2_id == 0 && direct_call->call_argument_count == 2 &&
+          direct_call->call_argument_offset + direct_call->call_argument_count <=
+              program.typed_module->functions[1].body->call_argument_count &&
+          program.typed_module->functions[1].body->call_arguments[
+              direct_call->call_argument_offset] == 1 &&
+          program.typed_module->functions[1].body->call_arguments[
+              direct_call->call_argument_offset + 1] == 1 &&
           direct_call->result_type == MILENA_IR_TYPE_F64,
-          "una llamada directa debe enlazar target, aridad, argumento y retorno tipados");
+          "una llamada directa debe enlazar symbol ID y todo el vector SSA tipado");
     {
         const int64_t saved_target = direct_call->integer_immediate;
         direct_call->integer_immediate = INT64_MAX;
         CHECK(!milena_ir_module_validate(program.typed_module, error.message,
                                          sizeof(error.message)),
-              "el verificador de módulos debe rechazar un target no resuelto");
-        direct_call->integer_immediate = saved_target;
-        const uint32_t saved_arity = direct_call->target_true;
-        direct_call->target_true = 0;
+              "el verificador de módulos debe rechazar un target desconocido");
+        direct_call->integer_immediate = 0;
         CHECK(!milena_ir_module_validate(program.typed_module, error.message,
                                          sizeof(error.message)),
-              "el verificador debe comparar la aridad de cada llamada con la firma");
-        direct_call->target_true = saved_arity;
-        const uint32_t saved_argument = direct_call->operand1_id;
-        direct_call->operand1_id = 2; /* The caller's BOOL local, not its F64 parameter. */
+              "el verificador debe rechazar una llamada sin target estable");
+        direct_call->integer_immediate = saved_target;
+        const size_t saved_offset = direct_call->call_argument_offset;
+        direct_call->call_argument_offset = program.typed_module->functions[1]
+            .body->call_argument_count;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar segmentos de argumentos fuera de límites");
+        direct_call->call_argument_offset = saved_offset;
+        const size_t saved_arity = direct_call->call_argument_count;
+        direct_call->call_argument_count = 1;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe comparar la aridad completa con la firma del destino");
+        direct_call->call_argument_count = saved_arity;
+        const size_t first_argument_index = direct_call->call_argument_offset;
+        const uint32_t saved_argument = program.typed_module->functions[1]
+            .body->call_arguments[first_argument_index];
+        program.typed_module->functions[1].body->call_arguments[
+            first_argument_index] = 2; /* The caller's BOOL local, not its F64 parameter. */
         CHECK(!milena_ir_module_validate(program.typed_module, error.message,
                                          sizeof(error.message)),
               "el verificador debe rechazar argumentos con tipo distinto a la firma");
-        direct_call->operand1_id = saved_argument;
-        const uint32_t saved_second_argument = direct_call->operand2_id;
-        direct_call->operand2_id = 2; /* The caller's BOOL local as parameter two. */
+        program.typed_module->functions[1].body->call_arguments[
+            first_argument_index] = saved_argument;
+        const size_t second_argument_index = first_argument_index + 1;
+        const uint32_t saved_second_argument = program.typed_module->functions[1]
+            .body->call_arguments[second_argument_index];
+        program.typed_module->functions[1].body->call_arguments[
+            second_argument_index] = 2; /* The caller's BOOL local as parameter two. */
         CHECK(!milena_ir_module_validate(program.typed_module, error.message,
                                          sizeof(error.message)),
-              "el verificador debe comprobar también cada argumento posterior");
-        direct_call->operand2_id = saved_second_argument;
+              "el verificador debe comprobar el tipo de cada argumento del vector");
+        program.typed_module->functions[1].body->call_arguments[
+            second_argument_index] = saved_second_argument;
         const MilenaIRType saved_return = direct_call->result_type;
         direct_call->result_type = MILENA_IR_TYPE_BOOL;
         CHECK(!milena_ir_module_validate(program.typed_module, error.message,
                                          sizeof(error.message)),
-              "el verificador debe rechazar retorno de llamada distinto al tipo declarado");
+              "el verificador debe rechazar el tipo de salida de llamada incorrecto");
         direct_call->result_type = saved_return;
+        const MilenaIRType saved_callee_return = program.typed_module->functions[0]
+            .return_type;
+        program.typed_module->functions[0].return_type = MILENA_IR_TYPE_BOOL;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "la firma del destino debe coincidir con el output del cuerpo callee");
+        program.typed_module->functions[0].return_type = saved_callee_return;
         CHECK(milena_ir_module_validate(program.typed_module, error.message,
                                         sizeof(error.message)), error.message);
     }
@@ -1076,14 +1109,129 @@ int main(void) {
           strstr(error.message, "recursive") != NULL,
           "la recursión directa debe rechazarse explícitamente y sin IR parcial");
     milena_canonical_program_release(&program);
+    /* Keep the zero-, one-, and two-argument ABI cases working with the new
+       vector representation, including zero-length and adjacent slices. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion cero() { retornar 0; } "
+          "funcion uno(x) { retornar x + 1; } "
+          "funcion dos(x, y) { retornar x + y; } "
+          "funcion usar(x, y) { variable a = cero(); variable b = uno(x); "
+          "retornar dos(a, b); }", &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    {
+        MilenaIRProgram *body = program.typed_module->functions[3].body;
+        size_t seen = 0;
+        const size_t expected_counts[3] = {0, 1, 2};
+        for (size_t i = 0; i < body->count; ++i) {
+            const MilenaIRInstruction *instruction = &body->instructions[i];
+            if (instruction->opcode != MILENA_IR_CALL) continue;
+            CHECK(seen < 3 && instruction->call_argument_count ==
+                  expected_counts[seen],
+                  "las llamadas de aridad cero, uno y dos deben conservar su aridad");
+            ++seen;
+        }
+        CHECK(seen == 3 && body->call_argument_count == 3,
+              "los slices de aridad cero/uno/dos deben coexistir sin huecos incorrectos");
+    }
+    milena_canonical_program_release(&program);
+
+    /* Three-argument direct calls preserve every SSA argument and verify each
+       value against the destination's full signature on the canonical route. */
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
           "funcion sumar_tres(a, b, c) { retornar a + b + c; } "
-          "funcion usar_tres(x, y, z) { retornar sumar_tres(x, y, z); }",
+          "funcion usar_tres(x, y, z) { variable listo = verdadero; "
+          "retornar sumar_tres(x, y, z); }", &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    MilenaIRProgram *three_body = program.typed_module->functions[1].body;
+    MilenaIRInstruction *three_call = NULL;
+    for (size_t i = 0; i < three_body->count; ++i)
+        if (three_body->instructions[i].opcode == MILENA_IR_CALL)
+            three_call = &three_body->instructions[i];
+    CHECK(program.typed_module->functions[0].parameter_count == 3 &&
+          three_call && three_call->integer_immediate ==
+              (int64_t)program.typed_module->functions[0].symbol_id &&
+          three_call->call_argument_count == 3 &&
+          three_call->call_argument_offset <= three_body->call_argument_count &&
+          three_call->call_argument_count <= three_body->call_argument_count -
+              three_call->call_argument_offset &&
+          three_body->call_arguments[three_call->call_argument_offset] == 1 &&
+          three_body->call_arguments[three_call->call_argument_offset + 1] == 2 &&
+          three_body->call_arguments[three_call->call_argument_offset + 2] == 3,
+          "una llamada de tres argumentos conserva los tres IDs SSA en orden");
+    {
+        size_t third = three_call->call_argument_offset + 2;
+        uint32_t saved_id = three_body->call_arguments[third];
+        three_body->call_arguments[third] = 4; /* The caller's BOOL local. */
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe comprobar SSA y tipo para cada argumento, incluso el tercero");
+        three_body->call_arguments[third] = saved_id;
+        size_t saved_count = three_call->call_argument_count;
+        three_call->call_argument_count = 4;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar conteos malformados fuera del slice de argumentos");
+        three_call->call_argument_count = saved_count;
+        CHECK(milena_ir_module_validate(program.typed_module, error.message,
+                                        sizeof(error.message)), error.message);
+    }
+    MilenaHIRExpression *three_call_expression = program.hir->functions[1]
+        .body[1]->as.expression;
+    MilenaIRModule *previous_valid_module = program.typed_module;
+    MilenaIRProgram *previous_valid_ir = program.typed_ir;
+    size_t valid_three_count = three_call_expression->as.call.argument_count;
+    three_call_expression->as.call.argument_count = 2;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_module == previous_valid_module &&
+          program.typed_ir == previous_valid_ir &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)),
+          "un fallo de aridad no publica IR parcial ni destruye el módulo previo válido");
+    three_call_expression->as.call.argument_count = valid_three_count;
+    MilenaHIRValueType saved_third_type = three_call_expression
+        ->as.call.arguments[2]->value_type;
+    three_call_expression->as.call.arguments[2]->value_type = MILENA_HIR_BOOLEAN;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_module == previous_valid_module &&
+          program.typed_ir == previous_valid_ir &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)),
+          "un tipo de argumento inválido no publica ni altera el módulo previo válido");
+    three_call_expression->as.call.arguments[2]->value_type = saved_third_type;
+    milena_canonical_program_release(&program);
+
+    /* Forward calls use the same full vector and stable resolved symbol ID. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion usar_tres(x, y, z) { retornar sumar_tres(x, y, z); } "
+          "funcion sumar_tres(a, b, c) { retornar a + b + c; }",
           &error) == MILENA_OK, error.message);
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
-              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir,
-          "firmas de más de dos parámetros deben seguir fuera del módulo de llamadas");
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    MilenaIRProgram *forward_body = program.typed_module->functions[0].body;
+    MilenaIRInstruction *forward_call = NULL;
+    for (size_t i = 0; i < forward_body->count; ++i)
+        if (forward_body->instructions[i].opcode == MILENA_IR_CALL)
+            forward_call = &forward_body->instructions[i];
+    CHECK(forward_call && forward_call->integer_immediate ==
+              (int64_t)program.typed_module->functions[1].symbol_id &&
+          forward_call->call_argument_count == 3 &&
+          forward_body->call_arguments[forward_call->call_argument_offset] == 1 &&
+          forward_body->call_arguments[forward_call->call_argument_offset + 1] == 2 &&
+          forward_body->call_arguments[forward_call->call_argument_offset + 2] == 3,
+          "la llamada adelantada enlaza symbol ID y todos los argumentos SSA");
+    CHECK(milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
     milena_canonical_program_release(&program);
 
     puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, binding, execution and diagnostics");
