@@ -21,13 +21,16 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
+      - name: Compile and execute canonical typed-IR regressions
+        run: |
+          set -euxo pipefail
+          ${{ matrix.compiler }} -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 tests/test_ir_validation.c src/canonical_ir.c src/common.c -lm -pthread -o tests/test_ir_validation
+          ./tests/test_ir_validation
       - name: Compile and execute focused frontend tests
         run: |
           set -euxo pipefail
           make clean
           make CC=${{ matrix.compiler }} test-lexer-safety test-parser-variables test-parser-statistics test-ast-validation test-canonical-compiler test-functions
-          ${{ matrix.compiler }} -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 tests/test_ir_validation.c src/canonical_ir.c src/common.c -lm -pthread -o tests/test_ir_validation
-          ./tests/test_ir_validation
 
   lexer-sanitizers:
     name: Frontend and typed IR ASan and UBSan
@@ -38,6 +41,13 @@ jobs:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - uses: actions/checkout@v4
+      - name: Compile and execute typed-IR regressions under sanitizers
+        run: |
+          set -euxo pipefail
+          clang -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_ir_validation.c src/canonical_ir.c src/common.c \
+            -fsanitize=address,undefined -lm -pthread -o tests/test_ir_validation
+          ./tests/test_ir_validation
       - name: Compile and execute lexer safety tests under sanitizers
         run: |
           set -euxo pipefail
@@ -46,7 +56,3 @@ jobs:
             CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
             LDFLAGS='-fsanitize=address,undefined -lm -pthread' \
             test-lexer-safety test-parser-variables test-parser-statistics test-ast-validation test-canonical-compiler test-functions
-          clang -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g \
-            -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_ir_validation.c src/canonical_ir.c src/common.c \
-            -fsanitize=address,undefined -lm -pthread -o tests/test_ir_validation
-          ./tests/test_ir_validation
