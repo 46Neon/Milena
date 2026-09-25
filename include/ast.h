@@ -153,12 +153,6 @@ typedef enum {
     AST_STREAM_OPERATION_STDDEV
 } ASTStreamOperation;
 
-typedef enum {
-    AST_FILTER_PREDICATE_OK = 0,
-    AST_FILTER_PREDICATE_INVALID,
-    AST_FILTER_PREDICATE_MEMORY
-} ASTFilterPredicateStatus;
-
 typedef struct ASTNode {
     ASTNodeType type;
     ASTStatOperation statistical_operation;
@@ -168,11 +162,6 @@ typedef struct ASTNode {
     size_t resolved_symbol_id;
     /* Structured scalar-expression operator, independent of legacy value text. */
     ASTOperatorKind operator_kind;
-    /* Structured numeric-filter payload; filter_column is owned by this node. */
-    ASTOperatorKind filter_operator;
-    char *filter_column;
-    double filter_threshold;
-    bool has_filter_predicate;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */
     struct ASTNode *left_operand;
     struct ASTNode *right_operand;
@@ -234,9 +223,6 @@ bool ast_validate(const ASTNode *root, MilenaError *error);
 bool ast_set_source_span(ASTNode *node, const Token *start, const Token *end);
 bool ast_set_source_span_from_nodes(ASTNode *node, const ASTNode *first,
                                     const ASTNode *last);
-/* Parse and own the strict numeric predicate while retaining the legacy value text. */
-ASTFilterPredicateStatus ast_set_filter_predicate(ASTNode *node,
-                                                   const char *text);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
 ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,
