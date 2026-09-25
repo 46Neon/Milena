@@ -979,9 +979,9 @@ int main(void) {
        numeric-parameter, scalar-returning, and currently support arity <= 2. */
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
-          "funcion duplicar(x) { retornar x + x; } "
+          "funcion combinar(x, z) { retornar x + z; } "
           "funcion principal(y) { variable listo = verdadero; "
-          "retornar duplicar(y); }", &error) == MILENA_OK, error.message);
+          "retornar combinar(y, y); }", &error) == MILENA_OK, error.message);
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
               MILENA_OK && program.typed_module &&
           milena_ir_module_validate(program.typed_module, error.message,
@@ -989,7 +989,7 @@ int main(void) {
     CHECK(program.typed_module->function_count == 2 &&
           program.typed_module->functions[0].symbol_id ==
               program.hir->functions[0].resolved_symbol_id &&
-          program.typed_module->functions[1].body->signature.parameter_count == 1 &&
+          program.typed_module->functions[1].body->signature.parameter_count == 2 &&
           program.typed_module->functions[1].body->signature.return_type ==
               MILENA_IR_TYPE_F64 && program.typed_ir ==
               program.typed_module->functions[0].body,
@@ -1001,7 +1001,8 @@ int main(void) {
             direct_call = &program.typed_module->functions[1].body->instructions[i];
     CHECK(direct_call && direct_call->integer_immediate ==
               (int64_t)program.typed_module->functions[0].symbol_id &&
-          direct_call->target_true == 1 && direct_call->operand1_id == 1 &&
+          direct_call->target_true == 2 && direct_call->operand1_id == 1 &&
+          direct_call->operand2_id == 1 &&
           direct_call->result_type == MILENA_IR_TYPE_F64,
           "una llamada directa debe enlazar target, aridad, argumento y retorno tipados");
     {
@@ -1023,6 +1024,12 @@ int main(void) {
                                          sizeof(error.message)),
               "el verificador debe rechazar argumentos con tipo distinto a la firma");
         direct_call->operand1_id = saved_argument;
+        const uint32_t saved_second_argument = direct_call->operand2_id;
+        direct_call->operand2_id = 2; /* The caller's BOOL local as parameter two. */
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe comprobar también cada argumento posterior");
+        direct_call->operand2_id = saved_second_argument;
         const MilenaIRType saved_return = direct_call->result_type;
         direct_call->result_type = MILENA_IR_TYPE_BOOL;
         CHECK(!milena_ir_module_validate(program.typed_module, error.message,
