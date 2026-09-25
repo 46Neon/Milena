@@ -1015,10 +1015,10 @@ int main(void) {
           "una llamada directa debe enlazar symbol ID y todo el vector SSA tipado");
     {
         const int64_t saved_target = direct_call->integer_immediate;
-        direct_call->integer_immediate = INT64_MAX;
+        direct_call->integer_immediate = UINT32_MAX;
         CHECK(!milena_ir_module_validate(program.typed_module, error.message,
                                          sizeof(error.message)),
-              "el verificador de módulos debe rechazar un target desconocido");
+              "el verificador debe rechazar un symbol ID válido pero desconocido en el módulo");
         direct_call->integer_immediate = 0;
         CHECK(!milena_ir_module_validate(program.typed_module, error.message,
                                          sizeof(error.message)),
