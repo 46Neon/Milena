@@ -1726,6 +1726,8 @@ static bool recipe_has_debian_usr_bin(const char *text)
     return false;
 }
 
+static void validate_termux_recipe_static(StringList *errors, const char *recipe_text);
+
 static char *join_recipe_path(const char *directory, const char *leaf)
 {
     size_t directory_length = strlen(directory);
@@ -1842,18 +1844,18 @@ static void check_termux_recipe(int argc, char **argv)
             official_dir = argv[argument] + 15U;
         } else if (argv[argument][0] == '-') {
             (void)fprintf(stderr, "ERROR: unknown termux-recipe option: %s\n", argv[argument]);
-            return;
+            exit(EXIT_FAILURE);
         } else if (strcmp(recipe_path, "packaging/termux-packages/milena/build.sh") == 0) {
             recipe_path = argv[argument];
         } else {
             (void)fprintf(stderr, "ERROR: more than one recipe path provided\n");
-            return;
+            exit(EXIT_FAILURE);
         }
     }
     recipe_text = optional_read_file(recipe_path);
     if (recipe_text == NULL) {
         (void)fprintf(stderr, "ERROR: cannot read recipe: %s\n", recipe_path);
-        return;
+        exit(EXIT_FAILURE);
     }
     validate_termux_recipe_static(&errors, recipe_text);
     for (index = 0U; index < ARRAY_COUNT(required); ++index) {
