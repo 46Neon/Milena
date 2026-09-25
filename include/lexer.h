@@ -8,11 +8,11 @@ typedef struct Lexer {
     const char *source;
     size_t position;
     size_t length;
-    int line;
-    int column;
+    size_t line;
+    size_t column;
     size_t token_start_offset;
-    int token_start_line;
-    int token_start_column;
+    size_t token_start_line;
+    size_t token_start_column;
     Token current_token;
     Token previous_token;
     MilenaError error;

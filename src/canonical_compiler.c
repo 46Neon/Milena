@@ -15,10 +15,10 @@ static void canonical_error(MilenaError *error, MilenaStatus code,
 
 static void hir_source_span(MilenaHIRSourceSpan *span, const ASTNode *node) {
     if (!span || !node) return;
-    span->line = node->line > 0 ? (size_t)node->line : 0;
-    span->column = node->column > 0 ? (size_t)node->column : 0;
-    span->end_line = node->end_line > 0 ? (size_t)node->end_line : 0;
-    span->end_column = node->end_column > 0 ? (size_t)node->end_column : 0;
+    span->line = node->line;
+    span->column = node->column;
+    span->end_line = node->end_line;
+    span->end_column = node->end_column;
     span->start_offset = node->start_offset;
     span->end_offset = node->end_offset;
     span->has_source_span = node->has_source_span;
