@@ -346,7 +346,7 @@ int main(void) {
 
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
-          "funcion suma(a, b) { retornar a + b; }", &error) == MILENA_OK,
+          "funcion combinar(a, b) { retornar a + b; }", &error) == MILENA_OK,
           error.message);
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
               MILENA_OK && program.typed_ir &&

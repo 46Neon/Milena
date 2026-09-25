@@ -972,12 +972,12 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
         if (statement->kind == MILENA_HIR_STMT_RETURN &&
             i + 1 == function->body_count && statement->as.expression) {
             uint32_t return_value;
-            MilenaIRType return_type;
+            MilenaIRType lowered_return_type;
             if (!ir_scalar_lower_expression(lowered, 1, statement->as.expression,
                     bindings, binding_count, &next_value, &return_value,
-                    &return_type, error, error_capacity)) goto cleanup;
+                    &lowered_return_type, error, error_capacity)) goto cleanup;
             if (!milena_ir_block_append_instruction(lowered, 1, MILENA_IR_RETURN, 0,
-                    return_type, return_value, 0, 0, 0.0, 0, 0)) {
+                    lowered_return_type, return_value, 0, 0, 0.0, 0, 0)) {
                 ir_fail(error, error_capacity, "could not append scalar IR return");
                 goto cleanup;
             }
