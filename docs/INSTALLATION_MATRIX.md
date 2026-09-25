@@ -9,7 +9,7 @@
 | Plataforma | Arquitectura del artefacto | Comando objetivo | Estado comprobado |
 |---|---|---|---|
 | Windows | x64 | `winget install --id 46Neon.Milena --exact` | La Release `v0.2.0` contiene `milena.exe`, ZIP portable y tres manifiestos WinGet. El workflow genera y adjunta los manifiestos a la Release, pero este repositorio no presenta una publicación aceptada/indexada en la fuente pública de WinGet. El comando no se debe anunciar como disponible hasta validar una instalación desde esa fuente. |
-| Debian/Ubuntu Linux | amd64 | `sudo apt install milena` | La Release contiene `milena_0.2.0_amd64.deb`; el workflow construye un `.deb` local. No se verificó un índice APT de Linux publicado ni una fuente configurada en una instalación limpia. El workflow `publish-apt.yml` es para Termux/AArch64 y no satisface este canal. El campo Maintainer del paquete Debian todavía usa `maintainers@milena.invalid`; debe reemplazarse antes de publicar. |
+| Debian/Ubuntu Linux | amd64 | `sudo apt install milena` | La Release `v0.2.0` conserva un `.deb` histórico con `maintainers@milena.invalid`; no hay índice APT Linux publicado ni fuente verificada en una instalación limpia. Este PR actualiza el builder para futuros paquetes a `Milena SST <j7942281@gmail.com>`. El workflow `publish-apt.yml` es para Termux/AArch64 y no satisface este canal. |
 | Android con Termux | AArch64 (`aarch64`) y Bionic | `pkg install milena` | Hay una receta candidata para `termux-packages`, pero no consta aceptación en el repositorio oficial. La Release `v0.2.0` no contiene el `.deb` Termux/AArch64 ni su procedencia requeridos por el publicador APT. No hay runner self-hosted registrado para la validación física. El comando no se debe anunciar como disponible. |
 
 Los comandos anteriores son **objetivos**, no instrucciones que garanticen una instalación hoy. La interfaz de usuario solo podrá marcarlos “disponibles” después de que el gestor pueda resolver el paquete desde una fuente configurada y se complete la prueba de instalación limpia.
@@ -40,7 +40,7 @@ No usar scripts remotos ejecutados directamente por `curl | sh` como sustituto d
 
 ### Debian/Ubuntu / APT
 
-- Construir paquetes Linux por arquitectura declarada; verificar control, dependencias, rutas, checksum y procedencia. Este PR añade generación y verificación del sidecar SHA-256 del `.deb` amd64 antes de adjuntarlo a futuras Releases. Sustituir el correo de Maintainer de ejemplo por un contacto real aprobado.
+- Construir paquetes Linux por arquitectura declarada; verificar control, dependencias, rutas, checksum y procedencia. Este PR fija `Maintainer: Milena SST <j7942281@gmail.com>` y añade generación/verificación del sidecar SHA-256 del `.deb` amd64 antes de adjuntarlo a futuras Releases. El artefacto histórico `v0.2.0` conserva el correo anterior y no debe publicarse en un feed APT nuevo.
 - Publicar índices `Packages` y metadatos `InRelease`/`Release.gpg` firmados para cada arquitectura disponible. El canal Linux debe estar separado del repositorio Termux.
 - Probar `apt install`, actualización, ejecución y eliminación en una instalación limpia de cada distribución/arquitectura anunciada.
 
