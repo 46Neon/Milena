@@ -304,14 +304,14 @@ SST_TEST_SOURCES = src/common.c src/sst_dates.c src/sst_model.c \
                    src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
                    src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c
 
-check-source-manifest:
-	python3 scripts/check_source_manifest.py
+check-source-manifest: tools/check_repository_contracts
+	./tools/check_repository_contracts source-manifest $(wildcard src/*.c)
 
-check-experimental-isolation:
-	python3 scripts/check_experimental_isolation.py
+check-experimental-isolation: tools/check_repository_contracts
+	./tools/check_repository_contracts experimental-isolation $(wildcard src/*.c)
 
-check-stream-architecture:
-	python3 scripts/check_stream_architecture.py
+check-stream-architecture: check-source-manifest tools/check_repository_contracts
+	./tools/check_repository_contracts stream-architecture
 
 check-unification-architecture: check-hir-ast-coverage
 	./tools/check_architecture architecture
@@ -325,8 +325,11 @@ check-termux-runner-contract:
 check-termux-industrial:
 	python3 scripts/check_termux_industrial.py
 
-check-compiler-boundary:
-	python3 scripts/check_compiler_boundary.py
+check-compiler-boundary: tools/check_repository_contracts
+	./tools/check_repository_contracts compiler-boundary $(wildcard src/*.c)
+
+tools/check_repository_contracts: tools/check_repository_contracts.c
+	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion $< -o $@
 
 check-hir-ast-coverage:
 	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_architecture.c -o tools/check_architecture && ./tools/check_architecture hir
@@ -403,7 +406,7 @@ test: check-source-manifest check-experimental-isolation check-stream-architectu
 	./tests/run_tests.sh
 
 clean:
-	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tools/check_architecture tests/test_sst_modules \
+	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tools/check_architecture tools/check_repository_contracts tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/test_common_tokenizer tests/test_canonical_compiler tests/test_sqlite_backend tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
 
