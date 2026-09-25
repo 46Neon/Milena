@@ -2142,7 +2142,7 @@ static void check_termux_runner_contract(void)
         "-I -f milena", "termux-runner-preflight.sh", "make tools/check_repository_contracts",
         "tools/check_repository_contracts termux-recipe", "validate_termux_artifact.py",
         "tools/validate_termux_elf", "termux-real-smoke.sh",
-        "pkg install", "pkg upgrade", "pkg remove", "upload-artifact@v4", "if-no-files-found: error"
+        "pkg install/remove", "never run pkg upgrade", "upload-artifact@v4", "if-no-files-found: error"
     };
     static const char *const preflight_fragments[] = {
         "[[ \"$ARCH\" == aarch64 ]]", "[[ \"$DPKG_ARCH\" == aarch64 ]]",
