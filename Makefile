@@ -30,7 +30,7 @@ TEST_SQLITE_OBJECT = third_party/sqlite/sqlite3.o
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer test-ast-validation check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-hir-ast-coverage debug
+.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-markdown-links check-compiler-boundary test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer test-ast-validation check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-hir-ast-coverage debug
 
 .PHONY: test-common-tokenizer
 test-common-tokenizer: tests/test_common_tokenizer
@@ -304,6 +304,9 @@ SST_TEST_SOURCES = src/common.c src/sst_dates.c src/sst_model.c \
                    src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
                    src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c
 
+check-markdown-links: tools/check_repository_contracts
+	./tools/check_repository_contracts markdown-links $(shell find . -type f -name '*.md' -not -path './.git/*' | sort)
+
 check-source-manifest: tools/check_repository_contracts
 	./tools/check_repository_contracts source-manifest $(wildcard src/*.c)
 
@@ -316,14 +319,14 @@ check-stream-architecture: check-source-manifest tools/check_repository_contract
 check-unification-architecture: check-hir-ast-coverage
 	./tools/check_architecture architecture
 
-check-termux-packaging:
-	python3 scripts/check_termux_packaging.py
+check-termux-packaging: tools/check_repository_contracts
+	./tools/check_repository_contracts termux-packaging
 
-check-termux-runner-contract:
-	python3 scripts/check_termux_runner_contract.py
+check-termux-runner-contract: tools/check_repository_contracts
+	./tools/check_repository_contracts termux-runner-contract
 
-check-termux-industrial:
-	python3 scripts/check_termux_industrial.py
+check-termux-industrial: tools/check_repository_contracts
+	./tools/check_repository_contracts termux-industrial
 
 check-compiler-boundary: tools/check_repository_contracts
 	./tools/check_repository_contracts compiler-boundary $(wildcard src/*.c)
@@ -401,7 +404,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
 	./tests/run_tests.sh
 	./tests/run_tests.sh
 
