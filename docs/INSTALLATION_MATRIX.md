@@ -46,8 +46,10 @@ No usar scripts remotos ejecutados directamente por `curl | sh` como sustituto d
 
 ### Android AArch64 / Termux
 
-- Construir en un dispositivo Android AArch64 con Clang/Bionic usando el `build-package.sh` oficial de Termux; guardar SHA, procedencia, metadatos del `.deb` y evidencia del dispositivo/commit.
-- Probar `pkg install`, `pkg upgrade`, ejecución y `pkg remove` en Termux real. Verificar `uname -m`, `dpkg --print-architecture`, `$PREFIX` y el ELF.
+- Construir en Android AArch64 con Clang/Bionic usando el `build-package.sh` oficial de Termux; guardar SHA, procedencia, metadatos del `.deb` y evidencia del dispositivo/commit.
+- Probar `pkg install`, `pkg upgrade`, ejecución y `pkg remove` en Termux real. Verificar literalmente `uname -m=aarch64`, `dpkg --print-architecture=aarch64`, `$PREFIX` y el ELF.
+- La evidencia AArch64 satisface el gate del dispositivo objetivo, pero no demuestra por sí sola compatibilidad con todos los targets del repositorio oficial de Termux. Antes de enviar la receta, confirmar su matriz de arquitecturas (Termux contempla `aarch64`, `arm`, `i686` y `x86_64`) o justificar y acordar la limitación con sus mantenedores.
+- Confirmar que `TERMUX_PKG_LICENSE` usa identificadores aceptados y que el paquete instala los avisos/licencias correspondientes; reemplazar la identidad genérica del mantenedor por la aprobada para la contribución.
 - Completar la aceptación/publicación de la receta o registrar y probar explícitamente un repositorio APT propio. Ubuntu no sustituye esta evidencia.
 
 ## Fuente de estado
