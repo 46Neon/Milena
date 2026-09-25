@@ -27,7 +27,7 @@ La cobertura de lowering AST → IR tipada en esta iteración es **0 de 72 valor
 
 No se implementan aún lowering desde AST tipado, firmas/parámetros/llamadas/variables, parámetros de entrada, ciclos con semántica de lenguaje, conversiones, operadores adicionales, arrays, nulos, cadenas, datasets/tablas, joins, estadísticas, CSV/IO, SQL ni streams; tampoco spans de origen, efectos, errores, ownership y límites de recursos en instrucciones IR, bytecode portable serializable/versionado, lector/validador de bytecode, VM de referencia, ejecución diferencial o cobertura completa por constructo. Aunque ya hay aristas tipadas y dominancia en la IR experimental, no hay frontend que las produzca ni semántica ejecutable.
 
-Este incremento añade pruebas para merge de valores en un diamante, uso de valor dominante entre bloques, rechazo de argumentos de arista faltantes/duplicados/de tipo incorrecto, rechazo de valor definido en bloque hermano y de uso no dominante, y rechazo de bloques inalcanzables. Debe ejecutarse el target dedicado en GCC, Clang y sanitizadores contra el SHA publicado; las pruebas locales no sustituyen CI.
+Este incremento añade pruebas para merge de valores en un diamante y valor de bucle transferido por backedge, uso de valor dominante entre bloques, rechazo de argumentos de arista faltantes/duplicados/de tipo incorrecto, rechazo de valor definido en bloque hermano y de uso no dominante, y rechazo de bloques inalcanzables. Debe ejecutarse el target dedicado en GCC, Clang y sanitizadores contra el SHA publicado; las pruebas locales no sustituyen CI.
 
 ## Continuación necesaria para el gate de salida de fase 1
 

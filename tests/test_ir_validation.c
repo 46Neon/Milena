@@ -111,7 +111,8 @@ static void build_phi_diamond(IRProgram *program, bool wrong_edge_value) {
 
     assert(ir_program_add_block(program, 20));
     if (wrong_edge_value)
-        assert(append(program, 20, IR_CONST_F64, 5, IR_TYPE_F64, 0, 0, 0, 1.0, 0, 0));
+        assert(ir_block_append_instruction(program, 20, IR_CONST_F64, 5,
+                                           IR_TYPE_F64, 0, 0, 0, 1.0, 0, 0));
     else
         assert(append(program, 20, IR_CONST_I64, 5, IR_TYPE_I64, 0, 0, 2, 0, 0));
     assert(append(program, 20, IR_BRANCH, 0, IR_TYPE_VOID, 0, 0, 0, 30, 0));
@@ -147,6 +148,33 @@ static void test_dominance_and_block_parameter_value_flow(void) {
     build_phi_diamond(program, true);
     assert(!ir_program_validate(program, error, sizeof(error)));
     assert(strstr(error, "wrong type") != NULL);
+    ir_program_destroy(program);
+}
+
+static void test_loop_backedge_value_flow(void) {
+    char error[160];
+    IRProgram *program = ir_program_create();
+    assert(program != NULL);
+    assert(ir_program_add_block(program, 1));
+    assert(append(program, 1, IR_CONST_I64, 1, IR_TYPE_I64, 0, 0, 0, 0, 0));
+    assert(append(program, 1, IR_BRANCH, 0, IR_TYPE_VOID, 0, 0, 0, 10, 0));
+
+    assert(ir_program_add_block(program, 10));
+    assert(ir_program_add_block_parameter(program, 10, 2, IR_TYPE_I64));
+    assert(append(program, 10, IR_CONST_I64, 3, IR_TYPE_I64, 0, 0, 8, 0, 0));
+    assert(append(program, 10, IR_EQ_I64, 4, IR_TYPE_BOOL, 2, 3, 0, 0, 0));
+    assert(append(program, 10, IR_COND_BRANCH, 0, IR_TYPE_VOID, 4, 0, 0, 20, 30));
+
+    assert(ir_program_add_block(program, 20));
+    assert(append(program, 20, IR_CONST_I64, 5, IR_TYPE_I64, 0, 0, 1, 0, 0));
+    assert(append(program, 20, IR_ADD_I64, 6, IR_TYPE_I64, 2, 5, 0, 0, 0));
+    assert(append(program, 20, IR_BRANCH, 0, IR_TYPE_VOID, 0, 0, 0, 10, 0));
+
+    assert(ir_program_add_block(program, 30));
+    assert(append(program, 30, IR_RETURN, 0, IR_TYPE_I64, 2, 0, 0, 0, 0));
+    assert(ir_block_add_edge_argument(program, 1, 10, 0, 1));
+    assert(ir_block_add_edge_argument(program, 20, 10, 0, 6));
+    assert(ir_program_validate(program, error, sizeof(error)));
     ir_program_destroy(program);
 }
 
@@ -211,6 +239,7 @@ int main(void) {
     test_rejects_missing_terminator_and_unknown_legacy_opcode();
     test_rejects_missing_branch_target();
     test_dominance_and_block_parameter_value_flow();
+    test_loop_backedge_value_flow();
     test_rejects_missing_or_duplicate_edge_arguments();
     test_rejects_undominated_direct_use_and_unreachable_block();
     puts("typed IR structural/type/control-flow validation tests passed");
