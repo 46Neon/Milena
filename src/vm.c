@@ -8,11 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TYPED_VM_DEFAULT_STEPS UINT64_C(1000000)
-#define TYPED_VM_HARD_MAX_STEPS UINT64_C(100000000)
-#define TYPED_VM_DEFAULT_DEPTH 128u
-#define TYPED_VM_HARD_MAX_DEPTH 128u
-#define TYPED_VM_MAX_LIVE_BYTES ((size_t)64u * 1024u * 1024u)
+#define VM_DEFAULT_STEPS UINT64_C(1000000)
+#define VM_HARD_MAX_STEPS UINT64_C(100000000)
+#define VM_DEFAULT_DEPTH 128u
+#define VM_HARD_MAX_DEPTH 128u
+#define VM_MAX_LIVE_BYTES ((size_t)64u * 1024u * 1024u)
 
 typedef struct {
     uint32_t id;
@@ -45,7 +45,7 @@ static void *vm_calloc(VMExecution *execution, size_t count, size_t size) {
     void *allocation;
     if (!execution || (size && count > SIZE_MAX / size)) return NULL;
     bytes = count * size;
-    if (bytes > TYPED_VM_MAX_LIVE_BYTES - execution->live_bytes) return NULL;
+    if (bytes > VM_MAX_LIVE_BYTES - execution->live_bytes) return NULL;
     allocation = calloc(count, size);
     if (allocation) execution->live_bytes += bytes;
     return allocation;
@@ -497,10 +497,10 @@ bool vm_run(const uint8_t *bytecode, size_t bytecode_size,
     if (!result || !entry_symbol_id)
         return vm_error(&execution, "VM requires a result destination and entry symbol");
     if (options) selected = *options;
-    if (!selected.max_steps) selected.max_steps = TYPED_VM_DEFAULT_STEPS;
-    if (!selected.max_call_depth) selected.max_call_depth = TYPED_VM_DEFAULT_DEPTH;
-    if (selected.max_steps > TYPED_VM_HARD_MAX_STEPS ||
-        selected.max_call_depth > TYPED_VM_HARD_MAX_DEPTH)
+    if (!selected.max_steps) selected.max_steps = VM_DEFAULT_STEPS;
+    if (!selected.max_call_depth) selected.max_call_depth = VM_DEFAULT_DEPTH;
+    if (selected.max_steps > VM_HARD_MAX_STEPS ||
+        selected.max_call_depth > VM_HARD_MAX_DEPTH)
         return vm_error(&execution, "VM execution limits exceed the supported maximum");
     execution.max_steps = selected.max_steps;
     execution.max_depth = selected.max_call_depth;

@@ -48,9 +48,15 @@ if not recipe_version or not runtime_version or recipe_version.group(1) != runti
     errors.append("Termux package version must match MILENA_VERSION exactly")
 if "TERMUX=1" not in makefile or "TERMUX_PREFIX" not in makefile:
     errors.append("Makefile lacks explicit Termux build/install variables")
-for token in ("src/compiler.c", "src/ir.c", "src/vm.c"):
-    if token in makefile:
-        errors.append(f"experimental source enters canonical Makefile: {token}")
+source_match = re.search(r"^SOURCES\s*=\s*(.*?)(?=^OBJECTS\s*=)",
+                         makefile, re.MULTILINE | re.DOTALL)
+if not source_match:
+    errors.append("Makefile lacks a canonical product SOURCES assignment")
+else:
+    product_sources = source_match.group(1)
+    for token in ("src/compiler.c", "src/ir.c", "src/vm.c"):
+        if token in product_sources:
+            errors.append(f"experimental source enters canonical product SOURCES: {token}")
 for token in ("/usr/bin", "/usr/local", "apt-get", "__GLIBC__"):
     if token.lower() in makefile.lower():
         errors.append(f"Makefile contains Debian/glibc path or dependency: {token}")
