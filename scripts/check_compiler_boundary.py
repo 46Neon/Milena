@@ -13,7 +13,7 @@ EXPERIMENTAL = {
 }
 CANONICAL = {
     "lexer.c", "parser.c", "ast.c", "language_semantic.c", "language_runtime.c",
-    "canonical_compiler.c", "canonical_ir.c", "table.c", "dataset.c",
+    "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "table.c", "dataset.c",
 }
 errors = []
 # Capture the complete SOURCES assignment, including its continuation lines.
