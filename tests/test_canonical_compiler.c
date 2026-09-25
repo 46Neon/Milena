@@ -1332,12 +1332,18 @@ int main(void) {
         "funcion restar(a, b) { retornar a - b; } "
         "funcion multiplicar(a, b) { retornar a * b; } "
         "funcion dividir(a, b) { retornar a / b; } "
-        "funcion igual(a, b) { retornar a == b; } "
-        "funcion distinto(a, b) { retornar a != b; } "
-        "funcion menor(a, b) { retornar a < b; } "
-        "funcion menor_igual(a, b) { retornar a <= b; } "
-        "funcion mayor(a, b) { retornar a > b; } "
-        "funcion mayor_igual(a, b) { retornar a >= b; } "
+        "funcion igual(a, b) { si (a == b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion distinto(a, b) { si (a != b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion menor(a, b) { si (a < b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion menor_igual(a, b) { si (a <= b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion mayor(a, b) { si (a > b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion mayor_igual(a, b) { si (a >= b) { retornar 1; } "
+        "sino { retornar 0; } } "
         "funcion elegir(x, y) { variable resultado = 0; "
         "si (x > y) { resultado = x; } sino { resultado = y; } "
         "retornar resultado; } "
@@ -1346,7 +1352,8 @@ int main(void) {
         "sino { nivel = 0; } retornar nivel; } "
         "funcion positivo(x) { si (x > 0) { retornar x; } "
         "sino { retornar 0; } } "
-        "funcion verdadero_fijo() { retornar verdadero; }";
+        "funcion booleano_local(x) { variable listo = x > 0; "
+        "si (listo) { retornar 1; } sino { retornar 0; } }";
     CHECK(milena_canonical_program_parse(&program, scalar_vm_source, &error) ==
               MILENA_OK, error.message);
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
@@ -1368,13 +1375,13 @@ int main(void) {
         {"restar", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 3.0, false},
         {"multiplicar", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 18.0, false},
         {"dividir", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 2.0, false},
-        {"igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
-        {"igual", {6.0, 3.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, false},
-        {"distinto", {6.0, 3.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
-        {"menor", {3.0, 6.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
-        {"menor_igual", {3.0, 3.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
-        {"mayor", {6.0, 3.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
-        {"mayor_igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_BOOL, 0.0, true},
+        {"igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"igual", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 0.0, false},
+        {"distinto", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"menor", {3.0, 6.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"menor_igual", {3.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"mayor", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"mayor_igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
         {"elegir", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 6.0, false},
         {"elegir", {2.0, 9.0}, 2u, MILENA_IR_TYPE_F64, 9.0, false},
         {"clasificar", {11.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 2.0, false},
@@ -1382,7 +1389,8 @@ int main(void) {
         {"clasificar", {-1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false},
         {"positivo", {2.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 2.0, false},
         {"positivo", {-2.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false},
-        {"verdadero_fijo", {0.0, 0.0}, 0u, MILENA_IR_TYPE_BOOL, 0.0, true}
+        {"booleano_local", {1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"booleano_local", {-1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false}
     };
     char scalar_vm_error[256] = {0};
     for (size_t i = 0; i < sizeof(scalar_cases) / sizeof(scalar_cases[0]); ++i)
