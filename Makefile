@@ -18,7 +18,7 @@ endif
 CPPFLAGS += -Iinclude -Ithird_party/nanoarrow/include -Ithird_party/sqlite
 SQLITE_CFLAGS = -DSQLITE_THREADSAFE=1 -DSQLITE_DQS=0 -DSQLITE_OMIT_LOAD_EXTENSION
 SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/dataset.c src/analysis.c src/script.c src/main.c \
-          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/arrow_ipc.c src/language_runtime.c src/language_grouped_spill.c src/canonical_compiler.c src/interpreter.c \
+          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/arrow_ipc.c src/language_runtime.c src/language_grouped_spill.c src/canonical_compiler.c src/canonical_ir.c src/interpreter.c \
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
@@ -334,7 +334,7 @@ check-hir-ast-coverage:
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
-tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/ir.c
+tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/canonical_ir.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 test-termux-packaging: check-termux-packaging
