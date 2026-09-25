@@ -342,17 +342,24 @@ int main(void) {
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
           "funcion nested_local(x, y) { variable z = 0; "
-          "si (x > 0) { si (y > 0) { variable temporal = x; z = temporal; } "
-          "sino { z = y; } } sino { z = 0; } retornar z; }", &error) ==
-              MILENA_OK, error.message);
+          "si (x > 0) { variable valido = y > 0; "
+          "si (valido) { variable temporal = x; z = temporal; } "
+          "sino { variable temporal = y; z = temporal; } } "
+          "sino { variable temporal = 0; z = temporal; } retornar z; }",
+          &error) == MILENA_OK, error.message);
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
-              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
-          strstr(error.message, "declarations") != NULL,
-          "una declaración local de rama anidada debe fallar cerrado sin IR parcial");
+              MILENA_OK && program.typed_ir != NULL,
+          error.message);
+    {
+        char validation_error[256] = {0};
+        CHECK(milena_ir_program_validate(program.typed_ir, validation_error,
+                                         sizeof(validation_error)),
+              validation_error);
+    }
     milena_canonical_program_release(&program);
 
-    /* The current merge slice is intentionally closed: no implicit fallthrough
-       and no branch-local declaration escapes into the merge. */
+    /* Branch-local declarations lower into branch-scoped SSA bindings and do
+       not escape the conditional merge. */
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
           "funcion sin_sino(x) { variable y = 0; "
@@ -368,12 +375,33 @@ int main(void) {
     CHECK(milena_canonical_program_parse(&program,
           "funcion local_branch(x) { variable y = 0; "
           "si (x > 0) { variable temporal = x; y = temporal; } "
-          "sino { y = 0; } retornar y; }", &error) == MILENA_OK,
-          error.message);
+          "sino { variable temporal = 0; y = temporal; } retornar y; }",
+          &error) == MILENA_OK, error.message);
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
-              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
-          strstr(error.message, "existing bindings") != NULL,
-          "las declaraciones con alcance de rama deben rechazarse sin bajar parcialmente");
+              MILENA_OK && program.typed_ir != NULL, error.message);
+    {
+        char validation_error[256] = {0};
+        CHECK(milena_ir_program_validate(program.typed_ir, validation_error,
+                                         sizeof(validation_error)),
+              validation_error);
+    }
+    /* Poison a post-merge reference with a branch-local symbol ID. Lowering
+       must reject it instead of turning a lexical local into a phi input. */
+    {
+        size_t branch_local_id = program.hir->functions[0].body[1]
+            ->as.conditional.then_body[0]->resolved_symbol_id;
+        MilenaHIRExpression *returned = program.hir->functions[0]
+            .body[2]->as.expression;
+        CHECK(branch_local_id != 0 && returned != NULL,
+              "la prueba debe localizar el binding local y el retorno");
+        returned->resolved_symbol_id = branch_local_id;
+        milena_ir_program_destroy(program.typed_ir);
+        program.typed_ir = NULL;
+        CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+                  MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
+              strstr(error.message, "binding") != NULL,
+              "un binding local de rama no debe escapar al bloque merge");
+    }
     milena_canonical_program_release(&program);
 
     milena_canonical_program_init(&program);
