@@ -1,10 +1,18 @@
 /* ISO C17 repository contracts for source boundaries, docs, and Termux packaging. */
+#define _POSIX_C_SOURCE 200809L
 #include <ctype.h>
+#include <errno.h>
+#include <strings.h>
+#include <sys/stat.h>
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include "milena_sha256.h"
 
 #define ARRAY_COUNT(items) (sizeof(items) / sizeof((items)[0]))
 
@@ -1594,10 +1602,18 @@ static char *capture_recipe_assignment(const char *text, const char *name, bool 
                 while (end < line_end && *end != quote) {
                     ++end;
                 }
+                if (end == line_end) {
+                    line = *line_end == '\0' ? line_end : line_end + 1;
+                    continue;
+                }
             } else {
                 end = start;
                 while (end < line_end && isspace((unsigned char)*end) == 0 && *end != '#') {
                     ++end;
+                }
+                if (end == start) {
+                    line = *line_end == '\0' ? line_end : line_end + 1;
+                    continue;
                 }
             }
             {
@@ -1708,6 +1724,175 @@ static bool recipe_has_debian_usr_bin(const char *text)
         ++cursor;
     }
     return false;
+}
+
+static char *join_recipe_path(const char *directory, const char *leaf)
+{
+    size_t directory_length = strlen(directory);
+    size_t leaf_length = strlen(leaf);
+    bool slash = directory_length != 0U && directory[directory_length - 1U] != '/';
+    char *path;
+    if (directory_length > (size_t)-1 - leaf_length - (slash ? 2U : 1U)) {
+        return NULL;
+    }
+    path = (char *)malloc(directory_length + leaf_length + (slash ? 2U : 1U));
+    if (path == NULL) {
+        return NULL;
+    }
+    memcpy(path, directory, directory_length);
+    if (slash) {
+        path[directory_length++] = '/';
+    }
+    memcpy(path + directory_length, leaf, leaf_length + 1U);
+    return path;
+}
+
+static char *recipe_source_url(const char *source, const char *version)
+{
+    static const char token[] = "${TERMUX_PKG_VERSION}";
+    const char *match = strstr(source, token);
+    size_t prefix, suffix, version_length;
+    char *result;
+    if (match == NULL) {
+        return NULL;
+    }
+    prefix = (size_t)(match - source);
+    suffix = strlen(match + sizeof(token) - 1U);
+    version_length = strlen(version);
+    if (prefix > (size_t)-1 - version_length - suffix - 1U) {
+        return NULL;
+    }
+    result = (char *)malloc(prefix + version_length + suffix + 1U);
+    if (result == NULL) {
+        return NULL;
+    }
+    memcpy(result, source, prefix);
+    memcpy(result + prefix, version, version_length);
+    memcpy(result + prefix + version_length, match + sizeof(token) - 1U, suffix + 1U);
+    return result;
+}
+
+static bool fetch_recipe_digest(const char *url, const char *expected, StringList *errors)
+{
+    char temporary[] = "milena-termux-recipe-XXXXXX";
+    int fd = mkstemp(temporary);
+    pid_t child;
+    int status;
+    char actual[65];
+    uint64_t file_size;
+    bool success = false;
+    if (fd < 0) {
+        list_add(errors, "could not create temporary file for source SHA256 validation");
+        return false;
+    }
+    (void)close(fd);
+    child = fork();
+    if (child == 0) {
+        execlp("curl", "curl", "--location", "--fail", "--silent", "--show-error",
+               "--max-time", "30", "--output", temporary, url, (char *)NULL);
+        _exit(127);
+    }
+    if (child < 0) {
+        list_add(errors, "could not start curl for source SHA256 validation");
+    } else {
+        pid_t waited;
+        do {
+            waited = waitpid(child, &status, 0);
+        } while (waited < 0 && errno == EINTR);
+        if (waited < 0) {
+            list_add(errors, "could not wait for curl during source SHA256 validation");
+        } else if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            if (milena_sha256_file(temporary, actual, &file_size) != 0) {
+                list_add(errors, "could not read fetched source for SHA256 validation");
+            } else if (strcmp(actual, expected) != 0 && strcasecmp(actual, expected) != 0) {
+                list_addf(errors, "source SHA256 mismatch: fetched %s", actual);
+            } else {
+                success = true;
+            }
+        } else {
+            list_add(errors, "could not fetch TERMUX_PKG_SRCURL for digest validation");
+        }
+    }
+    (void)unlink(temporary);
+    return success;
+}
+
+static void check_termux_recipe(int argc, char **argv)
+{
+    const char *recipe_path = "packaging/termux-packages/milena/build.sh";
+    const char *official_dir = NULL;
+    bool fetch = false;
+    char *recipe_text;
+    char *values[9];
+    static const char *const required[] = {
+        "TERMUX_PKG_HOMEPAGE", "TERMUX_PKG_DESCRIPTION", "TERMUX_PKG_LICENSE",
+        "TERMUX_PKG_MAINTAINER", "TERMUX_PKG_VERSION", "TERMUX_PKG_SRCURL",
+        "TERMUX_PKG_SHA256", "TERMUX_PKG_DEPENDS", "TERMUX_PKG_BUILD_IN_SRC"
+    };
+    StringList errors;
+    int argument;
+    size_t index;
+    list_init(&errors);
+    for (argument = 2; argument < argc; ++argument) {
+        if (strcmp(argv[argument], "--fetch") == 0) {
+            fetch = true;
+        } else if (strcmp(argv[argument], "--official-dir") == 0 && argument + 1 < argc) {
+            official_dir = argv[++argument];
+        } else if (strncmp(argv[argument], "--official-dir=", 15U) == 0) {
+            official_dir = argv[argument] + 15U;
+        } else if (argv[argument][0] == '-') {
+            (void)fprintf(stderr, "ERROR: unknown termux-recipe option: %s\n", argv[argument]);
+            return;
+        } else if (strcmp(recipe_path, "packaging/termux-packages/milena/build.sh") == 0) {
+            recipe_path = argv[argument];
+        } else {
+            (void)fprintf(stderr, "ERROR: more than one recipe path provided\n");
+            return;
+        }
+    }
+    recipe_text = optional_read_file(recipe_path);
+    if (recipe_text == NULL) {
+        (void)fprintf(stderr, "ERROR: cannot read recipe: %s\n", recipe_path);
+        return;
+    }
+    validate_termux_recipe_static(&errors, recipe_text);
+    for (index = 0U; index < ARRAY_COUNT(required); ++index) {
+        values[index] = capture_recipe_assignment(recipe_text, required[index], false);
+    }
+    if (fetch && errors.count == 0U) {
+        char *url = recipe_source_url(values[5], values[4]);
+        if (url == NULL) {
+            list_add(&errors, "could not resolve TERMUX_PKG_SRCURL version token");
+        } else {
+            (void)fetch_recipe_digest(url, values[6], &errors);
+            free(url);
+        }
+    }
+    if (official_dir != NULL) {
+        char *path = join_recipe_path(official_dir, "build-package.sh");
+        struct stat file_status;
+        if (path == NULL) {
+            list_add(&errors, "could not allocate official build-package.sh path");
+        } else if (stat(path, &file_status) != 0 || !S_ISREG(file_status.st_mode)) {
+            list_addf(&errors, "official checkout missing %s", path);
+        } else if (access(path, X_OK) != 0) {
+            list_addf(&errors, "official build-package.sh is not executable: %s", path);
+        }
+        free(path);
+    }
+    for (index = 0U; index < ARRAY_COUNT(required); ++index) {
+        free(values[index]);
+    }
+    free(recipe_text);
+    if (errors.count != 0U) {
+        for (index = 0U; index < errors.count; ++index) {
+            (void)fprintf(stderr, "ERROR: %s\n", errors.items[index]);
+        }
+        list_free(&errors);
+        exit(EXIT_FAILURE);
+    }
+    (void)printf("Termux candidate recipe: valid metadata and Termux paths\n");
+    list_free(&errors);
 }
 
 static void validate_termux_recipe_static(StringList *errors, const char *recipe_text)
@@ -2024,7 +2209,7 @@ static void check_termux_runner_contract(void)
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        (void)fprintf(stderr, "usage: %s source-manifest|experimental-isolation|compiler-boundary|stream-architecture|markdown-links|termux-packaging|termux-runner-contract|termux-industrial [paths...]\n", argv[0]);
+        (void)fprintf(stderr, "usage: %s source-manifest|experimental-isolation|compiler-boundary|stream-architecture|markdown-links|termux-packaging|termux-recipe|termux-runner-contract|termux-industrial [paths...]\n", argv[0]);
         return EXIT_FAILURE;
     }
     if (strcmp(argv[1], "source-manifest") == 0) {
@@ -2039,6 +2224,8 @@ int main(int argc, char **argv)
         check_markdown_links(argc, argv);
     } else if (strcmp(argv[1], "termux-packaging") == 0) {
         check_termux_packaging();
+    } else if (strcmp(argv[1], "termux-recipe") == 0) {
+        check_termux_recipe(argc, argv);
     } else if (strcmp(argv[1], "termux-runner-contract") == 0) {
         check_termux_runner_contract();
     } else if (strcmp(argv[1], "termux-industrial") == 0) {
