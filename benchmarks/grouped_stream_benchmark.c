@@ -243,7 +243,7 @@ static bool run_case(CaseResult *result, const char *binary, const char *label,
     uint64_t expected_bad;
     char *report;
     double process_seconds;
-    double value;
+    uint64_t actual_group_limit;
     bool invalid_ok;
     (void)remove(REPORT_PATH);
     if (!write_csv(rows, groups, malformed_every, &expected_bad) || !write_program(groups) || !run_milena(binary, &process_seconds)) return false;
@@ -251,7 +251,7 @@ static bool run_case(CaseResult *result, const char *binary, const char *label,
     if (report == NULL) return false;
     if (!json_u64(report, "filas", &result->rows) || !json_u64(report, "filas_validas", &result->rows_valid) ||
         !json_u64(report, "filas_malformadas", &result->rows_malformed) || !json_u64(report, "grupos", &result->groups) ||
-        !json_u64(report, "limite_grupos", &value) || (uint64_t)value != groups || !json_u64(report, "bytes_entrada", &result->bytes) ||
+        !json_u64(report, "limite_grupos", &actual_group_limit) || actual_group_limit != groups || !json_u64(report, "bytes_entrada", &result->bytes) ||
         !json_u64(report, "pico_registro_bytes", &result->record_bytes) || !json_u64(report, "capacidad_buffer_registro_bytes", &result->record_capacity) ||
         !json_number(report, "tiempo_ms", &result->backend_milliseconds) || !json_number(report, "filas_por_segundo", &result->rows_per_second) ||
         !json_number(report, "megabytes_por_segundo", &result->megabytes_per_second)) { free(report); return false; }
