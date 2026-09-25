@@ -14,7 +14,7 @@ CLI milena run
 Ruta objetivo explícita: lexer → parser → AST tipado → semántica → HIR → plan físico → runtime/backend.
 ```
 
-El AST pasa por `milena_validate_ast` antes de aceptar una ejecución de dataset. Para los comandos soportados, `milena_run_dataset_program` conecta el frontend con los límites del runtime: `MilenaDataHIR` se construye, se vincula a tablas tipadas y lo consume `milena_canonical_program_execute_data`; CSV streaming, Arrow IPC y SQL consumen sus planificadores tipados y validadores antes del backend correspondiente. `scripts/check_unification_architecture.py` comprueba estas conexiones y `scripts/check_hir_ast_coverage.py` verifica el inventario cerrado de HIR.
+El AST pasa por `milena_validate_ast` antes de aceptar una ejecución de dataset. Para los comandos soportados, `milena_run_dataset_program` conecta el frontend con los límites del runtime: `MilenaDataHIR` se construye, se vincula a tablas tipadas y lo consume `milena_canonical_program_execute_data`; CSV streaming, Arrow IPC y SQL consumen sus planificadores tipados y validadores antes del backend correspondiente. Los targets C17 del Makefile son `make check-hir-ast-coverage`, que verifica el inventario cerrado de HIR, y `make check-unification-architecture`, que depende del anterior y comprueba estas conexiones. El target `make test` ejecuta ambos como parte de sus guardas de arquitectura.
 
 `analizar`, `perfil` e `inspect` son adaptadores CLI de compatibilidad: `main.c` delega en `entrypoints.c`, cuya entrada sintética pasa por lexer/parser/AST/semántica antes de invocar las APIs C históricas de Dataset/análisis. No son una ruta para agregar sintaxis o capacidades nuevas.
 
