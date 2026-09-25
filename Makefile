@@ -341,7 +341,7 @@ tests/test_typed_bytecode: tests/test_typed_bytecode.c src/vm.c src/gc.c src/typ
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
-tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/gc.c src/canonical_ir.c src/typed_bytecode.c src/vm.c include/vm.h include/typed_bytecode.h include/typed_ir.h include/ir.h include/dataset.h include/gc.h
+tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/query_plan.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/gc.c src/canonical_ir.c src/typed_bytecode.c src/vm.c include/canonical_compiler.h include/query_plan.h include/vm.h include/typed_bytecode.h include/typed_ir.h include/ir.h include/dataset.h include/gc.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
 
 test-termux-packaging: check-termux-packaging

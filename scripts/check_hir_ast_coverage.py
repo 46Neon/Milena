@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 AST_HEADER = (ROOT / "include/ast.h").read_text(encoding="utf-8")
 HIR_SOURCE = (ROOT / "src/canonical_compiler.c").read_text(encoding="utf-8")
+QUERY_PLAN_SOURCE = (ROOT / "src/query_plan.c").read_text(encoding="utf-8")
 HIR_DOC = (ROOT / "docs/COMPILADOR_IR_PLAN.md").read_text(encoding="utf-8")
 
 
@@ -128,13 +129,47 @@ if not expression_nodes | statement_nodes <= represented:
 if "node->type != AST_DECLARACION_FUNCION" not in HIR_SOURCE:
     fail("function declarations must remain handled by the scalar HIR builder")
 
+arrow_builder = function_body(
+    QUERY_PLAN_SOURCE,
+    "MilenaStatus milena_arrow_ipc_execution_plan_build("
+)
+arrow_cases = set(re.findall(r"\bcase\s+(AST_[A-Z0-9_]+)\s*:", arrow_builder))
+expected_arrow_cases = {
+    "AST_LLAMADA_CARGAR", "AST_COLUMNAR_PROJECT", "AST_STREAM_FILTER",
+    "AST_BLOQUE_EXPORTAR", "AST_DECLARACION_VARIABLE",
+}
+if arrow_cases != expected_arrow_cases:
+    fail(
+        "Arrow IPC plan cases differ from the audited contract; "
+        f"missing={sorted(expected_arrow_cases - arrow_cases)}, "
+        f"extra={sorted(arrow_cases - expected_arrow_cases)}"
+    )
+if "AST_COLUMNAR_FIELD" not in arrow_builder or \
+   "MILENA_ERR_UNSUPPORTED" not in arrow_builder or "default:" not in arrow_builder:
+    fail("Arrow IPC plan must validate projected fields and reject unknown AST nodes")
+canonical_parse = function_body(
+    HIR_SOURCE, "MilenaStatus milena_canonical_program_parse("
+)
+if "milena_arrow_ipc_execution_plan_build" not in canonical_parse or \
+   "program->arrow_plan = arrow_plan" not in canonical_parse:
+    fail("the canonical parser must own the validated Arrow IPC typed plan")
+compatibility_entry = function_body(
+    HIR_SOURCE, "MilenaStatus milena_canonical_compatibility_input("
+)
+if "input->arrow_plan = program->arrow_plan" not in compatibility_entry:
+    fail("the compiler input must expose the Arrow plan as a borrowed view")
 hir_entry = function_body(HIR_SOURCE, "MilenaStatus milena_canonical_hir_input(")
 if "MILENA_ERR_UNSUPPORTED" not in hir_entry or "hir_first_unsupported_node" not in hir_entry:
     fail("the public HIR-only entry point must fail closed and locate an unsupported node")
+if "if (!program->hir && !program->data_hir)" not in hir_entry:
+    fail("an Arrow plan must not bypass the strict HIR lowering requirement")
+if "milena_canonical_compatibility_input(program, input, error)" not in hir_entry:
+    fail("the strict HIR entry must delegate only after a real HIR exists")
 
 print(
     "HIR AST coverage: "
-    f"scalar={len(represented)} represented/{len(rejected)} outside; "
-    f"data={len(data_represented)} represented/{len(ast_nodes - data_represented)} fail-closed; "
-    "all ASTNodeType values classified in both closed subsets."
+    f"scalar={len(represented)} represented/{len(rejected)} outside scalar HIR; "
+    f"data={len(data_represented)} represented/{len(ast_nodes - data_represented)} outside data HIR; "
+    f"Arrow plan={len(expected_arrow_cases) + 1} typed node kinds; "
+    "all ASTNodeType values classified in the closed subsets."
 )

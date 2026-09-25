@@ -1,6 +1,7 @@
 #include "canonical_compiler.h"
 #include "typed_ir.h"
 #include "typed_bytecode.h"
+#include "query_plan.h"
 #include "vm.h"
 
 #include <stdio.h>
@@ -1442,6 +1443,69 @@ int main(void) {
     free(scalar_bytecode);
     milena_canonical_program_release(&program);
 
-    puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, binding, execution and diagnostics");
+    /* Arrow IPC plans are owned by the canonical program and exposed only
+     * through the compatibility view; they are not typed HIR/IR compiler input. */
+    const char *arrow_source =
+        ".analisis arrow_hir { "
+        "variable id numerica "
+        "datos desde \"entrada.arrow\" formato arrow_stream "
+        "procesar por lotes de 32 filas "
+        "con lote hasta 33554432 bytes con columnas de 32 "
+        "con filas hasta 100000 con tiempo hasta 30000 ms "
+        "con bytes hasta 67108864 con salida hasta 67108864 bytes "
+        "filtrar \"id\" > 10; "
+        "proyectar { \"id\" } "
+        "guardar resultado en \"salida.arrow\" }";
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, arrow_source, &error) ==
+              MILENA_OK, error.message);
+    CHECK(program.arrow_plan != NULL && program.hir == NULL &&
+          program.data_hir == NULL,
+          "Arrow IPC debe conservar un plan tipado separado de las HIR escalar y tabular");
+    CHECK(program.arrow_plan->source->type == AST_LLAMADA_CARGAR &&
+          program.arrow_plan->projection->child_count == 1 &&
+          program.arrow_plan->filter != NULL &&
+          program.arrow_plan->sink->type == AST_BLOQUE_EXPORTAR,
+          "el plan Arrow debe representar fuente, filtro, proyección y salida");
+    CHECK(milena_arrow_ipc_execution_plan_validate(program.arrow_plan, &error) ==
+              MILENA_OK, error.message);
+    input = (MilenaCanonicalCompilerInput){0};
+    CHECK(milena_canonical_compatibility_input(&program, &input, &error) ==
+              MILENA_OK && input.arrow_plan == program.arrow_plan &&
+          input.ast == program.ast && input.hir == NULL && input.data_hir == NULL,
+          "la vista de compatibilidad debe exponer el plan Arrow tipado prestado");
+    input = (MilenaCanonicalCompilerInput){0};
+    CHECK(milena_canonical_hir_input(&program, &input, &error) ==
+              MILENA_ERR_UNSUPPORTED && input.ast == NULL &&
+          input.arrow_plan == NULL &&
+          strstr(error.message, "no representa todavía el nodo") != NULL,
+          "la entrada estricta debe rechazar Arrow hasta su lowering HIR real");
+    milena_canonical_program_release(&program);
+    CHECK(program.arrow_plan == NULL,
+          "liberar el programa canónico debe liberar su plan Arrow");
+
+    const char *arrow_invalid_source =
+        ".analisis arrow_tipo_invalido { "
+        "variable id binaria "
+        "datos desde \"entrada.arrow\" formato arrow_stream "
+        "procesar por lotes de 32 filas "
+        "con lote hasta 33554432 bytes con columnas de 32 "
+        "con filas hasta 100000 con tiempo hasta 30000 ms "
+        "con bytes hasta 67108864 con salida hasta 67108864 bytes "
+        "proyectar { \"id\" } "
+        "guardar resultado en \"salida.arrow\" }";
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, arrow_invalid_source, &error) ==
+              MILENA_OK, error.message);
+    CHECK(program.arrow_plan == NULL,
+          "una declaración binaria no debe crear un plan Arrow numérico/textual");
+    input = (MilenaCanonicalCompilerInput){0};
+    CHECK(milena_canonical_hir_input(&program, &input, &error) == MILENA_ERR_TYPE &&
+          input.ast == NULL && input.arrow_plan == NULL &&
+          strstr(error.message, "Arrow projected fields") != NULL,
+          "un plan Arrow inválido debe fallar cerrado con su diagnóstico tipado");
+    milena_canonical_program_release(&program);
+
+    puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, Arrow typed plan, binding, execution and diagnostics");
     return 0;
 }

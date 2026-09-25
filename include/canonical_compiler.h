@@ -5,6 +5,8 @@
 #include "table.h"
 #include "typed_ir.h"
 
+typedef struct MilenaArrowIpcExecutionPlan MilenaArrowIpcExecutionPlan;
+
 /* Provenance key stamped by the canonical loader before a data-HIR table is bound. */
 #define MILENA_HIR_DATASET_PATH_METADATA "milena.hir.dataset.path"
 
@@ -212,6 +214,9 @@ typedef struct {
     const MilenaTable *right_table; /* Borrowed second dataset for a typed join. */
     const MilenaScalarHIR *hir;
     const MilenaDataHIR *data_hir; /* NULL outside the typed data subset. */
+    /* Borrowed typed execution plan for the candidate Arrow STREAM vertical;
+     * not a typed IR module or portable bytecode. */
+    const MilenaArrowIpcExecutionPlan *arrow_plan;
 } MilenaCanonicalCompilerInput;
 
 typedef struct {
@@ -220,6 +225,7 @@ typedef struct {
     const MilenaTable *right_table; /* Borrowed second dataset when HIR has a join. */
     MilenaScalarHIR *hir; /* Owned scalar HIR, when the scalar subset applies. */
     MilenaDataHIR *data_hir; /* Owned data HIR, when the table subset applies. */
+    MilenaArrowIpcExecutionPlan *arrow_plan; /* Owned plan; its AST refs borrow program->ast. */
     MilenaIRProgram *typed_ir; /* Borrowed compatibility view of the first compiled body. */
     MilenaIRModule *typed_module; /* Owned interprocedural IR when the source has calls. */
 } MilenaCanonicalProgram;

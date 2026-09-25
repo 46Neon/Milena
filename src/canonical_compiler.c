@@ -1,6 +1,7 @@
 #include "canonical_compiler.h"
 
 #include "language_semantic.h"
+#include "query_plan.h"
 #include "lexer.h"
 #include "parser.h"
 
@@ -990,6 +991,7 @@ void milena_canonical_program_init(MilenaCanonicalProgram *program) {
     program->right_table = NULL;
     program->hir = NULL;
     program->data_hir = NULL;
+    program->arrow_plan = NULL;
     program->typed_ir = NULL;
     program->typed_module = NULL;
 }
@@ -1008,6 +1010,8 @@ void milena_canonical_program_release(MilenaCanonicalProgram *program) {
     program->hir = NULL;
     data_hir_release(program->data_hir);
     program->data_hir = NULL;
+    free(program->arrow_plan);
+    program->arrow_plan = NULL;
     ast_destroy(program->ast);
     program->ast = NULL;
     program->table = NULL;
@@ -1064,10 +1068,42 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
                         "Sin memoria para construir la HIR de datos canónica");
         return MILENA_ERR_MEMORY;
     }
-    /* ASTs outside both closed HIR subsets remain compatibility-only. */
+    MilenaArrowIpcExecutionPlan *arrow_plan = NULL;
+    if (ast->child_count == 1 && ast->children[0] &&
+        ast->children[0]->type == AST_BLOQUE_ANALISIS) {
+        const ASTNode *analysis = ast->children[0];
+        bool has_arrow_source = false;
+        for (size_t i = 0; i < analysis->child_count; ++i) {
+            const ASTNode *node = analysis->children[i];
+            has_arrow_source |= node && node->type == AST_LLAMADA_CARGAR &&
+                node->type_name &&
+                strcmp(node->type_name, "arrow_ipc_stream") == 0;
+        }
+        if (has_arrow_source) {
+            arrow_plan = (MilenaArrowIpcExecutionPlan *)calloc(1,
+                                                               sizeof(*arrow_plan));
+            if (!arrow_plan) {
+                scalar_hir_release(hir);
+                data_hir_release(data_hir);
+                ast_destroy(ast);
+                canonical_error(error, MILENA_ERR_MEMORY,
+                                "Sin memoria para el plan Arrow IPC canónico");
+                return MILENA_ERR_MEMORY;
+            }
+            MilenaError plan_error = {0};
+            if (milena_arrow_ipc_execution_plan_build(
+                    analysis, arrow_plan, &plan_error) != MILENA_OK) {
+                free(arrow_plan);
+                arrow_plan = NULL;
+            }
+        }
+    }
+    /* ASTs outside the scalar/data HIRs and the Arrow plan remain
+     * compatibility-only. The Arrow plan borrows nodes from this owned AST. */
     program->ast = ast;
     program->hir = hir;
     program->data_hir = data_hir;
+    program->arrow_plan = arrow_plan;
     return MILENA_OK;
 }
 
@@ -1663,6 +1699,7 @@ MilenaStatus milena_canonical_compatibility_input(
         input->right_table = NULL;
         input->hir = NULL;
         input->data_hir = NULL;
+        input->arrow_plan = NULL;
     }
     if (error) milena_error_clear(error);
     if (!program || !program->ast || !input) {
@@ -1675,6 +1712,7 @@ MilenaStatus milena_canonical_compatibility_input(
     input->right_table = program->right_table;
     input->hir = program->hir;
     input->data_hir = program->data_hir;
+    input->arrow_plan = program->arrow_plan;
     return MILENA_OK;
 }
 
@@ -1763,6 +1801,7 @@ MilenaStatus milena_canonical_hir_input(
         input->right_table = NULL;
         input->hir = NULL;
         input->data_hir = NULL;
+        input->arrow_plan = NULL;
     }
     if (error) milena_error_clear(error);
     if (!program || !program->ast || !input) {
@@ -1776,6 +1815,27 @@ MilenaStatus milena_canonical_hir_input(
         return MILENA_ERR_DATA;
     }
     if (!program->hir && !program->data_hir) {
+        if (program->ast->child_count == 1 && program->ast->children[0] &&
+            program->ast->children[0]->type == AST_BLOQUE_ANALISIS) {
+            const ASTNode *analysis = program->ast->children[0];
+            bool has_arrow_source = false;
+            for (size_t i = 0; i < analysis->child_count; ++i) {
+                const ASTNode *node = analysis->children[i];
+                has_arrow_source |= node && node->type == AST_LLAMADA_CARGAR &&
+                    node->type_name &&
+                    strcmp(node->type_name, "arrow_ipc_stream") == 0;
+            }
+            if (has_arrow_source) {
+                MilenaArrowIpcExecutionPlan rejected_plan = {0};
+                MilenaError plan_error = {0};
+                MilenaStatus plan_status = milena_arrow_ipc_execution_plan_build(
+                    analysis, &rejected_plan, &plan_error);
+                if (plan_status != MILENA_OK) {
+                    if (error) *error = plan_error;
+                    return plan_status;
+                }
+            }
+        }
         const ASTNode *unsupported = NULL;
         if (program->ast->child_count == 1 && program->ast->children[0] &&
             program->ast->children[0]->type == AST_BLOQUE_ANALISIS) {
