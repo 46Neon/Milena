@@ -105,7 +105,7 @@ def main() -> int:
             file_recipe = work / "file-fetch.sh"
             url = archive.as_uri().replace("v0.2.0.tar.gz", "v${TERMUX_PKG_VERSION}.tar.gz")
             fetch_source = base.replace(
-                "TERMUX_PKG_SRCURL=https://github.com/46Neon/Milena/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz",
+                'TERMUX_PKG_SRCURL="https://github.com/46Neon/Milena/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz"',
                 f'TERMUX_PKG_SRCURL="{url}"',
             )
             digest = hashlib.sha256(payload).hexdigest()
