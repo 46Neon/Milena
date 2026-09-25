@@ -931,7 +931,7 @@ static void check_architecture(void)
     data_runtime = function_body(runtime_source,
                                  "MilenaStatus milena_run_dataset_program(",
                                  "canonical dataset runtime");
-    ordered(data_runtime, dataset_frontend_stages, "dataset frontend");
+    ordered(data_runtime, dataset_frontend_stages, ARRAY_COUNT(dataset_frontend_stages), "dataset frontend");
     for (index = 0U; index < ARRAY_COUNT(typed_planner_tokens); ++index) {
         if (!span_has(data_runtime, typed_planner_tokens[index])) {
             fail("canonical runtime bypasses a typed planner/runtime stage: %s",
