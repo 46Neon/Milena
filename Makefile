@@ -314,7 +314,7 @@ check-stream-architecture:
 	python3 scripts/check_stream_architecture.py
 
 check-unification-architecture: check-hir-ast-coverage
-	python3 scripts/check_unification_architecture.py
+	./tools/check_architecture architecture
 
 check-termux-packaging:
 	python3 scripts/check_termux_packaging.py
@@ -329,7 +329,7 @@ check-compiler-boundary:
 	python3 scripts/check_compiler_boundary.py
 
 check-hir-ast-coverage:
-	python3 scripts/check_hir_ast_coverage.py
+	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_architecture.c -o tools/check_architecture && ./tools/check_architecture hir
 
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
@@ -403,7 +403,7 @@ test: check-source-manifest check-experimental-isolation check-stream-architectu
 	./tests/run_tests.sh
 
 clean:
-	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tests/test_sst_modules \
+	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tools/check_architecture tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/test_common_tokenizer tests/test_canonical_compiler tests/test_sqlite_backend tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
 
