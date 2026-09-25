@@ -5,11 +5,12 @@ El código fuente y el empaquetado se mantienen separados. La fuente de verdad p
 - `packaging/termux`: construcción del paquete nativo de Termux.
 - `packaging/debian`: construcción independiente para Debian/Ubuntu.
 - `packaging/windows`: ejecutable portable y manifiestos WinGet.
+- `packaging/windows/validate-winget-v020.ps1`: valida e instala localmente el candidato v0.2.0 con WinGet; no lo envía a la fuente pública.
 - `.github/workflows/publish-apt.yml`: publicación del canal APT Termux/AArch64; no es un repositorio Debian/Ubuntu.
 
 ## Estado verificable
 
-La Release `v0.2.0` contiene un `.deb` Debian/Ubuntu `amd64`, un ejecutable y ZIP portable Windows x64 y tres manifiestos WinGet adjuntos. Adjuntar los manifiestos a una Release no los publica en una fuente de WinGet. La receta Termux tiene una URL versionada y un SHA-256 real para `v0.2.0`, pero sigue siendo candidata; la Release no contiene el paquete Termux/AArch64 ni su procedencia exigida por el publicador APT.
+La Release `v0.2.0` contiene un `.deb` Debian/Ubuntu `amd64`, un ejecutable y ZIP portable Windows x64 y tres manifiestos WinGet adjuntos. La CI valida los manifiestos y prueba instalación/ejecución/desinstalación con WinGet usando el manifiesto local y el artefacto real; adjuntarlos a una Release no los publica ni indexa en la fuente pública. La receta Termux tiene una URL versionada y un SHA-256 real para `v0.2.0`, pero sigue siendo candidata; la Release no contiene el paquete Termux/AArch64 ni su procedencia exigida por el publicador APT.
 
 El workflow APT actual genera el canal **Termux/AArch64** firmado; no construye ni publica índices Debian/Ubuntu. No se debe anunciar ninguno de los tres comandos como disponible hasta que el índice/fuente correspondiente exista y se pruebe en una instalación limpia. La matriz enlazada arriba mantiene los gates por plataforma.
 

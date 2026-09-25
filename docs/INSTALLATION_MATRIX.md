@@ -8,7 +8,7 @@
 
 | Plataforma | Arquitectura del artefacto | Comando objetivo | Estado comprobado |
 |---|---|---|---|
-| Windows | x64 | `winget install --id 46Neon.Milena --exact` | La Release `v0.2.0` contiene `milena.exe`, ZIP portable y tres manifiestos WinGet. El workflow genera y adjunta los manifiestos a la Release, pero este repositorio no presenta una publicación aceptada/indexada en la fuente pública de WinGet. El comando no se debe anunciar como disponible hasta validar una instalación desde esa fuente. |
+| Windows | x64 | `winget install --id 46Neon.Milena --exact` | La Release `v0.2.0` contiene `milena.exe`, ZIP portable y tres manifiestos WinGet. CI validará esos manifiestos y probará instalación/ejecución/desinstalación usando el manifiesto local y el artefacto real; esto no demuestra que el paquete esté aceptado/indexado en la fuente pública de WinGet. El comando no se debe anunciar como disponible hasta probarlo desde esa fuente. |
 | Debian/Ubuntu Linux | amd64 | `sudo apt install milena` | La Release `v0.2.0` conserva un `.deb` histórico con `maintainers@milena.invalid`; no hay índice APT Linux publicado ni fuente verificada en una instalación limpia. Este PR actualiza el builder para futuros paquetes a `Milena SST <j7942281@gmail.com>`. El workflow `publish-apt.yml` es para Termux/AArch64 y no satisface este canal. |
 | Android con Termux | AArch64 (`aarch64`) y Bionic | `pkg install milena` | Hay una receta candidata para `termux-packages`, pero no consta aceptación en el repositorio oficial. La Release `v0.2.0` no contiene el `.deb` Termux/AArch64 ni su procedencia requeridos por el publicador APT. No hay runner self-hosted registrado para la validación física. El comando no se debe anunciar como disponible. |
 
@@ -35,7 +35,7 @@ No usar scripts remotos ejecutados directamente por `curl | sh` como sustituto d
 ### Windows / WinGet
 
 - Construir y probar `milena.exe` x64; producir checksum y manifiestos versionados con URL HTTPS y SHA-256 del artefacto real.
-- Ejecutar `winget validate` sobre los tres manifiestos y probar instalación, ejecución, actualización y desinstalación desde una máquina limpia mediante la fuente que se anunciará.
+- La CI validará `winget validate` sobre los tres manifiestos v0.2.0 y probará instalación, ejecución y desinstalación desde el manifiesto local contra el artefacto real de GitHub Release. Esto no prueba el índice público, la actualización ni una máquina limpia usando `winget install --id`; esos gates siguen pendientes.
 - Publicar el manifiesto en la fuente aprobada antes de presentar el comando como disponible.
 
 ### Debian/Ubuntu / APT
@@ -55,10 +55,11 @@ No usar scripts remotos ejecutados directamente por `curl | sh` como sustituto d
 ## Fuente de estado
 
 - [`packaging/windows/README.md`](../packaging/windows/README.md): artefacto portable y proceso WinGet.
+- [`packaging/windows/validate-winget-v020.ps1`](../packaging/windows/validate-winget-v020.ps1): valida el candidato v0.2.0 y prueba instalación local con WinGet, sin enviarlo al repositorio público.
 - [`packaging/debian/README.md`](../packaging/debian/README.md): paquete local Debian/Ubuntu.
 - [`packaging/debian/generate-apt-repo.sh`](../packaging/debian/generate-apt-repo.sh): genera y firma un índice Linux amd64 local; no publica ni configura el origen.
 - [`packaging/termux/README.md`](../packaging/termux/README.md): paquete Termux y validación Android.
 - [`packaging/termux-packages/README.md`](../packaging/termux-packages/README.md): receta candidata y proceso de aceptación oficial.
-- [`.github/workflows/build-release.yml`](../.github/workflows/build-release.yml): artefactos Debian amd64 y Windows x64.
+- [`.github/workflows/build-release.yml`](../.github/workflows/build-release.yml): artefactos Debian amd64 y Windows x64, y contratos de instalación local APT/WinGet.
 - [`.github/workflows/publish-apt.yml`](../.github/workflows/publish-apt.yml): repositorio APT Termux/AArch64; no es el repositorio Linux.
 - [`.github/workflows/termux-aarch64-contract.yml`](../.github/workflows/termux-aarch64-contract.yml): gate manual para un runner físico Termux/AArch64.
