@@ -3,6 +3,7 @@
 
 #include "ast.h"
 #include "table.h"
+#include "typed_ir.h"
 
 /* Provenance key stamped by the canonical loader before a data-HIR table is bound. */
 #define MILENA_HIR_DATASET_PATH_METADATA "milena.hir.dataset.path"
@@ -216,6 +217,7 @@ typedef struct {
     const MilenaTable *right_table; /* Borrowed second dataset when HIR has a join. */
     MilenaScalarHIR *hir; /* Owned scalar HIR, when the scalar subset applies. */
     MilenaDataHIR *data_hir; /* Owned data HIR, when the table subset applies. */
+    MilenaIRProgram *typed_ir; /* Owned verified IR from the explicit scalar compile slice. */
 } MilenaCanonicalProgram;
 
 void milena_canonical_program_init(MilenaCanonicalProgram *program);
@@ -225,6 +227,12 @@ void milena_canonical_program_release(MilenaCanonicalProgram *program);
 MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
                                              const char *source,
                                              MilenaError *error);
+
+/* Compile exactly one zero-parameter scalar HIR function into owned, verified
+ * typed IR. Unsupported shapes fail closed; this never invokes the interpreter.
+ * A successful compile replaces any previously owned typed_ir transactionally. */
+MilenaStatus milena_canonical_program_compile_scalar_ir(
+    MilenaCanonicalProgram *program, MilenaError *error);
 
 /* Bind a borrowed canonical dataframe and validate SST column contracts.
  * Data-HIR programs require MILENA_HIR_DATASET_PATH_METADATA to equal the

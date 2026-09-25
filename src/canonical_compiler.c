@@ -985,10 +985,13 @@ void milena_canonical_program_init(MilenaCanonicalProgram *program) {
     program->right_table = NULL;
     program->hir = NULL;
     program->data_hir = NULL;
+    program->typed_ir = NULL;
 }
 
 void milena_canonical_program_release(MilenaCanonicalProgram *program) {
     if (!program) return;
+    milena_ir_program_destroy(program->typed_ir);
+    program->typed_ir = NULL;
     scalar_hir_release(program->hir);
     program->hir = NULL;
     data_hir_release(program->data_hir);
@@ -1053,6 +1056,54 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
     program->ast = ast;
     program->hir = hir;
     program->data_hir = data_hir;
+    return MILENA_OK;
+}
+
+MilenaStatus milena_canonical_program_compile_scalar_ir(
+    MilenaCanonicalProgram *program, MilenaError *error) {
+    if (error) milena_error_clear(error);
+    if (!program || !program->ast) {
+        canonical_error(error, MILENA_ERR_ARGUMENT,
+                        "El programa canónico debe parsearse antes de compilar IR");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (!program->hir || program->hir->function_count != 1 ||
+        program->hir->statement_count != 0 || !program->hir->functions) {
+        canonical_error(error, MILENA_ERR_UNSUPPORTED,
+                        "La compilación IR requiere exactamente una función escalar y ninguna sentencia global");
+        return MILENA_ERR_UNSUPPORTED;
+    }
+
+    MilenaIRProgram *lowered = milena_ir_program_create();
+    if (!lowered) {
+        canonical_error(error, MILENA_ERR_MEMORY,
+                        "Sin memoria para reservar la IR tipada canónica");
+        return MILENA_ERR_MEMORY;
+    }
+    char lowering_error[MILENA_ERROR_TEXT] = {0};
+    const MilenaHIRFunction *function = &program->hir->functions[0];
+    if (!milena_ir_program_lower_scalar_function_body(
+            lowered, function, lowering_error, sizeof(lowering_error))) {
+        MilenaStatus status = MILENA_ERR_UNSUPPORTED;
+        if (strstr(lowering_error, "out of memory") ||
+            strstr(lowering_error, "could not"))
+            status = MILENA_ERR_MEMORY;
+        else if (strstr(lowering_error, "too large") ||
+                 strstr(lowering_error, "exhausted"))
+            status = MILENA_ERR_OVERFLOW;
+        if (error)
+            milena_error_set(error, status,
+                function->span.has_source_span ? function->span.line : 0,
+                function->span.has_source_span ? function->span.column : 0,
+                0, lowering_error[0] ? lowering_error :
+                   "La función excede el subconjunto de IR escalar soportado");
+        milena_ir_program_destroy(lowered);
+        return status;
+    }
+
+    MilenaIRProgram *previous = program->typed_ir;
+    program->typed_ir = lowered;
+    milena_ir_program_destroy(previous);
     return MILENA_OK;
 }
 

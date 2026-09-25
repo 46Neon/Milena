@@ -180,9 +180,8 @@ int main(void) {
     CHECK(program.hir == NULL && program.ast == NULL,
           "liberar el programa debe destruir la HIR y el AST poseídos");
 
-    /* First verified scalar-body lowering from the canonical typed frontend.
-       This deliberately narrow slice covers local SSA rebinding and numeric
-       operators; calls and parameterized functions remain explicit rejections. */
+    /* End-to-end canonical compile slice: source passes the official lexer,
+       parser and semantic frontend, then the program owns verified typed IR. */
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
           "funcion calcular() { variable x = 10; x = x * 2; "
@@ -190,26 +189,32 @@ int main(void) {
     CHECK(program.hir && program.hir->function_count == 1 &&
           program.hir->functions[0].body_count == 3,
           "el frontend debe entregar una función tipada con declaración, asignación y retorno");
-    MilenaIRProgram *typed_body = milena_ir_program_create();
-    CHECK(typed_body != NULL, "no se pudo reservar IR tipada");
-    CHECK(milena_ir_program_lower_scalar_function_body(typed_body,
-          &program.hir->functions[0], error.message, sizeof(error.message)),
-          error.message);
-    CHECK(milena_ir_program_validate(typed_body, error.message, sizeof(error.message)),
-          error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK, error.message);
+    MilenaIRProgram *typed_body = program.typed_ir;
+    CHECK(typed_body != NULL &&
+          milena_ir_program_validate(typed_body, error.message, sizeof(error.message)),
+          "la entrada de compilación debe publicar IR tipada verificada");
     CHECK(typed_body->block_count == 1 && typed_body->count == 6 &&
           typed_body->instructions[2].opcode == MILENA_IR_MUL_F64 &&
           typed_body->instructions[4].opcode == MILENA_IR_ADD_F64 &&
           typed_body->instructions[5].opcode == MILENA_IR_RETURN &&
           typed_body->instructions[5].result_type == MILENA_IR_TYPE_F64,
-          "la lowering debe producir SSA aritmético tipado y retorno verificado");
+          "la compilación canónica debe producir SSA aritmético tipado y retorno verificado");
     CHECK(typed_body->instructions[2].operand1_id ==
               typed_body->instructions[0].result_id &&
           typed_body->instructions[4].operand1_id ==
               typed_body->instructions[2].result_id,
           "reasignación y usos posteriores deben referenciar el valor SSA vigente");
-    milena_ir_program_destroy(typed_body);
+    typed_body = NULL; /* The prior pointer is invalidated by successful replacement. */
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL &&
+          milena_ir_program_validate(program.typed_ir, error.message,
+                                     sizeof(error.message)),
+          "recompilar debe sustituir por una IR poseída y verificada");
     milena_canonical_program_release(&program);
+    CHECK(program.typed_ir == NULL,
+          "liberar el programa canónico debe liberar su IR tipada poseída");
 
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
@@ -292,6 +297,10 @@ int main(void) {
           strstr(error.message, "zero-parameter") != NULL &&
           typed_body->count == 0 && typed_body->block_count == 0,
           "parámetros sin firma IR deben rechazarse sin publicar IR parcial");
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
+          program.ast != NULL && program.hir != NULL && error.line == 1,
+          "la integración debe fallar cerrado con parámetro y preservar AST/HIR; no debe usar intérprete");
     milena_ir_program_destroy(typed_body);
     milena_canonical_program_release(&program);
 
