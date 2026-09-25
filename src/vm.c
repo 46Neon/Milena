@@ -1,4 +1,7 @@
 #include "vm.h"
+#include "dataset.h"
+#include "gc.h"
+#include "ir.h"
 
 #include <float.h>
 #include <limits.h>
@@ -478,50 +481,335 @@ cleanup:
     return ok;
 }
 
-bool vm_run(const uint8_t *bytecode, size_t bytecode_size,
-                             uint32_t entry_symbol_id,
-                             const MilenaVMValue *arguments,
-                             size_t argument_count,
-                             const MilenaVMOptions *options,
-                             MilenaVMValue *result,
-                             char *error, size_t error_capacity) {
-    MilenaVMOptions selected = {0};
-    VMExecution execution = {0};
-    MilenaIRModule *module = NULL;
+
+static bool vm_execute_instruction(VirtualMachine *vm, IRInstruction *ins) {
+    if (!ins) return false;
+    
+    switch (ins->opcode) {
+        case IR_LOAD_DATASET:
+            if (ins->arg1) {
+                if (vm->dataset) {
+                    dataset_destruir(vm->dataset);
+                    free(vm->dataset);
+                }
+                
+                vm->dataset = (Dataset *)gc_alloc(vm->gc, sizeof(Dataset));
+                if (!vm->dataset) {
+                    vm->has_error = true;
+                    milena_error_set(&vm->error, MILENA_ERROR_MEMORY,
+                                  "No se pudo asignar dataset", 0, 0);
+                    return false;
+                }
+                
+                if (!dataset_cargar_csv(vm->dataset, ins->arg1)) {
+                    vm->has_error = true;
+                    milena_error_set(&vm->error, MILENA_ERROR_IO,
+                                  "No se pudo cargar CSV", 0, 0);
+                    return false;
+                }
+                
+                printf("VM: Dataset cargado: %s\n", ins->arg1);
+            }
+            break;
+            
+        case IR_CLEAN_NULLS:
+            if (vm->dataset && ins->arg1) {
+                dataset_clean_nulls(vm->dataset, ins->arg1);
+                printf("VM: Nulos limpiados\n");
+            }
+            break;
+            
+        case IR_CLEAN_DUPLICATES:
+            if (vm->dataset && ins->arg1) {
+                dataset_clean_duplicates(vm->dataset, ins->arg1);
+                printf("VM: Duplicados limpiados\n");
+            }
+            break;
+            
+        case IR_TRANSFORM_TOTAL:
+            if (vm->dataset && ins->arg1) {
+                dataset_transform_total(vm->dataset, ins->arg1);
+                printf("VM: Total transformado\n");
+            }
+            break;
+            
+        case IR_TRANSFORM_PERIOD:
+            if (vm->dataset && ins->arg1) {
+                dataset_transform_period(vm->dataset, ins->arg1);
+                printf("VM: Periodo transformado\n");
+            }
+            break;
+            
+        case IR_FILTER_CONDITION:
+            if (vm->dataset && ins->arg1) {
+                dataset_filter_condition(vm->dataset, ins->arg1);
+                printf("VM: Filtro aplicado\n");
+            }
+            break;
+            
+        case IR_GROUP_BY:
+            if (vm->dataset && ins->arg1) {
+                dataset_group_by(vm->dataset, ins->arg1);
+                printf("VM: Agrupación por %s\n", ins->arg1);
+            }
+            break;
+            
+        case IR_AGGREGATE_SUM:
+        case IR_AGGREGATE_AVG:
+        case IR_AGGREGATE_MIN:
+        case IR_AGGREGATE_MAX:
+            if (vm->dataset && ins->arg1) {
+                // Realizar agregación
+                printf("VM: Agregación aplicada\n");
+            }
+            break;
+            
+        case IR_VISUALIZE:
+            if (vm->dataset) {
+                dataset_imprimir(vm->dataset, 10);
+            }
+            break;
+            
+        case IR_EXPORT_JSON:
+            if (vm->dataset && ins->arg1) {
+                if (dataset_guardar_json(vm->dataset, ins->arg1)) {
+                    printf("VM: Datos exportados a %s\n", ins->arg1);
+                } else {
+                    vm->has_error = true;
+                    milena_error_set(&vm->error, MILENA_ERROR_IO,
+                                  "No se pudo exportar JSON", 0, 0);
+                    return false;
+                }
+            }
+            break;
+            
+        case IR_PRINT:
+            if (vm->dataset) {
+                dataset_imprimir(vm->dataset, 5);
+            }
+            break;
+            
+        default:
+            printf("VM: Instrucción desconocida: %d\n", ins->opcode);
+            break;
+    }
+    
+    return true;
+}
+
+struct VMBytecodePayload {
+    MilenaIRModule *module;
+    uint32_t entry_symbol_id;
+    MilenaVMValue *arguments;
+    size_t argument_count;
+    MilenaVMOptions options;
+    MilenaVMValue result;
+    bool has_result;
+    char error[256];
+};
+
+bool vm_init(VirtualMachine *vm, IRProgram *program) {
+    if (!vm || !program) return false;
+    memset(vm, 0, sizeof(*vm));
+    vm->program = program;
+    vm->pc = 0;
+    vm->dataset = NULL;
+    vm->result = NULL;
+    vm->mode = MILENA_VM_MODE_ORIGINAL_IR;
+    vm->running = true;
+    milena_error_init(&vm->error);
+    vm->gc = gc_create();
+    if (!vm->gc) {
+        vm->has_error = true;
+        vm->running = false;
+        return false;
+    }
+    return true;
+}
+
+bool vm_init_bytecode(VirtualMachine *vm, const uint8_t *bytecode,
+                      size_t bytecode_size, uint32_t entry_symbol_id,
+                      const MilenaVMValue *arguments, size_t argument_count,
+                      const MilenaVMOptions *options) {
+    struct VMBytecodePayload *state;
     const MilenaIRModuleFunction *entry;
-    MilenaVMValue computed = {0};
-    bool ok;
-    if (error && error_capacity) error[0] = '\0';
-    execution.error = error;
-    execution.error_capacity = error_capacity;
-    if (!result || !entry_symbol_id)
-        return vm_error(&execution, "VM requires a result destination and entry symbol");
-    if (options) selected = *options;
-    if (!selected.max_steps) selected.max_steps = VM_DEFAULT_STEPS;
-    if (!selected.max_call_depth) selected.max_call_depth = VM_DEFAULT_DEPTH;
-    if (selected.max_steps > VM_HARD_MAX_STEPS ||
-        selected.max_call_depth > VM_HARD_MAX_DEPTH)
-        return vm_error(&execution, "VM execution limits exceed the supported maximum");
-    execution.max_steps = selected.max_steps;
-    execution.max_depth = selected.max_call_depth;
-    execution.error = error;
-    execution.error_capacity = error_capacity;
-    if (!milena_bytecode_decode_module(bytecode, bytecode_size, &module,
-                                       error, error_capacity)) return false;
-    entry = vm_find_function(module, entry_symbol_id);
+    if (!vm) return false;
+    memset(vm, 0, sizeof(*vm));
+    milena_error_init(&vm->error);
+    vm->mode = MILENA_VM_MODE_VERIFIED_BYTECODE;
+    state = (struct VMBytecodePayload *)calloc(1u, sizeof(*state));
+    vm->bytecode_state = state;
+    if (!state) {
+        vm->has_error = true;
+        vm->running = false;
+        return false;
+    }
+    if (!entry_symbol_id ||
+        !milena_bytecode_decode_module(bytecode, bytecode_size, &state->module,
+                                       state->error, sizeof(state->error))) {
+        if (!state->error[0])
+            (void)snprintf(state->error, sizeof(state->error),
+                           "VM requires a verified module and entry symbol");
+        vm->has_error = true;
+        vm->running = false;
+        return false;
+    }
+    state->entry_symbol_id = entry_symbol_id;
+    entry = vm_find_function(state->module, entry_symbol_id);
     if (!entry) {
-        milena_ir_module_destroy(module);
-        return vm_error(&execution, "VM entry function symbol is not in the module");
+        (void)snprintf(state->error, sizeof(state->error),
+                       "VM entry function symbol is not in the module");
+        vm->has_error = true;
+        vm->running = false;
+        return false;
     }
     if (argument_count != entry->parameter_count ||
         (argument_count && !arguments)) {
-        milena_ir_module_destroy(module);
-        return vm_error(&execution, "VM entry function argument count is invalid");
+        (void)snprintf(state->error, sizeof(state->error),
+                       "VM entry function argument count is invalid");
+        vm->has_error = true;
+        vm->running = false;
+        return false;
     }
-    ok = vm_execute_function(&execution, module, entry, arguments,
-                             argument_count, &computed);
-    milena_ir_module_destroy(module);
-    if (!ok) return false;
-    *result = computed;
+    if (options) state->options = *options;
+    if (argument_count) {
+        if (argument_count > SIZE_MAX / sizeof(*state->arguments)) {
+            (void)snprintf(state->error, sizeof(state->error),
+                           "VM entry argument storage size overflow");
+            vm->has_error = true;
+            vm->running = false;
+            return false;
+        }
+        state->arguments = (MilenaVMValue *)malloc(
+            argument_count * sizeof(*state->arguments));
+        if (!state->arguments) {
+            (void)snprintf(state->error, sizeof(state->error),
+                           "out of memory copying VM entry arguments");
+            vm->has_error = true;
+            vm->running = false;
+            return false;
+        }
+        memcpy(state->arguments, arguments,
+               argument_count * sizeof(*state->arguments));
+    }
+    state->argument_count = argument_count;
+    vm->running = true;
     return true;
+}
+
+static bool vm_run_verified_bytecode(VirtualMachine *vm) {
+    struct VMBytecodePayload *state = vm->bytecode_state;
+    VMExecution execution = {0};
+    const MilenaIRModuleFunction *entry;
+    MilenaVMValue computed = {0};
+    bool ok;
+    if (!state || !state->module) return false;
+    state->error[0] = '\0';
+    state->has_result = false;
+    execution.error = state->error;
+    execution.error_capacity = sizeof(state->error);
+    execution.max_steps = state->options.max_steps ? state->options.max_steps :
+                          VM_DEFAULT_STEPS;
+    execution.max_depth = state->options.max_call_depth ?
+                          state->options.max_call_depth : VM_DEFAULT_DEPTH;
+    if (execution.max_steps > VM_HARD_MAX_STEPS ||
+        execution.max_depth > VM_HARD_MAX_DEPTH) {
+        vm_error(&execution, "VM execution limits exceed the supported maximum");
+        return false;
+    }
+    entry = vm_find_function(state->module, state->entry_symbol_id);
+    if (!entry) {
+        vm_error(&execution, "VM entry function symbol is not in the module");
+        return false;
+    }
+    ok = vm_execute_function(&execution, state->module, entry,
+                             state->arguments, state->argument_count, &computed);
+    if (!ok) return false;
+    state->result = computed;
+    state->has_result = true;
+    return true;
+}
+
+bool vm_run(VirtualMachine *vm) {
+    if (!vm) return false;
+    if (vm->mode == MILENA_VM_MODE_VERIFIED_BYTECODE) {
+        if (!vm->bytecode_state) return false;
+        vm->running = true;
+        bool ok = vm_run_verified_bytecode(vm);
+        vm->running = false;
+        if (!ok) vm->has_error = true;
+        return ok;
+    }
+    if (vm->mode != MILENA_VM_MODE_ORIGINAL_IR || !vm->program) return false;
+    vm->running = true;
+    while (vm->running && vm->pc < vm->program->count) {
+        IRInstruction *ins = &vm->program->instructions[vm->pc++];
+        if (!vm_execute_instruction(vm, ins)) {
+            vm->running = false;
+            vm->has_error = true;
+            return false;
+        }
+    }
+    return true;
+}
+
+void vm_step(VirtualMachine *vm) {
+    if (!vm) return;
+    if (vm->mode == MILENA_VM_MODE_VERIFIED_BYTECODE) {
+        if (vm->bytecode_state) {
+            (void)snprintf(vm->bytecode_state->error,
+                           sizeof(vm->bytecode_state->error),
+                           "vm_step is only available for the original IR compatibility mode; use vm_run for verified modules");
+        }
+        vm->has_error = true;
+        vm->running = false;
+        return;
+    }
+    if (vm->mode != MILENA_VM_MODE_ORIGINAL_IR || !vm->program ||
+        !vm->running || vm->pc >= vm->program->count) {
+        vm->running = false;
+        return;
+    }
+    IRInstruction *ins = &vm->program->instructions[vm->pc++];
+    if (!vm_execute_instruction(vm, ins)) {
+        vm->has_error = true;
+        vm->running = false;
+    }
+}
+
+bool vm_get_bytecode_result(const VirtualMachine *vm,
+                            MilenaVMValue *result_out) {
+    if (!vm || vm->mode != MILENA_VM_MODE_VERIFIED_BYTECODE ||
+        !vm->bytecode_state || !vm->bytecode_state->has_result || !result_out)
+        return false;
+    *result_out = vm->bytecode_state->result;
+    return true;
+}
+
+const char *vm_bytecode_error(const VirtualMachine *vm) {
+    if (!vm || vm->mode != MILENA_VM_MODE_VERIFIED_BYTECODE ||
+        !vm->bytecode_state) return NULL;
+    return vm->bytecode_state->error;
+}
+
+void vm_destroy(VirtualMachine *vm) {
+    if (!vm) return;
+    if (vm->mode == MILENA_VM_MODE_ORIGINAL_IR) {
+        if (vm->dataset) {
+            dataset_destruir(vm->dataset);
+            free(vm->dataset);
+        }
+        if (vm->result) {
+            dataset_destruir(vm->result);
+            free(vm->result);
+        }
+        if (vm->gc) gc_destroy(vm->gc);
+    }
+    if (vm->bytecode_state) {
+        if (vm->bytecode_state->module)
+            milena_ir_module_destroy(vm->bytecode_state->module);
+        free(vm->bytecode_state->arguments);
+        free(vm->bytecode_state);
+    }
+    memset(vm, 0, sizeof(*vm));
 }

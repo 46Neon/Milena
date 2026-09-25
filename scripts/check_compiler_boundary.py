@@ -32,13 +32,31 @@ if REFERENCE_VM in sources:
     errors.append("la VM interna de referencia no debe enlazarse en el binario oficial")
 if not (ROOT / "src" / REFERENCE_VM).is_file():
     errors.append("falta la VM interna de referencia probada sobre bytecode verificado")
+if (ROOT / "src" / "typed_vm.c").exists():
+    errors.append("no debe existir una segunda implementación typed_vm.c")
 if (ROOT / "src" / REFERENCE_VM).is_file():
     reference_source = (ROOT / "src" / REFERENCE_VM).read_text(encoding="utf-8")
+    vm_header = (ROOT / "include" / "vm.h").read_text(encoding="utf-8")
     if not re.search(r'#include\s+[<"]vm\.h[>"]', reference_source):
-        errors.append("el punto de entrada VM debe usar el contrato canónico de bytecode verificado")
-    for header in ("ir.h", "gc.h", "dataset.h", "compiler.h"):
-        if re.search(rf'#include\s+[<"]{re.escape(header)}[>"]', reference_source):
-            errors.append(f"la VM canónica no debe depender de la pila histórica: {header}")
+        errors.append("el ejecutor debe pertenecer a la VM original")
+    for signature in (
+        r"bool\s+vm_init\s*\(\s*VirtualMachine\s*\*",
+        r"bool\s+vm_run\s*\(\s*VirtualMachine\s*\*",
+        r"void\s+vm_step\s*\(\s*VirtualMachine\s*\*",
+        r"void\s+vm_destroy\s*\(\s*VirtualMachine\s*\*",
+    ):
+        if not re.search(signature, vm_header):
+            errors.append("include/vm.h debe conservar el ciclo de vida de la VM original")
+    if re.search(r"bool\s+vm_run\s*\(\s*const\s+uint8_t\s*\*", vm_header):
+        errors.append("no debe quedar una segunda firma pública vm_run(bytecode, ...)")
+    if not re.search(r"bool\s+vm_init_bytecode\s*\(\s*VirtualMachine\s*\*", vm_header):
+        errors.append("el modo MLBC debe inicializar el mismo VirtualMachine original")
+    if not re.search(r"vm_execute_instruction", reference_source):
+        errors.append("la ruta de instrucciones de la VM original debe permanecer en src/vm.c")
+    if not re.search(r"vm_execute_function", reference_source):
+        errors.append("la ejecución MLBC debe integrarse en src/vm.c")
+    if re.search(r'#include\s+[<"]compiler\.h[>"]', reference_source):
+        errors.append("la VM no debe depender de la pila experimental compiler.h")
 WINDOWS_PACKAGE = (ROOT / "packaging" / "windows" / "build.ps1")
 if WINDOWS_PACKAGE.is_file():
     package_text = WINDOWS_PACKAGE.read_text(encoding="utf-8")

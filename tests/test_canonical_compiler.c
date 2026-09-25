@@ -45,9 +45,30 @@ static bool run_vm_case(const MilenaCanonicalProgram *program,
         arguments[i].type = MILENA_IR_TYPE_F64;
         arguments[i].as.f64 = numeric_arguments[i];
     }
-    if (!vm_run(bytecode, bytecode_size, entry_symbol,
-                argument_count ? arguments : NULL, argument_count,
-                NULL, &result, diagnostic, diagnostic_capacity)) return false;
+    VirtualMachine vm = {0};
+    if (!vm_init_bytecode(&vm, bytecode, bytecode_size, entry_symbol,
+                          argument_count ? arguments : NULL, argument_count,
+                          NULL)) {
+        const char *message = vm_bytecode_error(&vm);
+        (void)snprintf(diagnostic, diagnostic_capacity, "%s",
+                       message ? message : "VM initialization failed");
+        vm_destroy(&vm);
+        return false;
+    }
+    if (!vm_run(&vm)) {
+        const char *message = vm_bytecode_error(&vm);
+        (void)snprintf(diagnostic, diagnostic_capacity, "%s",
+                       message ? message : "VM execution failed");
+        vm_destroy(&vm);
+        return false;
+    }
+    if (!vm_get_bytecode_result(&vm, &result)) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "VM did not publish a bytecode result");
+        vm_destroy(&vm);
+        return false;
+    }
+    vm_destroy(&vm);
     if (result.type != expected_type) {
         (void)snprintf(diagnostic, diagnostic_capacity,
                        "%s returned type %d, expected %d", function_name,
@@ -1331,12 +1352,10 @@ int main(void) {
     CHECK(milena_bytecode_encode_module(program.typed_module,
           &canonical_bytecode, &canonical_bytecode_size, error.message,
           sizeof(error.message)), error.message);
-    MilenaVMValue vm_result = {0};
-    CHECK(vm_run(canonical_bytecode, canonical_bytecode_size,
-          entry_symbol, NULL, 0, NULL, &vm_result, error.message,
-          sizeof(error.message)), error.message);
-    CHECK(vm_result.type == MILENA_IR_TYPE_F64 && vm_result.as.f64 == 6.0,
-          "fuente española→IR tipada→bytecode MLBC→VM debe devolver 6");
+    char canonical_vm_error[256] = {0};
+    CHECK(run_vm_case(&program, canonical_bytecode, canonical_bytecode_size,
+          "principal", NULL, 0, MILENA_IR_TYPE_F64, 6.0, false,
+          canonical_vm_error, sizeof(canonical_vm_error)), canonical_vm_error);
     free(canonical_bytecode);
     milena_canonical_program_release(&program);
 

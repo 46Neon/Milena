@@ -6,6 +6,43 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool run_bytecode_case(const uint8_t *bytecode, size_t bytecode_size,
+                              uint32_t entry_symbol_id,
+                              const MilenaVMValue *arguments,
+                              size_t argument_count,
+                              const MilenaVMOptions *options,
+                              MilenaVMValue *result, char *error,
+                              size_t error_capacity) {
+    VirtualMachine vm = {0};
+    if (error && error_capacity) error[0] = '\0';
+    if (!vm_init_bytecode(&vm, bytecode, bytecode_size, entry_symbol_id,
+                          arguments, argument_count, options)) {
+        const char *message = vm_bytecode_error(&vm);
+        if (error && error_capacity)
+            (void)snprintf(error, error_capacity, "%s",
+                           message ? message : "VM initialization failed");
+        vm_destroy(&vm);
+        return false;
+    }
+    if (!vm_run(&vm)) {
+        const char *message = vm_bytecode_error(&vm);
+        if (error && error_capacity)
+            (void)snprintf(error, error_capacity, "%s",
+                           message ? message : "VM execution failed");
+        vm_destroy(&vm);
+        return false;
+    }
+    if (result && !vm_get_bytecode_result(&vm, result)) {
+        if (error && error_capacity)
+            (void)snprintf(error, error_capacity,
+                           "VM did not publish a bytecode result");
+        vm_destroy(&vm);
+        return false;
+    }
+    vm_destroy(&vm);
+    return true;
+}
+
 static char *copy_text(const char *text) {
     size_t length = strlen(text);
     char *copy = (char *)malloc(length + 1u);
@@ -177,13 +214,13 @@ static void test_roundtrip_module_with_direct_call(void) {
     /* The reference VM accepts only verified portable bytecode and executes
        the Spanish-named three-argument function through the canonical module. */
     MilenaVMValue result = {0};
-    assert(vm_run(encoded, encoded_size, 200u, NULL, 0u,
+    assert(run_bytecode_case(encoded, encoded_size, 200u, NULL, 0u,
                                    NULL, &result, error, sizeof(error)));
     assert(result.type == MILENA_IR_TYPE_F64 && result.as.f64 == 6.0);
     MilenaVMValue previous = {MILENA_IR_TYPE_BOOL, {.boolean = true}};
     result = previous;
     MilenaVMValue unexpected_argument = {MILENA_IR_TYPE_F64, {.f64 = 1.0}};
-    assert(!vm_run(encoded, encoded_size, 200u,
+    assert(!run_bytecode_case(encoded, encoded_size, 200u,
                                     &unexpected_argument, 1u, NULL, &result,
                                     error, sizeof(error)));
     assert(result.type == previous.type && result.as.boolean == previous.as.boolean);
@@ -371,7 +408,7 @@ static void test_vm_branch_ssa_merge(void) {
     assert(milena_ir_module_validate(module, error, sizeof(error)));
     assert(milena_bytecode_encode_module(module, &bytes, &size,
                                          error, sizeof(error)));
-    assert(vm_run(bytes, size, 400u, NULL, 0u, NULL,
+    assert(run_bytecode_case(bytes, size, 400u, NULL, 0u, NULL,
                                    &result, error, sizeof(error)));
     assert(result.type == MILENA_IR_TYPE_I64 && result.as.i64 == 42);
     free(bytes);
@@ -392,13 +429,13 @@ static void test_vm_forward_call_and_call_depth_limit(void) {
     MilenaVMValue result = {0};
     assert(milena_bytecode_encode_module(module, &bytes, &size,
                                          error, sizeof(error)));
-    assert(vm_run(bytes, size, 200u, NULL, 0u, NULL,
+    assert(run_bytecode_case(bytes, size, 200u, NULL, 0u, NULL,
                                    &result, error, sizeof(error)));
     assert(result.type == MILENA_IR_TYPE_F64 && result.as.f64 == 6.0);
     MilenaVMValue previous = {MILENA_IR_TYPE_I64, {.i64 = 99}};
     result = previous;
     MilenaVMOptions shallow = {100u, 1u};
-    assert(!vm_run(bytes, size, 200u, NULL, 0u, &shallow,
+    assert(!run_bytecode_case(bytes, size, 200u, NULL, 0u, &shallow,
                                     &result, error, sizeof(error)));
     assert(strstr(error, "call depth") != NULL);
     assert(result.type == previous.type && result.as.i64 == previous.as.i64);
@@ -415,7 +452,7 @@ static void test_vm_errors_and_limits(void) {
                                          error, sizeof(error)));
     MilenaVMValue previous = {MILENA_IR_TYPE_F64, {.f64 = 17.0}};
     MilenaVMValue result = previous;
-    assert(!vm_run(bytes, size, 300u, NULL, 0u, NULL,
+    assert(!run_bytecode_case(bytes, size, 300u, NULL, 0u, NULL,
                                     &result, error, sizeof(error)));
     assert(strstr(error, "division by zero") != NULL);
     assert(result.type == previous.type && result.as.f64 == previous.as.f64);
@@ -429,7 +466,7 @@ static void test_vm_errors_and_limits(void) {
                                          error, sizeof(error)));
     MilenaVMOptions short_budget = {3u, 8u};
     result = previous;
-    assert(!vm_run(bytes, size, 301u, NULL, 0u,
+    assert(!run_bytecode_case(bytes, size, 301u, NULL, 0u,
                                     &short_budget, &result, error, sizeof(error)));
     assert(strstr(error, "step limit") != NULL);
     assert(result.type == previous.type && result.as.f64 == previous.as.f64);
@@ -446,7 +483,7 @@ static void test_vm_errors_and_limits(void) {
     memcpy(malformed, bytes, size);
     malformed[0] ^= 0x01u;
     result = previous;
-    assert(!vm_run(malformed, size, 200u, NULL, 0u, NULL,
+    assert(!run_bytecode_case(malformed, size, 200u, NULL, 0u, NULL,
                                     &result, error, sizeof(error)));
     assert(error[0] != '\0' && result.type == previous.type &&
            result.as.f64 == previous.as.f64);
@@ -458,12 +495,12 @@ static void test_vm_errors_and_limits(void) {
         {MILENA_IR_TYPE_F64, {.f64 = 3.0}}
     };
     result = previous;
-    assert(!vm_run(bytes, size, 100u, bad_arguments, 3u,
+    assert(!run_bytecode_case(bytes, size, 100u, bad_arguments, 3u,
                                     NULL, &result, error, sizeof(error)));
     assert(strstr(error, "argument type mismatch") != NULL);
     assert(result.type == previous.type && result.as.f64 == previous.as.f64);
     result = previous;
-    assert(!vm_run(bytes, size, 999u, NULL, 0u, NULL,
+    assert(!run_bytecode_case(bytes, size, 999u, NULL, 0u, NULL,
                                     &result, error, sizeof(error)));
     assert(strstr(error, "entry function") != NULL);
     assert(result.type == previous.type && result.as.f64 == previous.as.f64);
@@ -471,7 +508,25 @@ static void test_vm_errors_and_limits(void) {
     milena_ir_module_destroy(calls);
 }
 
+static void test_original_vm_lifecycle(void) {
+    IRInstruction instructions[2] = {{0}};
+    instructions[0].opcode = IR_PRINT;
+    instructions[1].opcode = IR_PRINT;
+    IRProgram program = {0};
+    program.instructions = instructions;
+    program.count = sizeof(instructions) / sizeof(instructions[0]);
+    VirtualMachine vm = {0};
+    assert(vm_init(&vm, &program));
+    assert(vm.mode == MILENA_VM_MODE_ORIGINAL_IR);
+    vm_step(&vm);
+    assert(vm.pc == 1u && vm.running);
+    assert(vm_run(&vm));
+    assert(vm.pc == 2u);
+    vm_destroy(&vm);
+}
+
 int main(void) {
+    test_original_vm_lifecycle();
     test_roundtrip_module_with_direct_call();
     test_rejects_bad_headers_and_lengths();
     test_rejects_signature_mismatch_and_invalid_source_module();
