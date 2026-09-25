@@ -331,8 +331,8 @@ check-termux-industrial: tools/check_repository_contracts
 check-compiler-boundary: tools/check_repository_contracts
 	./tools/check_repository_contracts compiler-boundary $(wildcard src/*.c)
 
-tools/check_repository_contracts: tools/check_repository_contracts.c
-	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion $< -o $@
+tools/check_repository_contracts: tools/check_repository_contracts.c tools/milena_sha256.c tools/milena_sha256.h
+	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_repository_contracts.c tools/milena_sha256.c -o $@
 
 check-hir-ast-coverage:
 	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_architecture.c -o tools/check_architecture && ./tools/check_architecture hir
