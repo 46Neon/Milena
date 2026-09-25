@@ -989,7 +989,8 @@ int main(void) {
     CHECK(program.typed_module->function_count == 2 &&
           program.typed_module->functions[0].symbol_id ==
               program.hir->functions[0].resolved_symbol_id &&
-          program.typed_module->functions[1].body->signature.parameter_count == 2 &&
+          program.typed_module->functions[0].body->signature.parameter_count == 2 &&
+          program.typed_module->functions[1].body->signature.parameter_count == 1 &&
           program.typed_module->functions[1].body->signature.return_type ==
               MILENA_IR_TYPE_F64 && program.typed_ir ==
               program.typed_module->functions[0].body,
