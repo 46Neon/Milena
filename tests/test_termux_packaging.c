@@ -721,6 +721,110 @@ static void run_artifact_validator(const char *label, const char *package,
     expect_process(label, expect_success, arguments);
 }
 
+static void test_termux_elf_validator(const char *temporary_root)
+{
+    static const char fake_readelf[] =
+        "#!/bin/sh\n"
+        "mode=${MILENA_FAKE_READELF_MODE:-valid}\n"
+        "case \"$1\" in\n"
+        "  -h)\n"
+        "    case \"$mode\" in\n"
+        "      readelf-failure) exit 1 ;;\n"
+        "      wrong-class) printf 'Class: ELF32\\nData: little endian\\nMachine: AArch64\\n' ;;\n"
+        "      wrong-endian) printf 'Class: ELF64\\nData: big endian\\nMachine: AArch64\\n' ;;\n"
+        "      wrong-machine) printf 'Class: ELF64\\nData: little endian\\nMachine: x86-64\\n' ;;\n"
+        "      *) printf 'Class: ELF64\\nData: little endian\\nMachine: AArch64\\n' ;;\n"
+        "    esac ;;\n"
+        "  -l)\n"
+        "    case \"$mode\" in\n"
+        "      wrong-interpreter) printf 'Requesting program interpreter: /lib64/ld-linux-x86-64.so.2\\n' ;;\n"
+        "      forbidden-ld-linux) printf 'Requesting program interpreter: /system/bin/linker64\\nld-linux marker\\n' ;;\n"
+        "      *) printf 'Requesting program interpreter: /system/bin/linker64\\n' ;;\n"
+        "    esac ;;\n"
+        "  -d)\n"
+        "    case \"$mode\" in\n"
+        "      missing-libc) printf 'Shared library: [libm.so]\\n' ;;\n"
+        "      forbidden-libc6) printf 'Shared library: [libc.so]\\nShared library: [libc.so.6]\\n' ;;\n"
+        "      forbidden-libpthread) printf 'Shared library: [libc.so]\\nShared library: [libpthread.so.0]\\n' ;;\n"
+        "      forbidden-libstdcxx) printf 'Shared library: [libc.so]\\nShared library: [libstdc++.so.6]\\n' ;;\n"
+        "      forbidden-glibc-version) printf 'Shared library: [libc.so]\\nSymbol: GLIBC_2.31\\n' ;;\n"
+        "      *) printf 'Shared library: [libc.so]\\n' ;;\n"
+        "    esac ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n";
+    static const struct {
+        const char *mode;
+        const char *label;
+        bool succeeds;
+    } cases[] = {
+        {"valid", "accept representative Bionic AArch64 ELF", true},
+        {"wrong-class", "reject non-ELF64 image", false},
+        {"wrong-endian", "reject big-endian image", false},
+        {"wrong-machine", "reject non-AArch64 image", false},
+        {"wrong-interpreter", "reject non-Bionic interpreter", false},
+        {"missing-libc", "reject image without Bionic libc", false},
+        {"forbidden-libc6", "reject glibc libc dependency", false},
+        {"forbidden-ld-linux", "reject glibc dynamic loader marker", false},
+        {"forbidden-libpthread", "reject glibc pthread dependency", false},
+        {"forbidden-libstdcxx", "reject host libstdc++ dependency", false},
+        {"forbidden-glibc-version", "reject GLIBC symbol version", false},
+        {"readelf-failure", "fail closed when readelf fails", false}
+    };
+    char mock_dir[PATH_CAPACITY];
+    char readelf_path[PATH_CAPACITY];
+    char fake_binary[PATH_CAPACITY];
+    char missing_binary[PATH_CAPACITY];
+    char new_path[PATH_CAPACITY * 2U];
+    const char *old_path = getenv("PATH");
+    char *saved_path = old_path == NULL ? NULL : strdup(old_path);
+    size_t index;
+    int length;
+
+    if (!join_path(mock_dir, temporary_root, "fake-bin") ||
+        !join_path(readelf_path, mock_dir, "readelf") ||
+        !join_path(fake_binary, temporary_root, "fake-bionic-elf") ||
+        !join_path(missing_binary, temporary_root, "missing-elf") ||
+        !make_directories(mock_dir) || !write_text(readelf_path, fake_readelf) ||
+        chmod(readelf_path, (mode_t)0755) != 0 || !write_text(fake_binary, "fixture bytes\n")) {
+        report_failure("ELF validator fixtures", "could not prepare mocked readelf and binary");
+        free(saved_path);
+        return;
+    }
+    length = snprintf(new_path, sizeof(new_path), "%s:%s", mock_dir,
+                      saved_path == NULL ? "" : saved_path);
+    if (length < 0 || (size_t)length >= sizeof(new_path) ||
+        setenv("PATH", new_path, 1) != 0) {
+        report_failure("ELF validator PATH fixture", "could not prepend mocked readelf");
+        free(saved_path);
+        return;
+    }
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        char *arguments[3];
+        if (setenv("MILENA_FAKE_READELF_MODE", cases[index].mode, 1) != 0) {
+            report_failure(cases[index].label, "could not select mocked readelf case");
+            continue;
+        }
+        arguments[0] = (char *)"./tools/validate_termux_elf";
+        arguments[1] = fake_binary;
+        arguments[2] = NULL;
+        expect_process(cases[index].label, cases[index].succeeds, arguments);
+    }
+    {
+        char *arguments[3];
+        arguments[0] = (char *)"./tools/validate_termux_elf";
+        arguments[1] = missing_binary;
+        arguments[2] = NULL;
+        expect_process("reject missing ELF file", false, arguments);
+    }
+    if (saved_path == NULL) {
+        (void)unsetenv("PATH");
+    } else if (setenv("PATH", saved_path, 1) != 0) {
+        report_failure("restore PATH", "could not restore original PATH after ELF fixtures");
+    }
+    (void)unsetenv("MILENA_FAKE_READELF_MODE");
+    free(saved_path);
+}
+
 static void test_artifact_boundary(const char *temporary_root)
 {
     char valid_dir[PATH_CAPACITY];
@@ -858,6 +962,7 @@ int main(void)
         return 1;
     }
     test_recipe_validator(recipe_root);
+    test_termux_elf_validator(artifact_root);
     test_artifact_boundary(artifact_root);
     if (!remove_tree(recipe_root)) {
         report_failure("recipe fixture cleanup", "could not remove temporary directory");
