@@ -133,11 +133,13 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
 /* Lower one canonical scalar-HIR function body into a fresh, verified typed-IR
  * body. The current slice accepts typed numeric (F64) input parameters and
  * numeric/bool locals, one final return, nonterminal si/sino statements whose
- * arms assign only existing bindings (merged with typed block parameters), or
- * a final si/sino whose two arms each return immediately. The IR carries an
- * explicit signature and entry-block parameter definitions. Calls, missing
- * else arms, branch-local declarations, and other control-flow shapes fail
- * closed. `program` must be empty. */
+ * arms assign only existing bindings (merged with typed block parameters),
+ * including recursively nested assignment-only si/sino statements, or a final
+ * si/sino whose two arms each return immediately. The IR carries an explicit
+ * signature and entry-block parameter definitions. Calls, missing else arms,
+ * branch-local declarations, returns inside assignment branches, and other
+ * control-flow shapes fail closed. Nested assignment merges are bounded to a
+ * maximum lowering depth. `program` must be empty. */
 bool milena_ir_program_lower_scalar_function_body(
     MilenaIRProgram *program, const MilenaHIRFunction *function, char *error,
     size_t error_capacity);

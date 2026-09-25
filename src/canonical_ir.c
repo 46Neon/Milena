@@ -805,36 +805,165 @@ static bool ir_scalar_lower_return_branch(
     return true;
 }
 
-static bool ir_scalar_lower_assignment_branch(
-    MilenaIRProgram *program, uint32_t block_id,
+static bool ir_scalar_lower_assignment_sequence(
+    MilenaIRProgram *program, uint32_t *current_block_id,
+    uint32_t *next_block_id, uint32_t *next_value,
     const MilenaHIRStatement *const *statements, size_t statement_count,
-    IRScalarBinding *bindings, size_t binding_count, uint32_t *next_value,
+    IRScalarBinding *bindings, size_t binding_count, unsigned depth,
     char *error, size_t error_capacity) {
+    if (depth > 128)
+        return ir_fail(error, error_capacity,
+                       "typed scalar conditional nesting exceeds the lowering limit");
     for (size_t i = 0; i < statement_count; ++i) {
         const MilenaHIRStatement *statement = statements ? statements[i] : NULL;
-        size_t index;
-        uint32_t value_id;
-        MilenaIRType expression_type, statement_type;
-        if (!statement || statement->kind != MILENA_HIR_STMT_ASSIGN ||
-            !statement->resolved_symbol_id || !statement->as.expression ||
-            !ir_hir_value_type(statement->value_type, &statement_type))
+        if (!statement)
             return ir_fail(error, error_capacity,
-                "typed scalar si/sino merge supports only assignments to existing bindings");
-        index = ir_scalar_binding_index(bindings, binding_count,
-                                        statement->resolved_symbol_id);
-        if (index == SIZE_MAX || bindings[index].type != statement_type)
-            return ir_fail(error, error_capacity,
-                "typed scalar conditional assignment has no compatible outer binding");
-        if (!ir_scalar_lower_expression(program, block_id, statement->as.expression,
-                bindings, binding_count, next_value, &value_id,
-                &expression_type, error, error_capacity)) return false;
-        if (expression_type != statement_type)
-            return ir_fail(error, error_capacity,
-                "typed scalar conditional assignment changes its binding type");
-        bindings[index].value_id = value_id;
+                           "typed scalar conditional contains a missing statement");
+        if (statement->kind == MILENA_HIR_STMT_ASSIGN) {
+            size_t index;
+            uint32_t value_id;
+            MilenaIRType expression_type, statement_type;
+            if (!statement->resolved_symbol_id || !statement->as.expression ||
+                !ir_hir_value_type(statement->value_type, &statement_type))
+                return ir_fail(error, error_capacity,
+                    "typed scalar si/sino merge supports only assignments to existing bindings");
+            index = ir_scalar_binding_index(bindings, binding_count,
+                                            statement->resolved_symbol_id);
+            if (index == SIZE_MAX || bindings[index].type != statement_type)
+                return ir_fail(error, error_capacity,
+                    "typed scalar conditional assignment has no compatible outer binding");
+            if (!ir_scalar_lower_expression(program, *current_block_id,
+                    statement->as.expression, bindings, binding_count,
+                    next_value, &value_id, &expression_type,
+                    error, error_capacity)) return false;
+            if (expression_type != statement_type)
+                return ir_fail(error, error_capacity,
+                    "typed scalar conditional assignment changes its binding type");
+            bindings[index].value_id = value_id;
+            continue;
+        }
+        if (statement->kind == MILENA_HIR_STMT_IF) {
+            uint32_t condition_id, then_block_id, else_block_id, merge_block_id;
+            uint32_t then_end_block_id, else_end_block_id;
+            uint32_t nested_next_block_id;
+            MilenaIRType condition_type;
+            IRScalarBinding *then_bindings = NULL, *else_bindings = NULL;
+            size_t parameter_index = 0;
+            if (!statement->as.conditional.else_body ||
+                statement->as.conditional.else_count == 0)
+                return ir_fail(error, error_capacity,
+                    "nested typed scalar si/sino merge requires an explicit nonempty sino branch");
+            if (!statement->as.conditional.condition || !next_block_id ||
+                *next_block_id == 0 || *next_block_id > UINT32_MAX - 3)
+                return ir_fail(error, error_capacity,
+                               "typed scalar block-id space exhausted");
+            then_block_id = *next_block_id;
+            else_block_id = then_block_id + 1;
+            merge_block_id = then_block_id + 2;
+            *next_block_id += 3;
+            nested_next_block_id = *next_block_id;
+            if (binding_count > SIZE_MAX / sizeof(*then_bindings))
+                return ir_fail(error, error_capacity,
+                               "too many scalar bindings in conditional");
+            if (binding_count) {
+                then_bindings = malloc(binding_count * sizeof(*then_bindings));
+                else_bindings = malloc(binding_count * sizeof(*else_bindings));
+                if (!then_bindings || !else_bindings) {
+                    free(then_bindings); free(else_bindings);
+                    return ir_fail(error, error_capacity,
+                        "out of memory lowering nested scalar conditional assignments");
+                }
+                memcpy(then_bindings, bindings,
+                       binding_count * sizeof(*then_bindings));
+                memcpy(else_bindings, bindings,
+                       binding_count * sizeof(*else_bindings));
+            }
+            if (!ir_scalar_lower_expression(program, *current_block_id,
+                    statement->as.conditional.condition, bindings, binding_count,
+                    next_value, &condition_id, &condition_type,
+                    error, error_capacity)) {
+                free(then_bindings); free(else_bindings);
+                return false;
+            }
+            if (condition_type != MILENA_IR_TYPE_BOOL) {
+                free(then_bindings); free(else_bindings);
+                return ir_fail(error, error_capacity,
+                               "scalar si condition must lower to BOOL");
+            }
+            if (!milena_ir_block_append_instruction(program, *current_block_id,
+                    MILENA_IR_COND_BRANCH, 0, MILENA_IR_TYPE_VOID, condition_id,
+                    0, 0, 0.0, then_block_id, else_block_id) ||
+                !milena_ir_program_add_block(program, then_block_id)) {
+                free(then_bindings); free(else_bindings);
+                return ir_fail(error, error_capacity,
+                    "could not create nested typed scalar conditional blocks");
+            }
+            then_end_block_id = then_block_id;
+            if (!ir_scalar_lower_assignment_sequence(program,
+                    &then_end_block_id, &nested_next_block_id, next_value,
+                    (const MilenaHIRStatement *const *)statement->as.conditional.then_body,
+                    statement->as.conditional.then_count, then_bindings,
+                    binding_count, depth + 1, error, error_capacity) ||
+                !milena_ir_block_append_instruction(program, then_end_block_id,
+                    MILENA_IR_BRANCH, 0, MILENA_IR_TYPE_VOID, 0, 0, 0, 0.0,
+                    merge_block_id, 0) ||
+                !milena_ir_program_add_block(program, else_block_id)) {
+                free(then_bindings); free(else_bindings);
+                if (!error || !error[0])
+                    ir_fail(error, error_capacity,
+                            "could not terminate nested typed scalar then branch");
+                return false;
+            }
+            else_end_block_id = else_block_id;
+            if (!ir_scalar_lower_assignment_sequence(program,
+                    &else_end_block_id, &nested_next_block_id, next_value,
+                    (const MilenaHIRStatement *const *)statement->as.conditional.else_body,
+                    statement->as.conditional.else_count, else_bindings,
+                    binding_count, depth + 1, error, error_capacity) ||
+                !milena_ir_block_append_instruction(program, else_end_block_id,
+                    MILENA_IR_BRANCH, 0, MILENA_IR_TYPE_VOID, 0, 0, 0, 0.0,
+                    merge_block_id, 0) ||
+                !milena_ir_program_add_block(program, merge_block_id)) {
+                free(then_bindings); free(else_bindings);
+                if (!error || !error[0])
+                    ir_fail(error, error_capacity,
+                            "could not terminate nested typed scalar else branch");
+                return false;
+            }
+            for (size_t binding_index = 0; binding_index < binding_count;
+                 ++binding_index) {
+                if (then_bindings[binding_index].value_id ==
+                    else_bindings[binding_index].value_id) continue;
+                uint32_t merged_value;
+                if (!ir_scalar_next_value(next_value, &merged_value,
+                        error, error_capacity) ||
+                    !milena_ir_program_add_block_parameter(program,
+                        merge_block_id, merged_value,
+                        bindings[binding_index].type) ||
+                    !milena_ir_block_add_edge_argument(program, then_end_block_id,
+                        merge_block_id, (uint32_t)parameter_index,
+                        then_bindings[binding_index].value_id) ||
+                    !milena_ir_block_add_edge_argument(program, else_end_block_id,
+                        merge_block_id, (uint32_t)parameter_index,
+                        else_bindings[binding_index].value_id)) {
+                    free(then_bindings); free(else_bindings);
+                    return ir_fail(error, error_capacity,
+                            "could not define nested typed scalar merge parameter");
+                }
+                bindings[binding_index].value_id = merged_value;
+                ++parameter_index;
+            }
+            free(then_bindings); free(else_bindings);
+            *current_block_id = merge_block_id;
+            *next_block_id = nested_next_block_id;
+            continue;
+        }
+        return ir_fail(error, error_capacity,
+            "typed scalar conditional arms support assignments and nested si/sino only; declarations and returns are unsupported");
     }
     return true;
 }
+
 
 static bool ir_scalar_function_return_type(const MilenaHIRFunction *function,
                                            MilenaIRType *return_type,
@@ -1061,8 +1190,11 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
         if (statement->kind == MILENA_HIR_STMT_IF) {
             uint32_t condition_id;
             uint32_t then_block_id, else_block_id, merge_block_id;
+            uint32_t then_end_block_id, else_end_block_id;
+            uint32_t next_block_id;
             MilenaIRType condition_type;
             IRScalarBinding *then_bindings = NULL, *else_bindings = NULL;
+            size_t parameter_index = 0;
             if (!statement->as.conditional.else_body ||
                 statement->as.conditional.else_count == 0) {
                 ir_fail(error, error_capacity,
@@ -1076,13 +1208,10 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
             then_block_id = (uint32_t)lowered->block_count + 1;
             else_block_id = then_block_id + 1;
             merge_block_id = then_block_id + 2;
-            if (!ir_scalar_lower_expression(lowered, current_block_id,
-                    statement->as.conditional.condition, bindings, binding_count,
-                    &next_value, &condition_id, &condition_type,
-                    error, error_capacity)) goto cleanup;
-            if (condition_type != MILENA_IR_TYPE_BOOL) {
+            next_block_id = merge_block_id + 1;
+            if (binding_count > SIZE_MAX / sizeof(*then_bindings)) {
                 ir_fail(error, error_capacity,
-                        "scalar si condition must lower to BOOL");
+                        "too many scalar bindings in conditional");
                 goto cleanup;
             }
             if (binding_count) {
@@ -1099,6 +1228,19 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
                 memcpy(else_bindings, bindings,
                        binding_count * sizeof(*else_bindings));
             }
+            if (!ir_scalar_lower_expression(lowered, current_block_id,
+                    statement->as.conditional.condition, bindings, binding_count,
+                    &next_value, &condition_id, &condition_type,
+                    error, error_capacity)) {
+                free(then_bindings); free(else_bindings);
+                goto cleanup;
+            }
+            if (condition_type != MILENA_IR_TYPE_BOOL) {
+                free(then_bindings); free(else_bindings);
+                ir_fail(error, error_capacity,
+                        "scalar si condition must lower to BOOL");
+                goto cleanup;
+            }
             if (!milena_ir_block_append_instruction(lowered, current_block_id,
                     MILENA_IR_COND_BRANCH, 0, MILENA_IR_TYPE_VOID, condition_id,
                     0, 0, 0.0, then_block_id, else_block_id) ||
@@ -1108,11 +1250,13 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
                         "could not create typed scalar conditional branch blocks");
                 goto cleanup;
             }
-            if (!ir_scalar_lower_assignment_branch(lowered, then_block_id,
+            then_end_block_id = then_block_id;
+            if (!ir_scalar_lower_assignment_sequence(lowered,
+                    &then_end_block_id, &next_block_id, &next_value,
                     (const MilenaHIRStatement *const *)statement->as.conditional.then_body,
                     statement->as.conditional.then_count, then_bindings,
-                    binding_count, &next_value, error, error_capacity) ||
-                !milena_ir_block_append_instruction(lowered, then_block_id,
+                    binding_count, 0, error, error_capacity) ||
+                !milena_ir_block_append_instruction(lowered, then_end_block_id,
                     MILENA_IR_BRANCH, 0, MILENA_IR_TYPE_VOID, 0, 0, 0, 0.0,
                     merge_block_id, 0) ||
                 !milena_ir_program_add_block(lowered, else_block_id)) {
@@ -1122,11 +1266,13 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
                             "could not terminate typed scalar then branch");
                 goto cleanup;
             }
-            if (!ir_scalar_lower_assignment_branch(lowered, else_block_id,
+            else_end_block_id = else_block_id;
+            if (!ir_scalar_lower_assignment_sequence(lowered,
+                    &else_end_block_id, &next_block_id, &next_value,
                     (const MilenaHIRStatement *const *)statement->as.conditional.else_body,
                     statement->as.conditional.else_count, else_bindings,
-                    binding_count, &next_value, error, error_capacity) ||
-                !milena_ir_block_append_instruction(lowered, else_block_id,
+                    binding_count, 0, error, error_capacity) ||
+                !milena_ir_block_append_instruction(lowered, else_end_block_id,
                     MILENA_IR_BRANCH, 0, MILENA_IR_TYPE_VOID, 0, 0, 0, 0.0,
                     merge_block_id, 0) ||
                 !milena_ir_program_add_block(lowered, merge_block_id)) {
@@ -1136,7 +1282,6 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
                             "could not terminate typed scalar else branch");
                 goto cleanup;
             }
-            size_t parameter_index = 0;
             for (size_t binding_index = 0; binding_index < binding_count;
                  ++binding_index) {
                 if (then_bindings[binding_index].value_id ==
@@ -1147,10 +1292,10 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
                     !milena_ir_program_add_block_parameter(lowered,
                         merge_block_id, merged_value,
                         bindings[binding_index].type) ||
-                    !milena_ir_block_add_edge_argument(lowered, then_block_id,
+                    !milena_ir_block_add_edge_argument(lowered, then_end_block_id,
                         merge_block_id, (uint32_t)parameter_index,
                         then_bindings[binding_index].value_id) ||
-                    !milena_ir_block_add_edge_argument(lowered, else_block_id,
+                    !milena_ir_block_add_edge_argument(lowered, else_end_block_id,
                         merge_block_id, (uint32_t)parameter_index,
                         else_bindings[binding_index].value_id)) {
                     free(then_bindings); free(else_bindings);

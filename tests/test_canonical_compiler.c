@@ -290,6 +290,67 @@ int main(void) {
           "cada rama debe suministrar su valor al bloque de merge correspondiente");
     milena_canonical_program_release(&program);
 
+    /* Nested assignment conditionals stay on the canonical typed-IR route and
+       use inner/outer CFG merges with explicit edge arguments. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion nested_merge(x, y) { variable z = 0; "
+          "si (x > 0) { si (y > 0) { z = x; } sino { z = y; } } "
+          "sino { z = 0 - x; } retornar z; }", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL,
+          error.message);
+    typed_body = program.typed_ir;
+    CHECK(typed_body->block_count == 7 &&
+          typed_body->parameter_count == 4 &&
+          typed_body->edge_argument_count == 4 &&
+          milena_ir_program_validate(typed_body, error.message,
+                                     sizeof(error.message)),
+          "las condiciones anidadas deben bajar a CFG tipado con merges SSA verificados");
+    {
+        size_t conditional_branches = 0;
+        bool inner_merge = false, outer_merge = false;
+        for (size_t i = 0; i < typed_body->count; ++i)
+            if (typed_body->instructions[i].opcode == MILENA_IR_COND_BRANCH)
+                ++conditional_branches;
+        for (size_t i = 0; i < typed_body->parameter_count; ++i) {
+            if (typed_body->parameters[i].block_id == 7) inner_merge = true;
+            if (typed_body->parameters[i].block_id == 4) outer_merge = true;
+        }
+        CHECK(conditional_branches == 2 && inner_merge && outer_merge &&
+              typed_body->instructions[typed_body->count - 1].opcode ==
+                  MILENA_IR_RETURN &&
+              typed_body->instructions[typed_body->count - 1].operand1_id ==
+                  typed_body->parameters[typed_body->parameter_count - 1].value_id,
+              "los dos niveles deben preservar condición, parámetro de merge y retorno final");
+    }
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion nested_no_else(x, y) { variable z = 0; "
+          "si (x > 0) { si (y > 0) { z = x; } z = y; } "
+          "sino { z = 0; } retornar z; }", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
+          strstr(error.message, "sino") != NULL,
+          "una condición anidada sin sino debe fallar cerrado y sin IR parcial");
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion nested_local(x, y) { variable z = 0; "
+          "si (x > 0) { si (y > 0) { variable temporal = x; z = temporal; } "
+          "sino { z = y; } } sino { z = 0; } retornar z; }", &error) ==
+              MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
+          strstr(error.message, "declarations") != NULL,
+          "una declaración local de rama anidada debe fallar cerrado sin IR parcial");
+    milena_canonical_program_release(&program);
+
     /* The current merge slice is intentionally closed: no implicit fallthrough
        and no branch-local declaration escapes into the merge. */
     milena_canonical_program_init(&program);
