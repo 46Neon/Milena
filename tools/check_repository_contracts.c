@@ -1617,40 +1617,7 @@ static char *capture_recipe_assignment(const char *text, const char *name, bool 
     return NULL;
 }
 
-static char *capture_makefile_termux_version(const char *text)
-{
-    const char *line = text;
-    static const char marker[] = "TERMUX_PKG_VERSION=";
-    while (*line != '\0') {
-        const char *line_end = strchr(line, '\n');
-        const char *start;
-        const char *end;
-        if (line_end == NULL) {
-            line_end = line + strlen(line);
-        }
-        if ((size_t)(line_end - line) >= sizeof(marker) - 1U &&
-            memcmp(line, marker, sizeof(marker) - 1U) == 0) {
-            start = line + sizeof(marker) - 1U;
-            end = start;
-            while (end < line_end && isspace((unsigned char)*end) == 0 && *end != '#') {
-                ++end;
-            }
-            if (end > start) {
-                size_t value_length = (size_t)(end - start);
-                char *value = (char *)malloc(value_length + 1U);
-                if (value == NULL) {
-                    (void)fprintf(stderr, "ERROR: out of memory while parsing Makefile version\n");
-                    exit(EXIT_FAILURE);
-                }
-                memcpy(value, start, value_length);
-                value[value_length] = '\0';
-                return value;
-            }
-        }
-        line = *line_end == '\0' ? line_end : line_end + 1;
-    }
-    return NULL;
-}
+static char *capture_recipe_termux_version(const char *text) {     return capture_recipe_assignment(text, "TERMUX_PKG_VERSION", false); }
 
 static char *capture_runtime_version(const char *text)
 {
