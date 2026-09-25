@@ -1812,7 +1812,7 @@ static void check_termux_packaging(void)
         validate_termux_recipe_static(&errors, recipe_text);
     }
     makefile = optional_read_file("Makefile");
-    recipe_version = makefile == NULL ? NULL : capture_makefile_termux_version(makefile);
+    recipe_version = recipe_text == NULL ? NULL : capture_recipe_termux_version(recipe_text);
     common = optional_read_file("include/common.h");
     runtime_version = common == NULL ? NULL : capture_runtime_version(common);
     if (recipe_version == NULL || runtime_version == NULL || strcmp(recipe_version, runtime_version) != 0) {
