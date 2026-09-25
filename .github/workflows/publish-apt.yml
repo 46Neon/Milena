@@ -88,7 +88,7 @@ jobs:
           python3 scripts/validate_termux_elf.py "$tmp/milena"
 
       - name: Run reproducible Termux boundary fixture tests
-        run: python3 scripts/test_termux_packaging.py
+        run: make test-termux-packaging
 
       - name: Import Milena signing key
         shell: bash
