@@ -26,7 +26,7 @@ jobs:
           set -euxo pipefail
           ${{ matrix.compiler }} -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 tests/test_ir_validation.c src/canonical_ir.c src/common.c -lm -pthread -o tests/test_ir_validation
           ./tests/test_ir_validation
-          ${{ matrix.compiler }} -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 tests/test_typed_bytecode.c src/typed_bytecode.c src/canonical_ir.c src/common.c -lm -pthread -o tests/test_typed_bytecode
+          ${{ matrix.compiler }} -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 tests/test_typed_bytecode.c src/typed_vm.c src/typed_bytecode.c src/canonical_ir.c src/common.c -lm -pthread -o tests/test_typed_bytecode
           ./tests/test_typed_bytecode
       - name: Compile and execute focused frontend tests
         run: |
@@ -51,7 +51,7 @@ jobs:
             -fsanitize=address,undefined -lm -pthread -o tests/test_ir_validation
           ./tests/test_ir_validation
           clang -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g \
-            -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_typed_bytecode.c src/typed_bytecode.c src/canonical_ir.c src/common.c \
+            -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_typed_bytecode.c src/typed_vm.c src/typed_bytecode.c src/canonical_ir.c src/common.c \
             -fsanitize=address,undefined -lm -pthread -o tests/test_typed_bytecode
           ./tests/test_typed_bytecode
       - name: Compile and execute lexer safety tests under sanitizers

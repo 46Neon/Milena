@@ -1,4 +1,5 @@
 #include "typed_bytecode.h"
+#include "typed_vm.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -36,7 +37,7 @@ static MilenaIRModule *make_call_module(void) {
     module->function_count = 2u;
 
     MilenaIRModuleFunction *callee = &module->functions[0];
-    callee->name = copy_text("triple");
+    callee->name = copy_text("sumar_tres");
     callee->symbol_id = 100u;
     callee->parameter_types = (MilenaIRType *)malloc(sizeof(parameters));
     assert(callee->parameter_types != NULL);
@@ -51,11 +52,15 @@ static MilenaIRModule *make_call_module(void) {
     for (uint32_t i = 0; i < 3u; ++i)
         assert(milena_ir_program_add_block_parameter(callee->body, 1u, i + 1u,
                                                       MILENA_IR_TYPE_F64));
+    assert(append_instruction(callee->body, 1u, MILENA_IR_ADD_F64, 4u,
+        MILENA_IR_TYPE_F64, 1u, 2u, 0, 0.0, 0u, 0u));
+    assert(append_instruction(callee->body, 1u, MILENA_IR_ADD_F64, 5u,
+        MILENA_IR_TYPE_F64, 4u, 3u, 0, 0.0, 0u, 0u));
     assert(append_instruction(callee->body, 1u, MILENA_IR_RETURN, 0u,
-        MILENA_IR_TYPE_F64, 1u, 0u, 0, 0.0, 0u, 0u));
+        MILENA_IR_TYPE_F64, 5u, 0u, 0, 0.0, 0u, 0u));
 
     MilenaIRModuleFunction *caller = &module->functions[1];
-    caller->name = copy_text("entry");
+    caller->name = copy_text("principal");
     caller->symbol_id = 200u;
     caller->return_type = MILENA_IR_TYPE_F64;
     caller->body = milena_ir_program_create();
@@ -77,6 +82,66 @@ static MilenaIRModule *make_call_module(void) {
     return module;
 }
 
+static MilenaIRModule *make_division_by_zero_module(void) {
+    MilenaIRModule *module = (MilenaIRModule *)calloc(1, sizeof(*module));
+    assert(module != NULL);
+    module->functions = (MilenaIRModuleFunction *)calloc(1u,
+                                                         sizeof(*module->functions));
+    assert(module->functions != NULL);
+    module->function_count = 1u;
+    MilenaIRModuleFunction *function = &module->functions[0];
+    function->name = copy_text("dividir_por_cero");
+    function->symbol_id = 300u;
+    function->return_type = MILENA_IR_TYPE_F64;
+    function->body = milena_ir_program_create();
+    assert(function->body != NULL);
+    assert(milena_ir_program_set_function_signature(function->body, NULL, 0u,
+                                                     MILENA_IR_TYPE_F64));
+    assert(milena_ir_program_add_block(function->body, 1u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_CONST_F64, 1u,
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, 1.0, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_CONST_F64, 2u,
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, 0.0, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_DIV_F64, 3u,
+        MILENA_IR_TYPE_F64, 1u, 2u, 0, 0.0, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_RETURN, 0u,
+        MILENA_IR_TYPE_F64, 3u, 0u, 0, 0.0, 0u, 0u));
+    function->body->module_context = module;
+    return module;
+}
+
+static MilenaIRModule *make_bounded_loop_module(void) {
+    MilenaIRModule *module = (MilenaIRModule *)calloc(1, sizeof(*module));
+    assert(module != NULL);
+    module->functions = (MilenaIRModuleFunction *)calloc(1u,
+                                                         sizeof(*module->functions));
+    assert(module->functions != NULL);
+    module->function_count = 1u;
+    MilenaIRModuleFunction *function = &module->functions[0];
+    function->name = copy_text("bucle_limitado");
+    function->symbol_id = 301u;
+    function->return_type = MILENA_IR_TYPE_F64;
+    function->body = milena_ir_program_create();
+    assert(function->body != NULL);
+    assert(milena_ir_program_set_function_signature(function->body, NULL, 0u,
+                                                     MILENA_IR_TYPE_F64));
+    assert(milena_ir_program_add_block(function->body, 1u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_CONST_BOOL, 1u,
+        MILENA_IR_TYPE_BOOL, 0u, 0u, 1, 0.0, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_COND_BRANCH, 0u,
+        MILENA_IR_TYPE_VOID, 1u, 0u, 0, 0.0, 2u, 3u));
+    assert(milena_ir_program_add_block(function->body, 2u));
+    assert(append_instruction(function->body, 2u, MILENA_IR_BRANCH, 0u,
+        MILENA_IR_TYPE_VOID, 0u, 0u, 0, 0.0, 2u, 0u));
+    assert(milena_ir_program_add_block(function->body, 3u));
+    assert(append_instruction(function->body, 3u, MILENA_IR_CONST_F64, 2u,
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, 42.0, 0u, 0u));
+    assert(append_instruction(function->body, 3u, MILENA_IR_RETURN, 0u,
+        MILENA_IR_TYPE_F64, 2u, 0u, 0, 0.0, 0u, 0u));
+    function->body->module_context = module;
+    return module;
+}
+
 static void test_roundtrip_module_with_direct_call(void) {
     char error[256] = {0};
     uint8_t *encoded = NULL;
@@ -92,7 +157,7 @@ static void test_roundtrip_module_with_direct_call(void) {
     assert(milena_bytecode_decode_module(encoded, encoded_size, &decoded,
                                          error, sizeof(error)));
     assert(decoded != NULL && decoded->function_count == 2u);
-    assert(strcmp(decoded->functions[0].name, "triple") == 0);
+    assert(strcmp(decoded->functions[0].name, "sumar_tres") == 0);
     assert(decoded->functions[0].symbol_id == 100u);
     assert(decoded->functions[0].parameter_count == 3u);
     assert(decoded->functions[0].body->parameters[2].value_id == 3u);
@@ -108,6 +173,20 @@ static void test_roundtrip_module_with_direct_call(void) {
                                          error, sizeof(error)));
     assert(again_size == encoded_size);
     assert(memcmp(again, encoded, encoded_size) == 0);
+
+    /* The reference VM accepts only verified portable bytecode and executes
+       the Spanish-named three-argument function through the canonical module. */
+    MilenaTypedVMValue result = {0};
+    assert(milena_typed_vm_execute(encoded, encoded_size, 200u, NULL, 0u,
+                                   NULL, &result, error, sizeof(error)));
+    assert(result.type == MILENA_IR_TYPE_F64 && result.as.f64 == 6.0);
+    MilenaTypedVMValue previous = {MILENA_IR_TYPE_BOOL, {.boolean = true}};
+    result = previous;
+    MilenaTypedVMValue unexpected_argument = {MILENA_IR_TYPE_F64, {.f64 = 1.0}};
+    assert(!milena_typed_vm_execute(encoded, encoded_size, 200u,
+                                    &unexpected_argument, 1u, NULL, &result,
+                                    error, sizeof(error)));
+    assert(result.type == previous.type && result.as.boolean == previous.as.boolean);
 
     free(again);
     free(encoded);
@@ -184,8 +263,10 @@ static void test_rejects_bad_headers_and_lengths(void) {
     expect_invalid(mutated, size);
 
     memcpy(mutated, bytes, size);
-    /* Each array count independently fits in the remaining payload, but their
-       combined records do not. The decoder must reject before allocating them. */
+    /* Program counts follow the 16-byte header and function record. Their
+       exact offsets are block=42, parameters=46, edges=50, call args=54,
+       instructions=58. Each count fits alone; their combined wire size does
+       not, so decoding must reject before allocating arrays. */
     set_u32_le(mutated, 46u, 35u);  /* block parameter count */
     set_u32_le(mutated, 50u, 29u);  /* edge argument count */
     set_u32_le(mutated, 54u, 100u); /* call argument count */
@@ -200,8 +281,8 @@ static void test_rejects_bad_headers_and_lengths(void) {
     memcpy(mutated, bytes, size);
     /* Locate the first opcode from the format's fixed-width field sizes and
        this fixture's three F64 signature/block parameters. */
-    const size_t first_opcode_offset = 16u + 4u + 4u + 4u +
-        (sizeof("triple") - 1u) + 4u + 1u + 3u + 5u * 4u + 1u + 4u + 3u +
+    const size_t first_opcode_offset = 16u + 4u + 4u +
+        (sizeof("sumar_tres") - 1u) + 4u + 1u + 3u + 5u * 4u + 1u + 4u + 3u +
         24u + 3u * 12u;
     assert(first_opcode_offset + 1u < size);
     mutated[first_opcode_offset] = 0xffu;
@@ -222,8 +303,7 @@ static void test_rejects_signature_mismatch_and_invalid_source_module(void) {
     uint8_t *mutated = (uint8_t *)malloc(size);
     assert(mutated != NULL);
     memcpy(mutated, bytes, size);
-    /* First function return type: header + function count + symbol + name
-       length + six-byte "triple" + parameter count. */
+    /* Function return type is after symbol ID, name length/name and arity. */
     mutated[38u] = (uint8_t)MILENA_IR_TYPE_BOOL;
     expect_invalid(mutated, size);
 
@@ -239,10 +319,163 @@ static void test_rejects_signature_mismatch_and_invalid_source_module(void) {
     milena_ir_module_destroy(module);
 }
 
+
+static MilenaIRModule *make_branch_merge_module(void) {
+    MilenaIRModule *module = (MilenaIRModule *)calloc(1, sizeof(*module));
+    assert(module != NULL);
+    module->functions = (MilenaIRModuleFunction *)calloc(1u,
+                                                         sizeof(*module->functions));
+    assert(module->functions != NULL);
+    module->function_count = 1u;
+    MilenaIRModuleFunction *function = &module->functions[0];
+    function->name = copy_text("elegir_valor");
+    function->symbol_id = 400u;
+    function->return_type = MILENA_IR_TYPE_I64;
+    function->body = milena_ir_program_create();
+    assert(function->body != NULL);
+    assert(milena_ir_program_set_function_signature(function->body, NULL, 0u,
+                                                     MILENA_IR_TYPE_I64));
+    for (uint32_t block = 1u; block <= 4u; ++block)
+        assert(milena_ir_program_add_block(function->body, block));
+    assert(milena_ir_program_add_block_parameter(function->body, 4u, 4u,
+                                                  MILENA_IR_TYPE_I64));
+    assert(append_instruction(function->body, 1u, MILENA_IR_CONST_BOOL, 1u,
+        MILENA_IR_TYPE_BOOL, 0u, 0u, 0, 0.0, 0u, 0u));
+    function->body->instructions[0].integer_immediate = 0;
+    assert(append_instruction(function->body, 1u, MILENA_IR_COND_BRANCH, 0u,
+        MILENA_IR_TYPE_VOID, 1u, 0u, 0, 0.0, 2u, 3u));
+    assert(append_instruction(function->body, 2u, MILENA_IR_CONST_I64, 2u,
+        MILENA_IR_TYPE_I64, 0u, 0u, 41, 0.0, 0u, 0u));
+    assert(append_instruction(function->body, 2u, MILENA_IR_BRANCH, 0u,
+        MILENA_IR_TYPE_VOID, 0u, 0u, 0, 0.0, 4u, 0u));
+    assert(append_instruction(function->body, 3u, MILENA_IR_CONST_I64, 3u,
+        MILENA_IR_TYPE_I64, 0u, 0u, 42, 0.0, 0u, 0u));
+    assert(append_instruction(function->body, 3u, MILENA_IR_BRANCH, 0u,
+        MILENA_IR_TYPE_VOID, 0u, 0u, 0, 0.0, 4u, 0u));
+    assert(milena_ir_block_add_edge_argument(function->body, 2u, 4u, 0u, 2u));
+    assert(milena_ir_block_add_edge_argument(function->body, 3u, 4u, 0u, 3u));
+    assert(append_instruction(function->body, 4u, MILENA_IR_RETURN, 0u,
+        MILENA_IR_TYPE_I64, 4u, 0u, 0, 0.0, 0u, 0u));
+    function->body->module_context = module;
+    return module;
+}
+
+static void test_vm_branch_ssa_merge(void) {
+    char error[256] = {0};
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    MilenaIRModule *module = make_branch_merge_module();
+    MilenaTypedVMValue result = {0};
+    assert(milena_ir_module_validate(module, error, sizeof(error)));
+    assert(milena_bytecode_encode_module(module, &bytes, &size,
+                                         error, sizeof(error)));
+    assert(milena_typed_vm_execute(bytes, size, 400u, NULL, 0u, NULL,
+                                   &result, error, sizeof(error)));
+    assert(result.type == MILENA_IR_TYPE_I64 && result.as.i64 == 42);
+    free(bytes);
+    milena_ir_module_destroy(module);
+}
+
+static void test_vm_forward_call_and_call_depth_limit(void) {
+    char error[256] = {0};
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    MilenaIRModule *module = make_call_module();
+    /* Put principal before sumar_tres: this is a true forward call in wire order. */
+    MilenaIRModuleFunction swap = module->functions[0];
+    module->functions[0] = module->functions[1];
+    module->functions[1] = swap;
+    module->functions[0].body->module_context = module;
+    module->functions[1].body->module_context = module;
+    MilenaTypedVMValue result = {0};
+    assert(milena_bytecode_encode_module(module, &bytes, &size,
+                                         error, sizeof(error)));
+    assert(milena_typed_vm_execute(bytes, size, 200u, NULL, 0u, NULL,
+                                   &result, error, sizeof(error)));
+    assert(result.type == MILENA_IR_TYPE_F64 && result.as.f64 == 6.0);
+    MilenaTypedVMValue previous = {MILENA_IR_TYPE_I64, {.i64 = 99}};
+    result = previous;
+    MilenaTypedVMOptions shallow = {100u, 1u};
+    assert(!milena_typed_vm_execute(bytes, size, 200u, NULL, 0u, &shallow,
+                                    &result, error, sizeof(error)));
+    assert(strstr(error, "call depth") != NULL);
+    assert(result.type == previous.type && result.as.i64 == previous.as.i64);
+    free(bytes);
+    milena_ir_module_destroy(module);
+}
+
+static void test_vm_errors_and_limits(void) {
+    char error[256] = {0};
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    MilenaIRModule *division = make_division_by_zero_module();
+    assert(milena_bytecode_encode_module(division, &bytes, &size,
+                                         error, sizeof(error)));
+    MilenaTypedVMValue previous = {MILENA_IR_TYPE_F64, {.f64 = 17.0}};
+    MilenaTypedVMValue result = previous;
+    assert(!milena_typed_vm_execute(bytes, size, 300u, NULL, 0u, NULL,
+                                    &result, error, sizeof(error)));
+    assert(strstr(error, "division by zero") != NULL);
+    assert(result.type == previous.type && result.as.f64 == previous.as.f64);
+    free(bytes);
+    milena_ir_module_destroy(division);
+
+    MilenaIRModule *loop = make_bounded_loop_module();
+    bytes = NULL;
+    size = 0;
+    assert(milena_bytecode_encode_module(loop, &bytes, &size,
+                                         error, sizeof(error)));
+    MilenaTypedVMOptions short_budget = {3u, 8u};
+    result = previous;
+    assert(!milena_typed_vm_execute(bytes, size, 301u, NULL, 0u,
+                                    &short_budget, &result, error, sizeof(error)));
+    assert(strstr(error, "step limit") != NULL);
+    assert(result.type == previous.type && result.as.f64 == previous.as.f64);
+    free(bytes);
+    milena_ir_module_destroy(loop);
+
+    MilenaIRModule *calls = make_call_module();
+    bytes = NULL;
+    size = 0;
+    assert(milena_bytecode_encode_module(calls, &bytes, &size,
+                                         error, sizeof(error)));
+    uint8_t *malformed = (uint8_t *)malloc(size);
+    assert(malformed != NULL);
+    memcpy(malformed, bytes, size);
+    malformed[0] ^= 0x01u;
+    result = previous;
+    assert(!milena_typed_vm_execute(malformed, size, 200u, NULL, 0u, NULL,
+                                    &result, error, sizeof(error)));
+    assert(error[0] != '\0' && result.type == previous.type &&
+           result.as.f64 == previous.as.f64);
+    free(malformed);
+
+    MilenaTypedVMValue bad_arguments[] = {
+        {MILENA_IR_TYPE_F64, {.f64 = 1.0}},
+        {MILENA_IR_TYPE_BOOL, {.boolean = true}},
+        {MILENA_IR_TYPE_F64, {.f64 = 3.0}}
+    };
+    result = previous;
+    assert(!milena_typed_vm_execute(bytes, size, 100u, bad_arguments, 3u,
+                                    NULL, &result, error, sizeof(error)));
+    assert(strstr(error, "argument type mismatch") != NULL);
+    assert(result.type == previous.type && result.as.f64 == previous.as.f64);
+    result = previous;
+    assert(!milena_typed_vm_execute(bytes, size, 999u, NULL, 0u, NULL,
+                                    &result, error, sizeof(error)));
+    assert(strstr(error, "entry function") != NULL);
+    assert(result.type == previous.type && result.as.f64 == previous.as.f64);
+    free(bytes);
+    milena_ir_module_destroy(calls);
+}
+
 int main(void) {
     test_roundtrip_module_with_direct_call();
     test_rejects_bad_headers_and_lengths();
     test_rejects_signature_mismatch_and_invalid_source_module();
-    puts("typed bytecode encode/decode/verifier tests passed");
+    test_vm_branch_ssa_merge();
+    test_vm_forward_call_and_call_depth_limit();
+    test_vm_errors_and_limits();
+    puts("typed bytecode verifier and internal reference VM tests passed");
     return 0;
 }

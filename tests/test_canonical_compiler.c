@@ -1,7 +1,10 @@
 #include "canonical_compiler.h"
 #include "typed_ir.h"
+#include "typed_bytecode.h"
+#include "typed_vm.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define CHECK(condition, message) \
@@ -1232,6 +1235,36 @@ int main(void) {
           "la llamada adelantada enlaza symbol ID y todos los argumentos SSA");
     CHECK(milena_ir_module_validate(program.typed_module, error.message,
                                     sizeof(error.message)), error.message);
+    milena_canonical_program_release(&program);
+
+    /* The sole canonical Spanish frontend route lowers, serializes and executes
+       only its verified typed bytecode in the internal reference VM. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion sumar_tres(a, b, c) { retornar a + b + c; } "
+          "funcion principal() { retornar sumar_tres(1, 2, 3); }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    uint32_t entry_symbol = 0;
+    for (size_t i = 0; i < program.typed_module->function_count; ++i)
+        if (strcmp(program.typed_module->functions[i].name, "principal") == 0)
+            entry_symbol = program.typed_module->functions[i].symbol_id;
+    CHECK(entry_symbol != 0, "el frontend español debe conservar la identidad de principal");
+    uint8_t *canonical_bytecode = NULL;
+    size_t canonical_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(program.typed_module,
+          &canonical_bytecode, &canonical_bytecode_size, error.message,
+          sizeof(error.message)), error.message);
+    MilenaTypedVMValue vm_result = {0};
+    CHECK(milena_typed_vm_execute(canonical_bytecode, canonical_bytecode_size,
+          entry_symbol, NULL, 0, NULL, &vm_result, error.message,
+          sizeof(error.message)), error.message);
+    CHECK(vm_result.type == MILENA_IR_TYPE_F64 && vm_result.as.f64 == 6.0,
+          "fuente española→IR tipada→bytecode MLBC→VM debe devolver 6");
+    free(canonical_bytecode);
     milena_canonical_program_release(&program);
 
     puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, binding, execution and diagnostics");

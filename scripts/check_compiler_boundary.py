@@ -15,6 +15,7 @@ CANONICAL = {
     "lexer.c", "parser.c", "ast.c", "language_semantic.c", "language_runtime.c",
     "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "table.c", "dataset.c",
 }
+REFERENCE_VM = "typed_vm.c"
 errors = []
 # Capture the complete SOURCES assignment, including its continuation lines.
 match = re.search(r"^SOURCES\s*=\s*(.*?)(?=^OBJECTS\s*=)", MAKEFILE, re.MULTILINE | re.DOTALL)
@@ -27,6 +28,13 @@ for name in sorted(EXPERIMENTAL & sources):
     errors.append(f"módulo experimental enlazado en el binario oficial: {name}")
 for name in sorted(CANONICAL - sources):
     errors.append(f"falta una fuente del pipeline canónico: {name}")
+if REFERENCE_VM in sources:
+    errors.append("la VM interna de referencia no debe enlazarse en el binario oficial")
+if not (ROOT / "src" / REFERENCE_VM).is_file():
+    errors.append("falta la VM interna de referencia probada sobre bytecode verificado")
+WINDOWS_PACKAGE = (ROOT / "packaging" / "windows" / "build.ps1")
+if WINDOWS_PACKAGE.is_file() and REFERENCE_VM in WINDOWS_PACKAGE.read_text(encoding="utf-8"):
+    errors.append("la VM interna de referencia no debe incluirse en el paquete Windows")
 
 # The product sources may not accidentally pull the orphan compiler stack through
 # a header include. Headers remain in the tree for future work, but are not active.
