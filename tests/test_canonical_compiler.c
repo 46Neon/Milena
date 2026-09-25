@@ -1,4 +1,5 @@
 #include "canonical_compiler.h"
+#include "ir.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -178,6 +179,121 @@ int main(void) {
     milena_canonical_program_release(&program);
     CHECK(program.hir == NULL && program.ast == NULL,
           "liberar el programa debe destruir la HIR y el AST poseídos");
+
+    /* First verified scalar-body lowering from the canonical typed frontend.
+       This deliberately narrow slice covers local SSA rebinding and numeric
+       operators; calls and parameterized functions remain explicit rejections. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion calcular() { variable x = 10; x = x * 2; "
+          "retornar x + 3; }", &error) == MILENA_OK, error.message);
+    CHECK(program.hir && program.hir->function_count == 1 &&
+          program.hir->functions[0].body_count == 3,
+          "el frontend debe entregar una función tipada con declaración, asignación y retorno");
+    IRProgram *typed_body = ir_program_create();
+    CHECK(typed_body != NULL, "no se pudo reservar IR tipada");
+    CHECK(ir_program_lower_scalar_function_body(typed_body,
+          &program.hir->functions[0], error.message, sizeof(error.message)),
+          error.message);
+    CHECK(ir_program_validate(typed_body, error.message, sizeof(error.message)),
+          error.message);
+    CHECK(typed_body->block_count == 1 && typed_body->count == 6 &&
+          typed_body->instructions[2].opcode == IR_MUL_F64 &&
+          typed_body->instructions[4].opcode == IR_ADD_F64 &&
+          typed_body->instructions[5].opcode == IR_RETURN &&
+          typed_body->instructions[5].result_type == IR_TYPE_F64,
+          "la lowering debe producir SSA aritmético tipado y retorno verificado");
+    CHECK(typed_body->instructions[2].operand1_id ==
+              typed_body->instructions[0].result_id &&
+          typed_body->instructions[4].operand1_id ==
+              typed_body->instructions[2].result_id,
+          "reasignación y usos posteriores deben referenciar el valor SSA vigente");
+    ir_program_destroy(typed_body);
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion calcular() { retornar (10 - 2) * 3 / 4; }", &error) ==
+              MILENA_OK, error.message);
+    typed_body = ir_program_create();
+    CHECK(typed_body != NULL, "no se pudo reservar IR tipada para operadores");
+    CHECK(ir_program_lower_scalar_function_body(typed_body,
+          &program.hir->functions[0], error.message, sizeof(error.message)),
+          error.message);
+    CHECK(typed_body->count == 8 &&
+          typed_body->instructions[2].opcode == IR_SUB_F64 &&
+          typed_body->instructions[4].opcode == IR_MUL_F64 &&
+          typed_body->instructions[6].opcode == IR_DIV_F64 &&
+          typed_body->instructions[7].opcode == IR_RETURN,
+          "resta, multiplicación y división deben preservar el AST tipado");
+    ir_program_destroy(typed_body);
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion elegir() { variable base = 1; "
+          "si (base > 0) { retornar base; } sino { retornar 0; } }",
+          &error) == MILENA_OK, error.message);
+    typed_body = ir_program_create();
+    CHECK(typed_body != NULL, "no se pudo reservar IR tipada para si/sino");
+    CHECK(ir_program_lower_scalar_function_body(typed_body,
+          &program.hir->functions[0], error.message, sizeof(error.message)),
+          error.message);
+    CHECK(typed_body->block_count == 3 && typed_body->count == 7 &&
+          typed_body->instructions[2].opcode == IR_GT_F64 &&
+          typed_body->instructions[3].opcode == IR_COND_BRANCH &&
+          typed_body->instructions[3].target_true == 2 &&
+          typed_body->instructions[3].target_false == 3 &&
+          typed_body->blocks[0].successor_true == 2 &&
+          typed_body->blocks[0].successor_false == 3 &&
+          typed_body->instructions[4].opcode == IR_RETURN &&
+          typed_body->instructions[6].opcode == IR_RETURN,
+          "si/sino debe bajar a CFG tipado con retornos en ambas ramas");
+    ir_program_destroy(typed_body);
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion comparar() { variable a = 1 == 2; variable b = 1 != 2; "
+          "variable c = 1 < 2; variable d = 1 <= 2; "
+          "variable e = 1 > 2; variable f = 1 >= 2; "
+          "variable g = verdadero; retornar 0; }",
+          &error) == MILENA_OK, error.message);
+    typed_body = ir_program_create();
+    CHECK(typed_body != NULL, "no se pudo reservar IR tipada para comparaciones");
+    CHECK(ir_program_lower_scalar_function_body(typed_body,
+          &program.hir->functions[0], error.message, sizeof(error.message)),
+          error.message);
+    CHECK(typed_body->count == 21 &&
+          typed_body->instructions[2].opcode == IR_EQ_F64 &&
+          typed_body->instructions[5].opcode == IR_NE_F64 &&
+          typed_body->instructions[8].opcode == IR_LT_F64 &&
+          typed_body->instructions[11].opcode == IR_LE_F64 &&
+          typed_body->instructions[14].opcode == IR_GT_F64 &&
+          typed_body->instructions[17].opcode == IR_GE_F64 &&
+          typed_body->instructions[18].opcode == IR_CONST_BOOL &&
+          typed_body->instructions[18].result_type == IR_TYPE_BOOL &&
+          typed_body->instructions[2].result_type == IR_TYPE_BOOL &&
+          typed_body->instructions[20].opcode == IR_RETURN,
+          "las comparaciones numéricas deben bajar a valores bool explícitos");
+    ir_program_destroy(typed_body);
+    milena_canonical_program_release(&program);
+
+    /* Unsupported parameters fail closed and leave the caller's empty output
+       untouched; no implicit function ABI is fabricated by this slice. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion identidad(n) { retornar n; }", &error) == MILENA_OK,
+          error.message);
+    typed_body = ir_program_create();
+    CHECK(typed_body != NULL, "no se pudo reservar IR tipada de rechazo");
+    CHECK(!ir_program_lower_scalar_function_body(typed_body,
+          &program.hir->functions[0], error.message, sizeof(error.message)) &&
+          strstr(error.message, "zero-parameter") != NULL &&
+          typed_body->count == 0 && typed_body->block_count == 0,
+          "parámetros sin firma IR deben rechazarse sin publicar IR parcial");
+    ir_program_destroy(typed_body);
+    milena_canonical_program_release(&program);
 
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,

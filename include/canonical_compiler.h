@@ -92,7 +92,7 @@ struct MilenaHIRStatement {
     } as;
 };
 
-typedef struct {
+typedef struct MilenaHIRFunction {
     char *name;
     size_t resolved_symbol_id;
     MilenaHIRSourceSpan span;

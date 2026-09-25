@@ -6,6 +6,10 @@
 #include "symbol.h"
 #include <stdint.h>
 
+#ifndef MILENA_CANONICAL_COMPILER_H
+typedef struct MilenaHIRFunction MilenaHIRFunction;
+#endif
+
 typedef enum {
     IR_LOAD_DATASET,
     IR_CLEAN_NULLS,
@@ -30,6 +34,16 @@ typedef enum {
     IR_BRANCH,
     IR_COND_BRANCH,
     IR_RETURN,
+    IR_CONST_BOOL,
+    IR_SUB_F64,
+    IR_MUL_F64,
+    IR_DIV_F64,
+    IR_EQ_F64,
+    IR_NE_F64,
+    IR_LT_F64,
+    IR_LE_F64,
+    IR_GT_F64,
+    IR_GE_F64,
     IR_OPCODE_COUNT
 } IROpCode;
 
@@ -127,5 +141,14 @@ bool ir_block_append_instruction(IRProgram *program, uint32_t block_id,
                                  uint32_t target_false);
 bool ir_program_validate(const IRProgram *program, char *error,
                          size_t error_capacity);
+
+/* Lower one canonical scalar-HIR function body into a fresh, verified typed-IR
+ * body. The current slice accepts zero parameters, numeric/bool locals, and
+ * either one final return or a final si/sino whose two arms each return
+ * immediately. Calls and other control-flow shapes fail closed. `program`
+ * must be empty. Function identity/signatures are not yet represented in IR. */
+bool ir_program_lower_scalar_function_body(IRProgram *program,
+                                           const MilenaHIRFunction *function,
+                                           char *error, size_t error_capacity);
 
 #endif

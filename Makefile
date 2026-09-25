@@ -334,7 +334,7 @@ check-hir-ast-coverage:
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
-tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c
+tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/ir.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 test-termux-packaging: check-termux-packaging

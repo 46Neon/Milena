@@ -1,3 +1,4 @@
+#include "canonical_compiler.h"
 #include "ir.h"
 #include <stdarg.h>
 #include <string.h>
@@ -544,16 +545,37 @@ bool ir_program_validate(const IRProgram *program, char *error,
                         ins->integer_immediate != 0 || !isfinite(ins->float_immediate))
                         goto bad_shape;
                     break;
-                case IR_ADD_I64:
-                case IR_ADD_F64:
+                case IR_CONST_BOOL:
                     defines = true;
-                    if (ins->result_type != (ins->opcode == IR_ADD_I64 ?
-                                             IR_TYPE_I64 : IR_TYPE_F64) ||
-                        ins->operand1_id == 0 || ins->operand2_id == 0 ||
-                        ins->integer_immediate || ins->float_immediate != 0.0 ||
-                        ins->target_true || ins->target_false) goto bad_shape;
+                    if (ins->result_type != IR_TYPE_BOOL || ins->operand1_id ||
+                        ins->operand2_id || ins->target_true || ins->target_false ||
+                        (ins->integer_immediate != 0 && ins->integer_immediate != 1) ||
+                        ins->float_immediate != 0.0) goto bad_shape;
+                    break;
+                case IR_ADD_I64:
+                    defines = true;
+                    if (ins->result_type != IR_TYPE_I64 || !ins->operand1_id ||
+                        !ins->operand2_id || ins->integer_immediate ||
+                        ins->float_immediate != 0.0 || ins->target_true ||
+                        ins->target_false) goto bad_shape;
+                    break;
+                case IR_ADD_F64:
+                case IR_SUB_F64:
+                case IR_MUL_F64:
+                case IR_DIV_F64:
+                    defines = true;
+                    if (ins->result_type != IR_TYPE_F64 || !ins->operand1_id ||
+                        !ins->operand2_id || ins->integer_immediate ||
+                        ins->float_immediate != 0.0 || ins->target_true ||
+                        ins->target_false) goto bad_shape;
                     break;
                 case IR_EQ_I64:
+                case IR_EQ_F64:
+                case IR_NE_F64:
+                case IR_LT_F64:
+                case IR_LE_F64:
+                case IR_GT_F64:
+                case IR_GE_F64:
                     defines = true;
                     if (ins->result_type != IR_TYPE_BOOL || !ins->operand1_id ||
                         !ins->operand2_id || ins->integer_immediate ||
@@ -671,9 +693,22 @@ bool ir_program_validate(const IRProgram *program, char *error,
             const IRInstruction *ins = &program->instructions[ii];
             IRType operand_type = IR_TYPE_INVALID;
             switch (ins->opcode) {
-                case IR_ADD_I64: operand_type = IR_TYPE_I64; break;
-                case IR_ADD_F64: operand_type = IR_TYPE_F64; break;
-                case IR_EQ_I64: operand_type = IR_TYPE_I64; break;
+                case IR_ADD_I64:
+                case IR_EQ_I64:
+                    operand_type = IR_TYPE_I64;
+                    break;
+                case IR_ADD_F64:
+                case IR_SUB_F64:
+                case IR_MUL_F64:
+                case IR_DIV_F64:
+                case IR_EQ_F64:
+                case IR_NE_F64:
+                case IR_LT_F64:
+                case IR_LE_F64:
+                case IR_GT_F64:
+                case IR_GE_F64:
+                    operand_type = IR_TYPE_F64;
+                    break;
                 case IR_COND_BRANCH: operand_type = IR_TYPE_BOOL; break;
                 case IR_RETURN:
                     if (ins->operand1_id) operand_type = ins->result_type;
@@ -686,11 +721,15 @@ bool ir_program_validate(const IRProgram *program, char *error,
                 free(values); free(reachable); free(queue); free(dominators);
                 return false;
             }
-            if ((ins->opcode == IR_ADD_I64 || ins->opcode == IR_ADD_F64 ||
-                 ins->opcode == IR_EQ_I64) &&
+            if ((ins->opcode == IR_ADD_I64 || ins->opcode == IR_EQ_I64 ||
+                 ins->opcode == IR_ADD_F64 || ins->opcode == IR_SUB_F64 ||
+                 ins->opcode == IR_MUL_F64 || ins->opcode == IR_DIV_F64 ||
+                 ins->opcode == IR_EQ_F64 || ins->opcode == IR_NE_F64 ||
+                 ins->opcode == IR_LT_F64 || ins->opcode == IR_LE_F64 ||
+                 ins->opcode == IR_GT_F64 || ins->opcode == IR_GE_F64) &&
                 !ir_use_is_valid(values, value_count, ins->operand2_id,
-                    ins->opcode == IR_ADD_I64 ? IR_TYPE_I64 :
-                    ins->opcode == IR_ADD_F64 ? IR_TYPE_F64 : IR_TYPE_I64,
+                    (ins->opcode == IR_ADD_I64 || ins->opcode == IR_EQ_I64) ?
+                        IR_TYPE_I64 : IR_TYPE_F64,
                     bi, ii, n, dominators, error, error_capacity)) {
                 free(values); free(reachable); free(queue); free(dominators);
                 return false;
@@ -759,4 +798,309 @@ bool ir_program_validate(const IRProgram *program, char *error,
     free(values); free(reachable); free(queue); free(dominators);
 #undef IR_REJECT
     return true;
+}
+
+typedef struct {
+    size_t symbol_id;
+    uint32_t value_id;
+    IRType type;
+} IRScalarBinding;
+
+static bool ir_hir_value_type(MilenaHIRValueType source, IRType *target) {
+    if (!target) return false;
+    switch (source) {
+        case MILENA_HIR_NUMBER: *target = IR_TYPE_F64; return true;
+        case MILENA_HIR_BOOLEAN: *target = IR_TYPE_BOOL; return true;
+        default: *target = IR_TYPE_INVALID; return false;
+    }
+}
+
+static size_t ir_scalar_binding_index(const IRScalarBinding *bindings,
+                                      size_t count, size_t symbol_id) {
+    if (!symbol_id) return SIZE_MAX;
+    for (size_t i = 0; i < count; ++i)
+        if (bindings[i].symbol_id == symbol_id) return i;
+    return SIZE_MAX;
+}
+
+static bool ir_scalar_next_value(uint32_t *next_value, uint32_t *value_id,
+                                char *error, size_t error_capacity) {
+    if (!next_value || !value_id || *next_value == 0 ||
+        *next_value == UINT32_MAX)
+        return ir_fail(error, error_capacity, "typed IR value-id space exhausted");
+    *value_id = (*next_value)++;
+    return true;
+}
+
+static bool ir_scalar_append_value(IRProgram *program, uint32_t block_id,
+                                   IROpCode opcode, IRType type,
+                                   uint32_t left, uint32_t right,
+                                   int64_t integer_immediate,
+                                   double float_immediate,
+                                   uint32_t *next_value, uint32_t *result,
+                                   char *error, size_t error_capacity) {
+    if (!ir_scalar_next_value(next_value, result, error, error_capacity))
+        return false;
+    if (!ir_block_append_instruction(program, block_id, opcode, *result, type,
+                                     left, right, integer_immediate,
+                                     float_immediate, 0, 0))
+        return ir_fail(error, error_capacity,
+                       "could not append typed scalar IR instruction");
+    return true;
+}
+
+static bool ir_scalar_lower_expression(IRProgram *program, uint32_t block_id,
+                                       const MilenaHIRExpression *expression,
+                                       const IRScalarBinding *bindings,
+                                       size_t binding_count, uint32_t *next_value,
+                                       uint32_t *result, IRType *result_type,
+                                       char *error, size_t error_capacity) {
+    if (!program || !expression || !next_value || !result || !result_type)
+        return ir_fail(error, error_capacity, "invalid scalar HIR expression");
+    if (!ir_hir_value_type(expression->value_type, result_type))
+        return ir_fail(error, error_capacity, "unsupported scalar HIR value type");
+    switch (expression->kind) {
+        case MILENA_HIR_EXPR_LITERAL:
+            if (*result_type == IR_TYPE_F64) {
+                if (!isfinite(expression->as.number))
+                    return ir_fail(error, error_capacity,
+                                   "non-finite scalar literal is not supported");
+                return ir_scalar_append_value(program, block_id, IR_CONST_F64, IR_TYPE_F64,
+                    0, 0, 0, expression->as.number, next_value, result,
+                    error, error_capacity);
+            }
+            return ir_scalar_append_value(program, block_id, IR_CONST_BOOL, IR_TYPE_BOOL,
+                0, 0, expression->as.boolean ? 1 : 0, 0.0, next_value, result,
+                error, error_capacity);
+        case MILENA_HIR_EXPR_VARIABLE: {
+            size_t index = ir_scalar_binding_index(bindings, binding_count,
+                                                    expression->resolved_symbol_id);
+            if (index == SIZE_MAX)
+                return ir_fail(error, error_capacity,
+                               "scalar variable has no dominating typed binding");
+            if (bindings[index].type != *result_type)
+                return ir_fail(error, error_capacity,
+                               "scalar variable binding type does not match use");
+            *result = bindings[index].value_id;
+            return true;
+        }
+        case MILENA_HIR_EXPR_BINARY: {
+            const MilenaHIRExpression *left = expression->as.binary.left;
+            const MilenaHIRExpression *right = expression->as.binary.right;
+            uint32_t left_id, right_id;
+            IRType left_type, right_type;
+            IROpCode opcode;
+            bool comparison = false;
+            if (!left || !right ||
+                !ir_scalar_lower_expression(program, block_id, left, bindings,
+                    binding_count, next_value, &left_id, &left_type, error,
+                    error_capacity) ||
+                !ir_scalar_lower_expression(program, block_id, right, bindings,
+                    binding_count,
+                    next_value, &right_id, &right_type, error, error_capacity))
+                return false;
+            if (left_type != IR_TYPE_F64 || right_type != IR_TYPE_F64)
+                return ir_fail(error, error_capacity,
+                               "typed scalar binary operands must be numeric");
+            switch (expression->as.binary.operation) {
+                case AST_OPERATOR_ADD: opcode = IR_ADD_F64; break;
+                case AST_OPERATOR_SUBTRACT: opcode = IR_SUB_F64; break;
+                case AST_OPERATOR_MULTIPLY: opcode = IR_MUL_F64; break;
+                case AST_OPERATOR_DIVIDE: opcode = IR_DIV_F64; break;
+                case AST_OPERATOR_EQUAL: opcode = IR_EQ_F64; comparison = true; break;
+                case AST_OPERATOR_NOT_EQUAL: opcode = IR_NE_F64; comparison = true; break;
+                case AST_OPERATOR_LESS: opcode = IR_LT_F64; comparison = true; break;
+                case AST_OPERATOR_LESS_EQUAL: opcode = IR_LE_F64; comparison = true; break;
+                case AST_OPERATOR_GREATER: opcode = IR_GT_F64; comparison = true; break;
+                case AST_OPERATOR_GREATER_EQUAL: opcode = IR_GE_F64; comparison = true; break;
+                default:
+                    return ir_fail(error, error_capacity,
+                                   "unsupported typed scalar binary operator");
+            }
+            if ((comparison && *result_type != IR_TYPE_BOOL) ||
+                (!comparison && *result_type != IR_TYPE_F64))
+                return ir_fail(error, error_capacity,
+                               "scalar HIR operator result type is inconsistent");
+            return ir_scalar_append_value(program, block_id, opcode,
+                *result_type, left_id, right_id, 0, 0.0, next_value, result,
+                error, error_capacity);
+        }
+        case MILENA_HIR_EXPR_CALL:
+            return ir_fail(error, error_capacity,
+                           "function calls are not in the typed scalar IR slice yet");
+        default:
+            return ir_fail(error, error_capacity,
+                           "unsupported typed scalar HIR expression kind");
+    }
+}
+
+static bool ir_scalar_lower_return_branch(
+    IRProgram *program, uint32_t block_id,
+    MilenaHIRStatement *const *statements, size_t statement_count,
+    const IRScalarBinding *bindings, size_t binding_count, uint32_t *next_value,
+    char *error, size_t error_capacity) {
+    uint32_t value_id;
+    IRType value_type;
+    const MilenaHIRStatement *statement;
+    if (!statements || statement_count != 1 || !statements[0] ||
+        statements[0]->kind != MILENA_HIR_STMT_RETURN ||
+        !statements[0]->as.expression)
+        return ir_fail(error, error_capacity,
+                       "typed scalar conditional arms must each contain one return");
+    statement = statements[0];
+    if (!ir_scalar_lower_expression(program, block_id, statement->as.expression,
+            bindings, binding_count, next_value, &value_id, &value_type,
+            error, error_capacity)) return false;
+    if (!ir_block_append_instruction(program, block_id, IR_RETURN, 0,
+            value_type, value_id, 0, 0, 0.0, 0, 0))
+        return ir_fail(error, error_capacity,
+                       "could not append conditional-arm return");
+    return true;
+}
+
+bool ir_program_lower_scalar_function_body(IRProgram *program,
+                                           const MilenaHIRFunction *function,
+                                           char *error, size_t error_capacity) {
+    IRProgram *lowered = NULL;
+    IRScalarBinding *bindings = NULL;
+    size_t binding_count = 0;
+    uint32_t next_value = 1;
+    bool saw_return = false;
+    bool success = false;
+    if (error && error_capacity) error[0] = '\0';
+    if (!program || !function || !function->name || !function->resolved_symbol_id ||
+        function->parameter_count != 0 || function->body_count == 0 ||
+        !function->body || program->instructions || program->blocks ||
+        program->parameters || program->edge_arguments || program->count ||
+        program->capacity || program->block_count || program->block_capacity ||
+        program->parameter_count || program->parameter_capacity ||
+        program->edge_argument_count || program->edge_argument_capacity ||
+        program->symbols)
+        return ir_fail(error, error_capacity,
+                       "scalar IR lowering requires a zero-parameter HIR function and fresh output");
+    if (function->body_count > SIZE_MAX / sizeof(*bindings))
+        return ir_fail(error, error_capacity, "scalar HIR function body is too large");
+    lowered = ir_program_create();
+    bindings = (IRScalarBinding *)calloc(function->body_count, sizeof(*bindings));
+    if (!lowered || !bindings) {
+        ir_program_destroy(lowered);
+        free(bindings);
+        return ir_fail(error, error_capacity, "out of memory lowering scalar HIR function");
+    }
+    if (!ir_program_add_block(lowered, 1)) {
+        ir_fail(error, error_capacity, "could not create scalar IR entry block");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < function->body_count; ++i) {
+        const MilenaHIRStatement *statement = function->body[i];
+        if (!statement || saw_return) {
+            ir_fail(error, error_capacity,
+                    "scalar IR slice requires statements before one final return");
+            goto cleanup;
+        }
+        if (statement->kind == MILENA_HIR_STMT_DECLARE ||
+            statement->kind == MILENA_HIR_STMT_ASSIGN) {
+            size_t index = ir_scalar_binding_index(bindings, binding_count,
+                                                    statement->resolved_symbol_id);
+            uint32_t value_id;
+            IRType expression_type, statement_type;
+            bool is_declaration = statement->kind == MILENA_HIR_STMT_DECLARE;
+            if (!statement->resolved_symbol_id || !statement->as.expression ||
+                !ir_hir_value_type(statement->value_type, &statement_type)) {
+                ir_fail(error, error_capacity,
+                        "scalar declaration or assignment lacks resolved typed data");
+                goto cleanup;
+            }
+            if ((is_declaration && index != SIZE_MAX) ||
+                (!is_declaration && index == SIZE_MAX)) {
+                ir_fail(error, error_capacity,
+                        "scalar declaration/assignment binding is inconsistent");
+                goto cleanup;
+            }
+            if (!ir_scalar_lower_expression(lowered, 1, statement->as.expression,
+                    bindings, binding_count, &next_value, &value_id,
+                    &expression_type, error, error_capacity)) goto cleanup;
+            if (expression_type != statement_type ||
+                (!is_declaration && bindings[index].type != statement_type)) {
+                ir_fail(error, error_capacity,
+                        "scalar assignment changes or mismatches its binding type");
+                goto cleanup;
+            }
+            if (is_declaration) {
+                bindings[binding_count++] = (IRScalarBinding){
+                    statement->resolved_symbol_id, value_id, statement_type};
+            } else {
+                bindings[index].value_id = value_id;
+            }
+            continue;
+        }
+        if (statement->kind == MILENA_HIR_STMT_RETURN &&
+            i + 1 == function->body_count && statement->as.expression) {
+            uint32_t return_value;
+            IRType return_type;
+            if (!ir_scalar_lower_expression(lowered, 1, statement->as.expression,
+                    bindings, binding_count, &next_value, &return_value,
+                    &return_type, error, error_capacity)) goto cleanup;
+            if (!ir_block_append_instruction(lowered, 1, IR_RETURN, 0,
+                    return_type, return_value, 0, 0, 0.0, 0, 0)) {
+                ir_fail(error, error_capacity, "could not append scalar IR return");
+                goto cleanup;
+            }
+            saw_return = true;
+            continue;
+        }
+        if (statement->kind == MILENA_HIR_STMT_IF &&
+            i + 1 == function->body_count) {
+            uint32_t condition_id;
+            IRType condition_type;
+            if (statement->as.conditional.then_count != 1 ||
+                statement->as.conditional.else_count != 1 ||
+                !statement->as.conditional.then_body ||
+                !statement->as.conditional.else_body ||
+                !ir_scalar_lower_expression(lowered, 1,
+                    statement->as.conditional.condition, bindings, binding_count,
+                    &next_value, &condition_id, &condition_type,
+                    error, error_capacity)) goto cleanup;
+            if (condition_type != IR_TYPE_BOOL) {
+                ir_fail(error, error_capacity,
+                        "scalar si condition must lower to BOOL");
+                goto cleanup;
+            }
+            if (!ir_block_append_instruction(lowered, 1, IR_COND_BRANCH, 0,
+                    IR_TYPE_VOID, condition_id, 0, 0, 0.0, 2, 3)) {
+                ir_fail(error, error_capacity,
+                        "could not append scalar conditional branch");
+                goto cleanup;
+            }
+            if (!ir_program_add_block(lowered, 2) ||
+                !ir_scalar_lower_return_branch(lowered, 2,
+                    statement->as.conditional.then_body,
+                    statement->as.conditional.then_count, bindings,
+                    binding_count, &next_value, error, error_capacity) ||
+                !ir_program_add_block(lowered, 3) ||
+                !ir_scalar_lower_return_branch(lowered, 3,
+                    statement->as.conditional.else_body,
+                    statement->as.conditional.else_count, bindings,
+                    binding_count, &next_value, error, error_capacity))
+                goto cleanup;
+            saw_return = true;
+            continue;
+        }
+        ir_fail(error, error_capacity,
+                "scalar IR slice supports only local declarations, assignments, final return, or a final si/sino with immediate returns");
+        goto cleanup;
+    }
+    if (!saw_return) {
+        ir_fail(error, error_capacity, "scalar HIR function has no final return");
+        goto cleanup;
+    }
+    if (!ir_program_validate(lowered, error, error_capacity)) goto cleanup;
+    *program = *lowered;
+    free(lowered);
+    lowered = NULL;
+    success = true;
+cleanup:
+    ir_program_destroy(lowered);
+    free(bindings);
+    return success;
 }
