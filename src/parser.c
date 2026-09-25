@@ -1343,6 +1343,14 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_error(parser, "No se pudo registrar el origen de la condición");
                             break;
                         }
+                        ASTFilterPredicateStatus predicate_status =
+                            ast_set_filter_predicate(condition, parser->previous.lexeme);
+                        if (predicate_status == AST_FILTER_PREDICATE_MEMORY) {
+                            ast_destroy(condition);
+                            parser_error_at(parser, &condition_start,
+                                "Sin memoria para estructurar el predicado numérico");
+                            break;
+                        }
                         if (!parser_expect(parser, TOKEN_PAR_DER,
                                            "Se esperaba ')' después de la condición")) {
                             ast_destroy(condition);
