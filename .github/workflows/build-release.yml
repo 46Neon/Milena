@@ -23,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate local Markdown links
-        run: python3 scripts/check_markdown_links.py
+        run: make check-markdown-links
 
   linux-amd64:
     runs-on: ubuntu-latest
