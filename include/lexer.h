@@ -8,11 +8,11 @@ typedef struct Lexer {
     const char *source;
     size_t position;
     size_t length;
-    int line;
-    int column;
+    size_t line;
+    size_t column;
     size_t token_start_offset;
-    int token_start_line;
-    int token_start_column;
+    size_t token_start_line;
+    size_t token_start_column;
     Token current_token;
     Token previous_token;
     MilenaError error;
@@ -22,7 +22,7 @@ void lexer_init(Lexer *lexer, const char *source);
 Token lexer_next_token(Lexer *lexer);
 Token lexer_peek_token(Lexer *lexer);
 void lexer_advance_token(Lexer *lexer);
-bool lexer_match(Lexer *lexer, TokenType type);
-bool lexer_expect(Lexer *lexer, TokenType type, const char *error_msg);
+bool lexer_match(Lexer *lexer, MilenaTokenType type);
+bool lexer_expect(Lexer *lexer, MilenaTokenType type, const char *error_msg);
 
 #endif

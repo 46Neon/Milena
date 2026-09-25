@@ -109,7 +109,7 @@ typedef struct MilenaHIRFunction {
     size_t body_count;
 } MilenaHIRFunction;
 
-typedef struct {
+typedef struct MilenaScalarHIR {
     MilenaHIRFunction *functions;
     size_t function_count;
     MilenaHIRStatement **statements;
@@ -220,7 +220,8 @@ typedef struct {
     const MilenaTable *right_table; /* Borrowed second dataset when HIR has a join. */
     MilenaScalarHIR *hir; /* Owned scalar HIR, when the scalar subset applies. */
     MilenaDataHIR *data_hir; /* Owned data HIR, when the table subset applies. */
-    MilenaIRProgram *typed_ir; /* Owned verified IR from the explicit scalar compile slice. */
+    MilenaIRProgram *typed_ir; /* Borrowed compatibility view of the first compiled body. */
+    MilenaIRModule *typed_module; /* Owned interprocedural IR when the source has calls. */
 } MilenaCanonicalProgram;
 
 void milena_canonical_program_init(MilenaCanonicalProgram *program);
@@ -231,10 +232,13 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
                                              const char *source,
                                              MilenaError *error);
 
-/* Compile exactly one supported scalar HIR function, including numeric input
- * parameters, into owned, verified typed IR with an explicit function signature.
- * Unsupported shapes fail closed; this never invokes the interpreter. A
- * successful compile replaces any previously owned typed_ir transactionally. */
+/* Compile the supported scalar HIR into verified canonical typed IR. A single
+ * function keeps the typed_ir body representation; multi-function modules own
+ * typed_module and expose typed_ir as a borrowed view of its first body.
+ * Direct calls are limited to registered nonrecursive functions with 0-2
+ * numeric parameters and numeric/boolean returns. Unsupported shapes fail
+ * closed; this never invokes the interpreter. Successful replacement is
+ * transactional and release destroys the owned body/module. */
 MilenaStatus milena_canonical_program_compile_scalar_ir(
     MilenaCanonicalProgram *program, MilenaError *error);
 

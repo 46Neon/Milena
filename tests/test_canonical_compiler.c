@@ -974,6 +974,110 @@ int main(void) {
           "una acción de limpieza no implementada debe fallar cerrado y sin vista parcial");
     milena_canonical_program_release(&program);
 
-    puts("OK: canonical compiler boundary, typed scalar/data HIR, binding, execution and source diagnostics");
+    /* A source module with a direct scalar call lowers only on the canonical
+       lexer/parser/semantic -> HIR -> typed-IR path. Calls are nonrecursive,
+       numeric-parameter, scalar-returning, and currently support arity <= 2. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion duplicar(x) { retornar x + x; } "
+          "funcion principal(y) { variable listo = verdadero; "
+          "retornar duplicar(y); }", &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    CHECK(program.typed_module->function_count == 2 &&
+          program.typed_module->functions[0].symbol_id ==
+              program.hir->functions[0].resolved_symbol_id &&
+          program.typed_module->functions[1].body->signature.parameter_count == 1 &&
+          program.typed_module->functions[1].body->signature.return_type ==
+              MILENA_IR_TYPE_F64 && program.typed_ir ==
+              program.typed_module->functions[0].body,
+          "la IR de módulo debe conservar identidad, firma, cuerpo y vista compatible");
+    MilenaIRInstruction *direct_call = NULL;
+    for (size_t i = 0; i < program.typed_module->functions[1].body->count; ++i)
+        if (program.typed_module->functions[1].body->instructions[i].opcode ==
+            MILENA_IR_CALL)
+            direct_call = &program.typed_module->functions[1].body->instructions[i];
+    CHECK(direct_call && direct_call->integer_immediate ==
+              (int64_t)program.typed_module->functions[0].symbol_id &&
+          direct_call->target_true == 1 && direct_call->operand1_id == 1 &&
+          direct_call->result_type == MILENA_IR_TYPE_F64,
+          "una llamada directa debe enlazar target, aridad, argumento y retorno tipados");
+    {
+        const int64_t saved_target = direct_call->integer_immediate;
+        direct_call->integer_immediate = INT64_MAX;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador de módulos debe rechazar un target no resuelto");
+        direct_call->integer_immediate = saved_target;
+        const uint32_t saved_arity = direct_call->target_true;
+        direct_call->target_true = 0;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe comparar la aridad de cada llamada con la firma");
+        direct_call->target_true = saved_arity;
+        const uint32_t saved_argument = direct_call->operand1_id;
+        direct_call->operand1_id = 2; /* The caller's BOOL local, not its F64 parameter. */
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar argumentos con tipo distinto a la firma");
+        direct_call->operand1_id = saved_argument;
+        const MilenaIRType saved_return = direct_call->result_type;
+        direct_call->result_type = MILENA_IR_TYPE_BOOL;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar retorno de llamada distinto al tipo declarado");
+        direct_call->result_type = saved_return;
+        CHECK(milena_ir_module_validate(program.typed_module, error.message,
+                                        sizeof(error.message)), error.message);
+    }
+    /* Invalid binding and signature annotations are negative source-to-IR
+       tests: parsing remains canonical, but no partial IR module is published. */
+    milena_canonical_program_release(&program);
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion duplicar(x) { retornar x + x; } "
+          "funcion principal(y) { retornar duplicar(y); }", &error) == MILENA_OK,
+          error.message);
+    MilenaHIRExpression *call_expression = program.hir->functions[1]
+        .body[0]->as.expression;
+    const size_t saved_symbol = call_expression->resolved_symbol_id;
+    call_expression->resolved_symbol_id = UINT32_MAX;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir &&
+          strstr(error.message, "unresolved") != NULL,
+          "una llamada con identidad HIR no resuelta debe fallar cerrado");
+    call_expression->resolved_symbol_id = saved_symbol;
+    const size_t saved_argument_count = call_expression->as.call.argument_count;
+    call_expression->as.call.argument_count = 2;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir,
+          "la aridad HIR inválida debe fallar sin publicar módulo parcial");
+    call_expression->as.call.argument_count = saved_argument_count;
+    call_expression->as.call.arguments[0]->value_type = MILENA_HIR_BOOLEAN;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir,
+          "el lowering debe rechazar argumentos de llamada con tipo incorrecto");
+    call_expression->as.call.arguments[0]->value_type = MILENA_HIR_NUMBER;
+    /* Turn the direct call into a resolved self-edge to exercise the explicit
+       recursion boundary independently of frontend recursion inference. */
+    call_expression->resolved_symbol_id = program.hir->functions[1].resolved_symbol_id;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir &&
+          strstr(error.message, "recursive") != NULL,
+          "la recursión directa debe rechazarse explícitamente y sin IR parcial");
+    milena_canonical_program_release(&program);
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion sumar_tres(a, b, c) { retornar a + b + c; } "
+          "funcion usar_tres(x, y, z) { retornar sumar_tres(x, y, z); }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir,
+          "firmas de más de dos parámetros deben seguir fuera del módulo de llamadas");
+    milena_canonical_program_release(&program);
+
+    puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, binding, execution and diagnostics");
     return 0;
 }

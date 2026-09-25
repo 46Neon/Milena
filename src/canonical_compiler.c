@@ -991,12 +991,19 @@ void milena_canonical_program_init(MilenaCanonicalProgram *program) {
     program->hir = NULL;
     program->data_hir = NULL;
     program->typed_ir = NULL;
+    program->typed_module = NULL;
 }
 
 void milena_canonical_program_release(MilenaCanonicalProgram *program) {
     if (!program) return;
-    milena_ir_program_destroy(program->typed_ir);
-    program->typed_ir = NULL;
+    if (program->typed_module) {
+        milena_ir_module_destroy(program->typed_module);
+        program->typed_module = NULL;
+        program->typed_ir = NULL;
+    } else {
+        milena_ir_program_destroy(program->typed_ir);
+        program->typed_ir = NULL;
+    }
     scalar_hir_release(program->hir);
     program->hir = NULL;
     data_hir_release(program->data_hir);
@@ -1072,11 +1079,34 @@ MilenaStatus milena_canonical_program_compile_scalar_ir(
                         "El programa canónico debe parsearse antes de compilar IR");
         return MILENA_ERR_ARGUMENT;
     }
-    if (!program->hir || program->hir->function_count != 1 ||
+    if (!program->hir || !program->hir->function_count ||
         program->hir->statement_count != 0 || !program->hir->functions) {
         canonical_error(error, MILENA_ERR_UNSUPPORTED,
-                        "La compilación IR requiere exactamente una función escalar soportada y ninguna sentencia global");
+                        "La compilación IR requiere funciones escalares soportadas y ninguna sentencia global");
         return MILENA_ERR_UNSUPPORTED;
+    }
+
+    if (program->hir->function_count > 1) {
+        MilenaIRModule *module = NULL;
+        char module_error[MILENA_ERROR_TEXT] = {0};
+        if (!milena_ir_module_lower_scalar_hir(&module, program->hir,
+                                               module_error, sizeof(module_error))) {
+            MilenaStatus status = MILENA_ERR_UNSUPPORTED;
+            if (strstr(module_error, "out of memory") || strstr(module_error, "could not"))
+                status = MILENA_ERR_MEMORY;
+            else if (strstr(module_error, "too large") || strstr(module_error, "exhausted"))
+                status = MILENA_ERR_OVERFLOW;
+            if (error) milena_error_set(error, status, 0, 0, 0,
+                module_error[0] ? module_error : "Scalar IR module lowering failed closed");
+            return status;
+        }
+        MilenaIRModule *previous_module = program->typed_module;
+        MilenaIRProgram *previous_ir = program->typed_ir;
+        program->typed_module = module;
+        program->typed_ir = module->functions[0].body;
+        if (previous_module) milena_ir_module_destroy(previous_module);
+        else milena_ir_program_destroy(previous_ir);
+        return MILENA_OK;
     }
 
     MilenaIRProgram *lowered = milena_ir_program_create();

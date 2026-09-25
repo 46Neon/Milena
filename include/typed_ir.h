@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 typedef struct MilenaHIRFunction MilenaHIRFunction;
+typedef struct MilenaScalarHIR MilenaScalarHIR;
 
 typedef enum {
     MILENA_IR_CONST_I64,
@@ -29,6 +30,7 @@ typedef enum {
     MILENA_IR_LE_F64,
     MILENA_IR_GT_F64,
     MILENA_IR_GE_F64,
+    MILENA_IR_CALL,
     MILENA_IR_OPCODE_COUNT
 } MilenaIROpCode;
 
@@ -81,6 +83,8 @@ typedef struct MilenaIRFunctionSignature {
     MilenaIRType return_type;
 } MilenaIRFunctionSignature;
 
+typedef struct MilenaIRModule MilenaIRModule;
+
 typedef struct MilenaIRProgram {
     MilenaIRInstruction *instructions;
     size_t count;
@@ -96,7 +100,22 @@ typedef struct MilenaIRProgram {
     size_t edge_argument_capacity;
     MilenaIRFunctionSignature signature;
     bool has_function_signature;
+    const MilenaIRModule *module_context; /* Borrowed while owned by the canonical module. */
 } MilenaIRProgram;
+
+typedef struct MilenaIRModuleFunction {
+    char *name;
+    uint32_t symbol_id;
+    MilenaIRType *parameter_types;
+    size_t parameter_count;
+    MilenaIRType return_type;
+    MilenaIRProgram *body;
+} MilenaIRModuleFunction;
+
+typedef struct MilenaIRModule {
+    MilenaIRModuleFunction *functions;
+    size_t function_count;
+} MilenaIRModule;
 
 /* This canonical typed representation is independent of the experimental
  * string-based IRProgram declared by ir.h. */
@@ -129,6 +148,15 @@ bool milena_ir_block_append_instruction(MilenaIRProgram *program,
                                          uint32_t target_false);
 bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
                                 size_t error_capacity);
+void milena_ir_module_destroy(MilenaIRModule *module);
+bool milena_ir_module_validate(const MilenaIRModule *module, char *error,
+                               size_t error_capacity);
+bool milena_ir_module_lower_scalar_hir(MilenaIRModule **output,
+                                        const MilenaScalarHIR *hir,
+                                        char *error, size_t error_capacity);
+bool milena_ir_program_lower_scalar_function_body_in_module(
+    MilenaIRProgram *program, const MilenaHIRFunction *function,
+    const MilenaIRModule *module, char *error, size_t error_capacity);
 
 /* Lower one canonical scalar-HIR function body into a fresh, verified typed-IR
  * body. The current slice accepts typed numeric (F64) input parameters and
