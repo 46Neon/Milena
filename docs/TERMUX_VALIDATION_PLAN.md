@@ -26,7 +26,7 @@ para este entregable: registran commit, toolchain, arquitectura, `$PREFIX` y
 hashes sin incluir secretos. No sustituyen una auditoría de dependencias del
 ecosistema Termux.
 
-`python3 scripts/test_termux_packaging.py` usa un paquete sintético para probar
+`make test-termux-packaging` usa un paquete sintético para probar
 los rechazos de metadatos, rutas y arquitectura. No es un binario Termux y no
 sustituye una prueba en Android.
 
