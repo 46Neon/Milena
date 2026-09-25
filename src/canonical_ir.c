@@ -934,7 +934,7 @@ static bool ir_scalar_lower_assignment_sequence(
                  ++binding_index) {
                 if (then_bindings[binding_index].value_id ==
                     else_bindings[binding_index].value_id) continue;
-                uint32_t merged_value;
+                uint32_t merged_value = 0;
                 if (!ir_scalar_next_value(next_value, &merged_value,
                         error, error_capacity) ||
                     !milena_ir_program_add_block_parameter(program,
@@ -958,8 +958,11 @@ static bool ir_scalar_lower_assignment_sequence(
             *next_block_id = nested_next_block_id;
             continue;
         }
+        if (statement->kind == MILENA_HIR_STMT_DECLARE)
+            return ir_fail(error, error_capacity,
+                "typed scalar si/sino merge supports only assignments to existing bindings; branch-local declarations are unsupported");
         return ir_fail(error, error_capacity,
-            "typed scalar conditional arms support assignments and nested si/sino only; declarations and returns are unsupported");
+            "typed scalar conditional arms support assignments and nested si/sino only; returns and other statements are unsupported");
     }
     return true;
 }
@@ -1286,7 +1289,7 @@ bool milena_ir_program_lower_scalar_function_body(MilenaIRProgram *program,
                  ++binding_index) {
                 if (then_bindings[binding_index].value_id ==
                     else_bindings[binding_index].value_id) continue;
-                uint32_t merged_value;
+                uint32_t merged_value = 0;
                 if (!ir_scalar_next_value(&next_value, &merged_value,
                         error, error_capacity) ||
                     !milena_ir_program_add_block_parameter(lowered,
