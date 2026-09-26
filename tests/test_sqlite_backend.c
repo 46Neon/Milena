@@ -219,7 +219,16 @@ static void check_typed_text_equality_ignores_physical_nocase(MilenaSqlConnectio
         NULL, 0, &result, MILENA_OK);
 
     run_typed_text_equality("alice", db, &result);
-    assert(result.row_count == 0 && result.column_count == 2);
+    assert(result.row_count == 1 && result.column_count == 2 &&
+           strcmp(result.columns[0].name, "label") == 0 &&
+           strcmp(result.columns[1].name, "ordinal") == 0);
+    const char *casefold_only = NULL;
+    MilenaError error;
+    assert(milena_table_get_string(&result, 0, 0, &casefold_only, &error) == MILENA_OK &&
+           strcmp(casefold_only, "casefold-only") == 0);
+    const void *casefold_ordinal = NULL;
+    assert(milena_table_get_array_value(&result, 1, 0, &casefold_ordinal,
+        &error) == MILENA_OK && *(const int64_t *)casefold_ordinal == 1);
     milena_table_destroy(&result);
     milena_table_init(&result);
     run_typed_text_equality("Alice", db, &result);
@@ -229,7 +238,6 @@ static void check_typed_text_equality_ignores_physical_nocase(MilenaSqlConnectio
     const char *first = NULL;
     const char *third = NULL;
     const void *ordinal = NULL;
-    MilenaError error;
     assert(milena_table_get_string(&result, 0, 0, &first, &error) == MILENA_OK &&
            strcmp(first, "first") == 0);
     assert(milena_table_get_array_value(&result, 1, 0, &ordinal, &error) == MILENA_OK &&
