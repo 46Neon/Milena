@@ -114,7 +114,7 @@ static void test_field_and_record_limits_stop_growth(void) {
     assert(file);
     assert(fwrite("a,b\n\"", 1, 5, file) == 5);
     for (size_t i = 0; i < 4; i++) assert(fwrite("\"\"", 1, 2, file) == 2);
-    assert(fwrite("\",x\n", 4, file) == 4);
+    assert(fwrite("\",x\n", 1, 4, file) == 4);
     assert(fclose(file) == 0);
     limits.max_columns = 2;
     limits.max_field_bytes = 4;
