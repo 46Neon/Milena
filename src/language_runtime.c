@@ -1686,6 +1686,38 @@ static MilenaStatus run_stream_dataset_with_options(
     return status;
 }
 
+static bool runtime_common_materialized_preflight_candidate(
+    const MilenaDataHIR *hir) {
+    if (!hir || hir->source.streaming) return false;
+    size_t groups = 0;
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        const MilenaHIRDataOperation *op = &hir->operations[i];
+        if (op->kind == MILENA_HIR_DATA_GROUP) groups++;
+        else if (op->kind != MILENA_HIR_DATA_FILTER_NUMERIC) return false;
+    }
+    if (groups != 1u) return false;
+    const MilenaHIRDataOperation *group = NULL;
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        if (hir->operations[i].kind == MILENA_HIR_DATA_GROUP) {
+            group = &hir->operations[i];
+            break;
+        }
+    }
+    if (!group || !group->as.group.key.name) return true;
+    for (size_t i = 0; i < hir->declared_column_count; ++i) {
+        const MilenaHIRColumnRef *declared = &hir->declared_schema[i];
+        if (!declared->name || strcmp(declared->name,
+                                      group->as.group.key.name) != 0) continue;
+        /* Numeric and categorical grouped materialized programs are an existing
+         * HIR capability outside the text-key parity slice; leave them on their
+         * established executor. Missing/unknown declarations remain preflight
+         * failures for programs attempting this common shape. */
+        return declared->declared_type == MILENA_HIR_COLUMN_TEXT ||
+               declared->declared_type == MILENA_HIR_COLUMN_UNKNOWN;
+    }
+    return true;
+}
+
 MilenaStatus milena_run_dataset_program(const char *source,
                                         const char *script_filename,
                                         FILE *output,
@@ -1783,6 +1815,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
     }
 
     char input[2048];
+    char common_materialized_output_path[2048] = {0};
+    MilenaDataOperatorPlan common_materialized_preflight = {0};
+    bool has_common_materialized_preflight = false;
     MilenaCanonicalProgram source_program;
     milena_canonical_program_init(&source_program);
     MilenaStatus status = milena_canonical_program_parse(&source_program, source, error);
@@ -1806,6 +1841,34 @@ MilenaStatus milena_run_dataset_program(const char *source,
         }
     } else if (status == MILENA_OK && source_program.data_hir) {
         source_path = source_program.data_hir->source.path;
+        if (!arrow_stream && !streaming &&
+            (!load->value || !source_path || strcmp(source_path, load->value) != 0)) {
+            runtime_error(error, MILENA_ERR_DATA,
+                          "La fuente HIR no coincide con el origen tipado del AST");
+            status = MILENA_ERR_DATA;
+        }
+    }
+    if (status == MILENA_OK && !arrow_stream && !streaming &&
+        source_program.data_hir) {
+        MilenaError transform_preflight_error = {0};
+        status = milena_data_operator_hir_transform_preflight(
+            source_program.data_hir, &transform_preflight_error);
+        if (status != MILENA_OK && error) *error = transform_preflight_error;
+    }
+    if (status == MILENA_OK && !arrow_stream && !streaming &&
+        runtime_common_materialized_preflight_candidate(source_program.data_hir)) {
+        MilenaError preflight_error = {0};
+        status = milena_data_operator_plan_preflight_from_hir(
+            source_program.data_hir, &common_materialized_preflight,
+            &preflight_error);
+        if (status != MILENA_OK) {
+            if (error) *error = preflight_error;
+        } else {
+            status = dataset_runtime_path(common_materialized_preflight.sink_path,
+                script_filename, true, common_materialized_output_path,
+                sizeof(common_materialized_output_path), error);
+            has_common_materialized_preflight = status == MILENA_OK;
+        }
     }
     if (status == MILENA_OK)
         status = dataset_runtime_path(source_path, script_filename, false,
@@ -1946,7 +2009,6 @@ MilenaStatus milena_run_dataset_program(const char *source,
         return status;
     }
 
-    milena_canonical_program_release(&source_program);
     MilenaDatasetRuntime runtime = {0};
     dataset_init(&runtime.dataset);
     status = dataset_load_csv(&runtime.dataset, input, ',', error);
@@ -1970,8 +2032,13 @@ MilenaStatus milena_run_dataset_program(const char *source,
     const char *requested_output = export_node && export_node->value
         ? export_node->value : "reporte_dataset.json";
     if (status == MILENA_OK) {
-        status = dataset_runtime_path(requested_output, script_filename, true,
-                                      output_path, sizeof(output_path), error);
+        if (has_common_materialized_preflight) {
+            memcpy(output_path, common_materialized_output_path,
+                   strlen(common_materialized_output_path) + 1u);
+        } else {
+            status = dataset_runtime_path(requested_output, script_filename, true,
+                                          output_path, sizeof(output_path), error);
+        }
     }
     MilenaSchema schema;
     schema_init(&schema);
@@ -2105,6 +2172,13 @@ MilenaStatus milena_run_dataset_program(const char *source,
                         &canonical_table, &right_table, error)
                     : milena_canonical_program_bind_table(&canonical_program,
                         &canonical_table, error);
+            }
+            if (status == MILENA_OK && has_common_materialized_preflight) {
+                MilenaError bound_plan_error = {0};
+                status = milena_data_operator_plan_check_bound_hir(
+                    &common_materialized_preflight, canonical_program.data_hir,
+                    &bound_plan_error);
+                if (status != MILENA_OK && error) *error = bound_plan_error;
             }
             if (status == MILENA_OK && canonical_program.data_hir->export_path) {
                 MilenaDataOperatorPlan common_hir_plan = {0};
@@ -2591,6 +2665,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
 
     schema_destroy(&schema);
     if (runtime.loaded) dataset_destroy(&runtime.dataset);
+    milena_canonical_program_release(&source_program);
     ast_destroy(program);
     parser_release(&parser);
     return status;

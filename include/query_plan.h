@@ -10,6 +10,7 @@
  * physical plan, and it does not imply Arrow/SQLite support. */
 #define MILENA_DATA_PLAN_MAX_METRICS 64u
 #define MILENA_DATA_PLAN_MAX_OPERATORS 4u
+#define MILENA_DATA_PLAN_MAX_SCHEMA_REFS (MILENA_DATA_PLAN_MAX_METRICS + 2u)
 
 typedef enum {
     MILENA_DATA_OPERATOR_CSV_SCAN = 1,
@@ -35,6 +36,12 @@ typedef struct {
 } MilenaDataPlanMetric;
 
 typedef struct {
+    const char *name;
+    size_t declaration_index;
+    unsigned declared_type;
+} MilenaDataPlanSchemaRef;
+
+typedef struct {
     const char *source_path;
     const char *sink_path;
     MilenaDataExecutionMode execution_mode;
@@ -46,6 +53,19 @@ typedef struct {
     const char *group_key;
     MilenaDataPlanMetric metrics[MILENA_DATA_PLAN_MAX_METRICS];
     size_t metric_count;
+    /* Materialized preflight identity, populated only by the typed-HIR
+     * preflight builder. Column types are MilenaHIRColumnType identities. */
+    bool has_preflight_identity;
+    size_t source_dataset_id;
+    size_t source_max_rows;
+    size_t source_max_columns;
+    size_t source_max_record_bytes;
+    double source_max_elapsed_milliseconds;
+    size_t group_limit_input_rows;
+    size_t group_limit_output_rows;
+    size_t group_limit_columns;
+    MilenaDataPlanSchemaRef schema_refs[MILENA_DATA_PLAN_MAX_SCHEMA_REFS];
+    size_t schema_ref_count;
 } MilenaDataOperatorPlan;
 
 struct MilenaDataHIR;
@@ -53,6 +73,20 @@ struct MilenaStreamExecutionPlan;
 MilenaStatus milena_data_operator_plan_from_hir(
     const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
     MilenaError *error);
+/* Builds the common materialized subset from the already parsed typed HIR and
+ * explicit source declarations, without binding or opening the input file. */
+MilenaStatus milena_data_operator_plan_preflight_from_hir(
+    const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
+    MilenaError *error);
+/* Checks typed numeric transforms already represented in the source HIR before
+ * a materialized input is opened; it does not extend the common operator set. */
+MilenaStatus milena_data_operator_hir_transform_preflight(
+    const struct MilenaDataHIR *hir, MilenaError *error);
+/* Rebuilds the post-bind plan and verifies that it retains the preflighted
+ * source, schema identities, operation graph, and declared limits. */
+MilenaStatus milena_data_operator_plan_check_bound_hir(
+    const MilenaDataOperatorPlan *preflight,
+    const struct MilenaDataHIR *bound_hir, MilenaError *error);
 MilenaStatus milena_data_operator_plan_from_stream(
     const ASTNode *analysis, const struct MilenaStreamExecutionPlan *stream_plan,
     MilenaDataOperatorPlan *plan, MilenaError *error);

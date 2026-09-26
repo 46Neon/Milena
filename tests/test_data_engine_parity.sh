@@ -96,6 +96,87 @@ stream_counts = {
 expected_counts = {"A": 2, "B": 1, "C": 1}
 assert mem_counts == stream_counts == expected_counts, (mem_counts, stream_counts)
 PY
+
+# Materialized typed plans with invalid schema/operator/output declarations
+# must fail during HIR preflight, before the intentionally missing CSV is
+# touched. This keeps the failure deterministic and distinguishes it from I/O.
+assert_preflight_rejects() {
+  script=$1
+  log="$TMP_DIR/$script.log"
+  if (cd "$TMP_DIR" && "$MILENA_BIN" run "$script") >"$log" 2>&1; then
+    echo "el plan inválido $script produjo éxito" >&2
+    exit 1
+  fi
+  if grep -Eiq 'No se pudo abrir.*dataset|unable to open.*dataset|cannot open.*dataset' "$log"; then
+    echo "el plan $script intentó abrir el CSV antes de fallar en preflight" >&2
+    cat "$log" >&2
+    exit 1
+  fi
+}
+cat > "$TMP_DIR/preflight-unknown-key.milena" <<'MILENA'
+.analisis preflight_clave_desconocida {
+  dataset cargar datos("missing-preflight.csv")
+  variable grupo texto
+  variable valor numerica
+  .agrupar dataset { #por("columna_inexistente") #suma("valor") }
+  .exportar { ("unknown-key.json") }
+}
+MILENA
+cat > "$TMP_DIR/preflight-unknown-metric.milena" <<'MILENA'
+.analisis preflight_metrica_desconocida {
+  dataset cargar datos("missing-preflight.csv")
+  variable grupo texto
+  variable valor numerica
+  .agrupar dataset { #por("grupo") #suma("columna_inexistente") }
+  .exportar { ("unknown-metric.json") }
+}
+MILENA
+cat > "$TMP_DIR/preflight-wrong-metric-type.milena" <<'MILENA'
+.analisis preflight_tipo_metrica {
+  dataset cargar datos("missing-preflight.csv")
+  variable grupo texto
+  variable valor texto
+  .agrupar dataset { #por("grupo") #suma("valor") }
+  .exportar { ("wrong-metric.json") }
+}
+MILENA
+cat > "$TMP_DIR/preflight-unsupported-filter.milena" <<'MILENA'
+.analisis preflight_operador_no_soportado {
+  dataset cargar datos("missing-preflight.csv")
+  variable grupo texto
+  variable valor numerica
+  .filtrar { #condicion("valor >= 1") }
+  .agrupar dataset { #por("grupo") #suma("valor") }
+  .exportar { ("unsupported-filter.json") }
+}
+MILENA
+cat > "$TMP_DIR/preflight-invalid-output.milena" <<'MILENA'
+.analisis preflight_salida_invalida {
+  dataset cargar datos("missing-preflight.csv")
+  variable grupo texto
+  variable valor numerica
+  .agrupar dataset { #por("grupo") #suma("valor") }
+  .exportar { ("directory/") }
+}
+MILENA
+cat > "$TMP_DIR/preflight-invalid-transform.milena" <<'MILENA'
+.analisis preflight_transformacion_invalida {
+  dataset cargar datos("missing-preflight.csv")
+  variable grupo texto
+  variable valor numerica
+  variable factor texto
+  .transformar dataset { #total("valor * factor") }
+  .agrupar dataset { #por("grupo") #suma("valor") }
+  .exportar { ("invalid-transform.json") }
+}
+MILENA
+assert_preflight_rejects preflight-unknown-key.milena
+assert_preflight_rejects preflight-unknown-metric.milena
+assert_preflight_rejects preflight-wrong-metric-type.milena
+assert_preflight_rejects preflight-unsupported-filter.milena
+assert_preflight_rejects preflight-invalid-output.milena
+assert_preflight_rejects preflight-invalid-transform.milena
+
 # A source-row budget breach is a controlled failure. A previously published
 # destination must survive unchanged rather than becoming a partial success.
 printf '%s\n' 'previous-complete-report' > "$TMP_DIR/stable.json"

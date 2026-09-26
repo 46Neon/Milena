@@ -22,6 +22,8 @@ MilenaStatus milena_data_operator_plan_validate(
     const MilenaDataOperatorPlan *plan, MilenaError *error) {
     if (!plan || !plan->source_path || !plan->source_path[0] ||
         !plan->sink_path || !plan->sink_path[0] ||
+        plan->sink_path[strlen(plan->sink_path) - 1u] == '/' ||
+        plan->sink_path[strlen(plan->sink_path) - 1u] == '\\' ||
         (plan->execution_mode != MILENA_DATA_EXECUTION_MATERIALIZED_TABLE &&
          plan->execution_mode != MILENA_DATA_EXECUTION_CSV_RECORD_STREAM) ||
         plan->operator_count < 3u ||
@@ -143,6 +145,294 @@ MilenaStatus milena_data_operator_plan_from_hir(
     }
     plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_JSON_SINK;
     return milena_data_operator_plan_validate(plan, error);
+}
+
+static const MilenaHIRColumnRef *preflight_find_declared_column(
+    const struct MilenaDataHIR *hir, const char *name, size_t *index) {
+    if (!hir || !name) return NULL;
+    const MilenaHIRColumnRef *found = NULL;
+    for (size_t i = 0; i < hir->declared_column_count; ++i) {
+        const MilenaHIRColumnRef *column = &hir->declared_schema[i];
+        if (!column->name || strcmp(column->name, name) != 0) continue;
+        if (found) return NULL; /* Ambiguous declarations fail closed. */
+        found = column;
+        if (index) *index = i;
+    }
+    return found;
+}
+
+static MilenaStatus preflight_require_column_type(
+    const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
+    const char *name, MilenaHIRColumnType expected, MilenaError *error) {
+    size_t index = 0;
+    const MilenaHIRColumnRef *declared =
+        preflight_find_declared_column(hir, name, &index);
+    if (!declared || declared->declared_type == MILENA_HIR_COLUMN_UNKNOWN)
+        return plan_error(error, MILENA_ERR_TYPE,
+            "La columna de la operación común no está declarada en el esquema fuente");
+    if (declared->declared_type != expected)
+        return plan_error(error, MILENA_ERR_TYPE,
+            "El tipo declarado de la columna no coincide con la operación común");
+    if (!plan) return MILENA_OK;
+    for (size_t i = 0; i < plan->schema_ref_count; ++i) {
+        MilenaDataPlanSchemaRef *prior = &plan->schema_refs[i];
+        if (strcmp(prior->name, name) == 0) {
+            if (prior->declaration_index != index ||
+                prior->declared_type != (unsigned)expected)
+                return plan_error(error, MILENA_ERR_DATA,
+                    "La identidad de esquema declarada no es única");
+            return MILENA_OK;
+        }
+    }
+    if (plan->schema_ref_count >= MILENA_DATA_PLAN_MAX_SCHEMA_REFS)
+        return plan_error(error, MILENA_ERR_OVERFLOW,
+                          "El esquema usado excede el límite del plan común");
+    MilenaDataPlanSchemaRef *ref =
+        &plan->schema_refs[plan->schema_ref_count++];
+    ref->name = declared->name;
+    ref->declaration_index = index;
+    ref->declared_type = (unsigned)expected;
+    return MILENA_OK;
+}
+
+static MilenaStatus preflight_validate_product_columns(
+    const struct MilenaDataHIR *hir, const MilenaHIRDataOperation *op,
+    MilenaError *error) {
+    if (!op->as.product.left.name || !op->as.product.right.name)
+        return plan_error(error, MILENA_ERR_TYPE,
+                          "La transformación numérica no identifica sus columnas");
+    MilenaStatus status = preflight_require_column_type(hir, NULL,
+        op->as.product.left.name, MILENA_HIR_COLUMN_NUMERIC, error);
+    if (status == MILENA_OK)
+        status = preflight_require_column_type(hir, NULL,
+            op->as.product.right.name, MILENA_HIR_COLUMN_NUMERIC, error);
+    return status;
+}
+
+MilenaStatus milena_data_operator_hir_transform_preflight(
+    const struct MilenaDataHIR *hir, MilenaError *error) {
+    if (!hir)
+        return plan_error(error, MILENA_ERR_ARGUMENT,
+                          "El preflight de transformación requiere una HIR");
+    /* Existing unannotated legacy transformations keep their established
+     * behavior. When the program supplies a typed source schema, validate the
+     * typed product operands before any CSV path is opened. */
+    if (hir->declared_column_count == 0u) return MILENA_OK;
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        const MilenaHIRDataOperation *op = &hir->operations[i];
+        if (op->kind != MILENA_HIR_DATA_PRODUCT) continue;
+        MilenaStatus status = preflight_validate_product_columns(hir, op, error);
+        if (status != MILENA_OK) return status;
+        for (size_t j = 0; j < hir->declared_column_count; ++j) {
+            if (hir->declared_schema[j].name && op->as.product.output_name &&
+                strcmp(hir->declared_schema[j].name,
+                       op->as.product.output_name) == 0)
+                return plan_error(error, MILENA_ERR_TYPE,
+                    "La columna de salida de la transformación ya está declarada");
+        }
+    }
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}
+
+MilenaStatus milena_data_operator_plan_preflight_from_hir(
+    const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
+    MilenaError *error) {
+    if (!hir || !plan)
+        return plan_error(error, MILENA_ERR_ARGUMENT,
+                          "El preflight común requiere HIR y destino");
+    memset(plan, 0, sizeof(*plan));
+    if (hir->source.streaming || !hir->source.path || !hir->source.path[0] ||
+        !hir->export_path || !hir->export_path[0])
+        return common_plan_unsupported(error,
+            "La fuente materializada no está dentro del plan común CSV");
+
+    /* Validate typed transformation operands early even when the transformation
+     * itself selects the legacy materialized executor. The HIR is the parser's
+     * sole typed representation; this code does not parse source text again. */
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        const MilenaHIRDataOperation *op = &hir->operations[i];
+        if (op->kind == MILENA_HIR_DATA_PRODUCT) {
+            MilenaStatus product_status =
+                preflight_validate_product_columns(hir, op, error);
+            if (product_status != MILENA_OK) return product_status;
+        } else if (op->kind == MILENA_HIR_DATA_FILTER_NUMERIC) {
+            MilenaStatus ref_status = preflight_require_column_type(hir, NULL,
+                op->as.filter.column.name, MILENA_HIR_COLUMN_NUMERIC, error);
+            if (ref_status != MILENA_OK) return ref_status;
+        } else if (op->kind == MILENA_HIR_DATA_GROUP) {
+            MilenaStatus ref_status = preflight_require_column_type(hir, NULL,
+                op->as.group.key.name, MILENA_HIR_COLUMN_TEXT, error);
+            if (ref_status != MILENA_OK) return ref_status;
+            for (size_t j = 0; j < op->as.group.aggregate_count; ++j) {
+                const MilenaHIRAggregate *metric = &op->as.group.aggregates[j];
+                if (metric->operation == MILENA_AGG_COUNT) {
+                    const MilenaHIRColumnRef *declared = preflight_find_declared_column(
+                        hir, metric->input.name, NULL);
+                    if (!declared || declared->declared_type == MILENA_HIR_COLUMN_UNKNOWN)
+                        return plan_error(error, MILENA_ERR_TYPE,
+                            "La métrica de conteo no está declarada en el esquema fuente");
+                } else {
+                    ref_status = preflight_require_column_type(hir, NULL,
+                        metric->input.name, MILENA_HIR_COLUMN_NUMERIC, error);
+                    if (ref_status != MILENA_OK) return ref_status;
+                }
+            }
+        }
+    }
+
+    plan->source_path = hir->source.path;
+    plan->sink_path = hir->export_path;
+    plan->execution_mode = MILENA_DATA_EXECUTION_MATERIALIZED_TABLE;
+    plan->source_dataset_id = hir->source.resolved_dataset_id;
+    plan->source_max_rows = hir->source.max_rows;
+    plan->source_max_columns = hir->source.max_columns;
+    plan->source_max_record_bytes = hir->source.max_record_bytes;
+    plan->source_max_elapsed_milliseconds = hir->source.max_elapsed_milliseconds;
+    plan->has_preflight_identity = true;
+    plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_CSV_SCAN;
+
+    const MilenaHIRDataOperation *group = NULL;
+    bool filter_seen = false;
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        const MilenaHIRDataOperation *op = &hir->operations[i];
+        if (op->kind == MILENA_HIR_DATA_FILTER_NUMERIC) {
+            if (filter_seen || group)
+                return common_plan_unsupported(error,
+                    "HIR filtro no está en la posición admitida por el plan común");
+            if (op->as.filter.operation != AST_OPERATOR_GREATER)
+                return common_plan_unsupported(error,
+                    "El plan común solo admite el operador numérico '>'");
+            if (!isfinite(op->as.filter.threshold))
+                return plan_error(error, MILENA_ERR_DATA,
+                    "El filtro común requiere un umbral numérico finito");
+            if (!op->as.filter.column.name || !op->as.filter.column.name[0])
+                return plan_error(error, MILENA_ERR_TYPE,
+                    "El filtro común no identifica una columna declarada");
+            MilenaStatus status = preflight_require_column_type(hir, plan,
+                op->as.filter.column.name, MILENA_HIR_COLUMN_NUMERIC, error);
+            if (status != MILENA_OK) return status;
+            filter_seen = true;
+            plan->has_numeric_greater_filter = true;
+            plan->filter_column = op->as.filter.column.name;
+            plan->filter_threshold = op->as.filter.threshold;
+        } else if (op->kind == MILENA_HIR_DATA_GROUP) {
+            if (group)
+                return common_plan_unsupported(error,
+                    "El plan común admite un solo agregado agrupado");
+            group = op;
+        } else {
+            return common_plan_unsupported(error,
+                "La transformación permanece fuera del subconjunto común CSV");
+        }
+    }
+    if (!group)
+        return common_plan_unsupported(error,
+            "El preflight común requiere un agregado agrupado");
+    if (!group->as.group.key.name || !group->as.group.key.name[0])
+        return plan_error(error, MILENA_ERR_TYPE,
+                          "El agregado común requiere una clave de grupo declarada");
+    MilenaStatus status = preflight_require_column_type(hir, plan,
+        group->as.group.key.name, MILENA_HIR_COLUMN_TEXT, error);
+    if (status != MILENA_OK) return status;
+    if (group->as.group.aggregate_count == 0u ||
+        group->as.group.aggregate_count > MILENA_DATA_PLAN_MAX_METRICS)
+        return common_plan_unsupported(error,
+            "El agregado común excede el límite de métricas tipadas");
+
+    if (filter_seen)
+        plan->operators[plan->operator_count++] =
+            MILENA_DATA_OPERATOR_NUMERIC_GREATER_FILTER;
+    plan->operators[plan->operator_count++] =
+        MILENA_DATA_OPERATOR_GROUP_AGGREGATE;
+    plan->group_key = group->as.group.key.name;
+    plan->metric_count = group->as.group.aggregate_count;
+    plan->group_limit_input_rows = group->as.group.policy.max_input_rows;
+    plan->group_limit_output_rows = group->as.group.policy.max_output_rows;
+    plan->group_limit_columns = group->as.group.policy.max_columns;
+    for (size_t i = 0; i < plan->metric_count; ++i) {
+        const MilenaHIRAggregate *aggregate = &group->as.group.aggregates[i];
+        if (!common_aggregate_from_table(aggregate->operation,
+                                         &plan->metrics[i].operation))
+            return common_plan_unsupported(error,
+                "El plan común solo admite suma, media y conteo tipados");
+        if (!aggregate->input.name || !aggregate->input.name[0])
+            return plan_error(error, MILENA_ERR_TYPE,
+                              "La métrica común requiere una columna declarada");
+        status = preflight_require_column_type(hir, plan,
+            aggregate->input.name, MILENA_HIR_COLUMN_NUMERIC, error);
+        if (status != MILENA_OK) return status;
+        plan->metrics[i].input_column = aggregate->input.name;
+    }
+    plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_JSON_SINK;
+    if (plan->sink_path[strlen(plan->sink_path) - 1u] == '/' ||
+        plan->sink_path[strlen(plan->sink_path) - 1u] == '\\')
+        return plan_error(error, MILENA_ERR_DATA,
+                          "La ruta de salida común no designa un archivo");
+    return milena_data_operator_plan_validate(plan, error);
+}
+
+MilenaStatus milena_data_operator_plan_check_bound_hir(
+    const MilenaDataOperatorPlan *preflight,
+    const struct MilenaDataHIR *bound_hir, MilenaError *error) {
+    if (!preflight || !preflight->has_preflight_identity || !bound_hir ||
+        !bound_hir->schema_bound)
+        return plan_error(error, MILENA_ERR_ARGUMENT,
+                          "El chequeo posterior requiere el preflight y la HIR ligada");
+    if (bound_hir->source.streaming || !bound_hir->source.path ||
+        !bound_hir->export_path ||
+        strcmp(preflight->source_path, bound_hir->source.path) != 0 ||
+        strcmp(preflight->sink_path, bound_hir->export_path) != 0 ||
+        preflight->source_dataset_id != bound_hir->source.resolved_dataset_id ||
+        preflight->source_max_rows != bound_hir->source.max_rows ||
+        preflight->source_max_columns != bound_hir->source.max_columns ||
+        preflight->source_max_record_bytes != bound_hir->source.max_record_bytes ||
+        preflight->source_max_elapsed_milliseconds !=
+            bound_hir->source.max_elapsed_milliseconds)
+        return plan_error(error, MILENA_ERR_DATA,
+            "La fuente o los límites HIR cambiaron desde el preflight común");
+
+    MilenaDataOperatorPlan bound_plan = {0};
+    MilenaStatus status = milena_data_operator_plan_from_hir(
+        bound_hir, &bound_plan, error);
+    if (status != MILENA_OK) return status;
+    if (!milena_data_operator_plans_same_logic(preflight, &bound_plan) ||
+        preflight->execution_mode != bound_plan.execution_mode ||
+        strcmp(preflight->source_path, bound_plan.source_path) != 0 ||
+        strcmp(preflight->sink_path, bound_plan.sink_path) != 0)
+        return plan_error(error, MILENA_ERR_DATA,
+            "Las operaciones HIR ligadas no coinciden con el plan preflightado");
+
+    const MilenaHIRDataOperation *group = NULL;
+    for (size_t i = 0; i < bound_hir->operation_count; ++i) {
+        if (bound_hir->operations[i].kind == MILENA_HIR_DATA_GROUP) {
+            group = &bound_hir->operations[i];
+            break;
+        }
+    }
+    if (!group || preflight->group_limit_input_rows !=
+            group->as.group.policy.max_input_rows ||
+        preflight->group_limit_output_rows !=
+            group->as.group.policy.max_output_rows ||
+        preflight->group_limit_columns != group->as.group.policy.max_columns ||
+        preflight->schema_ref_count > MILENA_DATA_PLAN_MAX_SCHEMA_REFS)
+        return plan_error(error, MILENA_ERR_DATA,
+            "Los límites o referencias de esquema cambiaron tras el enlace HIR");
+    for (size_t i = 0; i < preflight->schema_ref_count; ++i) {
+        const MilenaDataPlanSchemaRef *expected = &preflight->schema_refs[i];
+        if (expected->declaration_index >= bound_hir->declared_column_count)
+            return plan_error(error, MILENA_ERR_DATA,
+                "La columna declarada desapareció después del enlace HIR");
+        const MilenaHIRColumnRef *actual =
+            &bound_hir->declared_schema[expected->declaration_index];
+        if (!actual->name || strcmp(actual->name, expected->name) != 0 ||
+            (unsigned)actual->declared_type != expected->declared_type ||
+            (unsigned)actual->type != expected->declared_type || actual->rank != 1u)
+            return plan_error(error, MILENA_ERR_TYPE,
+                "La identidad o el tipo de una columna cambió tras el enlace HIR");
+    }
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
 }
 
 static const ASTNode *common_plan_find_declaration(const ASTNode *analysis,
