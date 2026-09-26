@@ -375,7 +375,11 @@ static void test_common_data_operator_overlap(void) {
     assert(analysis);
     assert(ast_add_child(analysis, typed_declaration("grupo", "texto")));
     assert(ast_add_child(analysis, typed_declaration("valor", "numerica")));
-    ASTNode *source = stream_source();
+    ASTNode *source = leaf_with_value(AST_LLAMADA_CARGAR, "rows.csv");
+    source->type_name = milena_strdup("flujo");
+    assert(source->type_name);
+    source->stream_chunk_rows = 4096;
+    source->stream_row_limit = 1000000;
     assert(ast_add_child(analysis, source));
     ASTNode *filter = leaf_with_value(AST_STREAM_FILTER, "valor");
     filter->stream_filter_kind = AST_STREAM_FILTER_NUMERIC_GREATER;
