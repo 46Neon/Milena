@@ -46,6 +46,10 @@ typedef struct {
     const char *column;
     const char *name;
     MilenaStreamOperation operation;
+    /* For a typed numeric count, exclude nonnumeric values just as materialized
+     * tables exclude invalid numeric cells. False retains legacy nonempty-cell
+     * count semantics for untyped/text stream metrics. */
+    bool count_numeric_values;
 } MilenaStreamMetric;
 
 typedef enum {

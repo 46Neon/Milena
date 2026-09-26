@@ -82,6 +82,7 @@ static MilenaTokenType keyword_type(const char *str) {
     if (strcmp(str, "filas") == 0) return TOKEN_KW_FILAS;
     if (strcmp(str, "guardar") == 0) return TOKEN_KW_GUARDAR;
     if (strcmp(str, "registros") == 0) return TOKEN_KW_REGISTROS;
+    if (strcmp(str, "con") == 0) return TOKEN_KW_CON;
     if (strcmp(str, "hasta") == 0) return TOKEN_KW_HASTA;
     if (strcmp(str, "MiB") == 0) return TOKEN_KW_MIB;
     if (strcmp(str, "contar") == 0) return TOKEN_KW_CONTAR;

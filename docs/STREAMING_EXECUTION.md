@@ -124,8 +124,7 @@ antes de ejecutar. Con `#spill`, una o dos claves deben declararse `texto`; dos 
 una tercera clave, claves repetidas/desconocidas y tipos no TEXT se rechazan
 antes de abrir la fuente. `suma`, `media`, `minimo` y `maximo` requieren una
 columna declarada `numerica` (valores CSV finitos interpretados como FLOAT64).
-`contar` admite cualquier tipo declarado. Se admiten métricas múltiples; las
-operaciones no soportadas por el adaptador spill se rechazan. Cada registro completo —con
+`contar` admite cualquier tipo declarado y, en el adaptador genérico, cuenta celdas no vacías. En el subconjunto numérico tipado del grafo lógico compartido cuenta solo celdas numéricas válidas, igual que la tabla materializada; las celdas vacías o numéricamente inválidas se informan por separado. Se admiten métricas múltiples; las operaciones no soportadas por el adaptador spill se rechazan. Cada registro completo —con
 comillas, comas y saltos de línea entrecomillados— pasa por el mismo parser CSV
 acotado ya usado por el streaming; no existe un segundo parser.
 

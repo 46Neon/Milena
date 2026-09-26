@@ -14,7 +14,7 @@ CLI milena run
 Ruta objetivo explícita: lexer → parser → AST tipado → semántica → HIR → plan físico → runtime/backend.
 ```
 
-El AST pasa por `milena_validate_ast` antes de aceptar una ejecución de dataset. Para los comandos soportados, `milena_run_dataset_program` conecta el frontend con los límites del runtime: `MilenaDataHIR` se construye, se vincula a tablas tipadas y lo consume `milena_canonical_program_execute_data`; CSV streaming, Arrow IPC y SQL consumen sus planificadores tipados y validadores antes del backend correspondiente. Los targets C17 del Makefile son `make check-hir-ast-coverage`, que verifica el inventario cerrado de HIR, y `make check-unification-architecture`, que depende del anterior y comprueba estas conexiones. El target `make test` ejecuta ambos como parte de sus guardas de arquitectura.
+El AST pasa por `milena_validate_ast` antes de aceptar una ejecución de dataset. Para los comandos soportados, `milena_run_dataset_program` conecta el frontend con los límites del runtime: `MilenaDataHIR` se construye y vincula a tablas tipadas; el solapamiento materializado limitado ejecuta la secuencia de `MilenaDataOperatorPlan`, mientras que las operaciones HIR restantes conservan `milena_canonical_program_execute_data`. CSV streaming, Arrow IPC y SQL consumen sus planificadores tipados y validadores antes del backend correspondiente. Los targets C17 del Makefile son `make check-hir-ast-coverage`, que verifica el inventario cerrado de HIR, y `make check-unification-architecture`, que depende del anterior y comprueba estas conexiones. El target `make test` ejecuta ambos como parte de sus guardas de arquitectura.
 
 `analizar`, `perfil` e `inspect` son adaptadores CLI de compatibilidad: `main.c` delega en `entrypoints.c`, cuya entrada sintética pasa por lexer/parser/AST/semántica antes de invocar las APIs C históricas de Dataset/análisis. No son una ruta para agregar sintaxis o capacidades nuevas.
 
@@ -22,8 +22,8 @@ El AST pasa por `milena_validate_ast` antes de aceptar una ejecución de dataset
 
 | Familia | Representación/planner | Runtime/backend | Alcance comprobable |
 |---|---|---|---|
-| Funciones escalares | `MilenaScalarHIR`; para AOT, `MilenaIRProgram`/`MilenaIRModule` verificados | intérprete/runtime del lenguaje; `native_aot.c` para el subconjunto AOT (`milena build`) | El backend nativo consume y vuelve a verificar la IR tipada; dataset HIR y opcodes no soportados se rechazan. Véase [Native AOT](NATIVE_AOT.md). |
-| Operaciones de tabla en memoria | `MilenaDataHIR` | `milena_canonical_program_execute_data` sobre `MilenaTable` | Subconjunto cerrado; fuente, esquema, spans, tipos y operaciones se validan. |
+| Funciones escalares | `MilenaScalarHIR` | intérprete/runtime del lenguaje | Subconjunto cerrado; lo no representado se rechaza en la entrada HIR. |
+| Operaciones de tabla en memoria | `MilenaDataHIR` + `MilenaDataOperatorPlan` para el solapamiento CSV común | `milena_data_operator_plan_execute_materialized` con kernels existentes; HIR restante en `milena_canonical_program_execute_data` | Subconjunto común estricto; fuente, esquema, secuencia, tipos y límites se validan. |
 | CSV streaming | `MilenaStreamExecutionPlan` | runtime de lenguaje → `stream.c` | Plan lógico/físico tipado; plan y límites se validan antes de ejecutar. |
 | Arrow IPC | `MilenaArrowIpcExecutionPlan` | runtime de lenguaje → backend Arrow | Proyección/filtro y operadores del slice soportado se validan antes del backend. |
 | SQL local | `MilenaSqlExecutionPlan` | runtime de lenguaje → backend SQLite | Operaciones y parámetros aceptados pasan por validación de plan; el slice no equivale a un ORM completo. |

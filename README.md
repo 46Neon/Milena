@@ -133,6 +133,46 @@ Ejecútalo con:
 ./milena run ventas.milena
 ```
 
+#### Límites de carga materializada
+
+La sintaxis heredada `dataset cargar datos("...")` conserva sus defaults si no
+se añaden cláusulas: 5.000 filas, 70 columnas y el límite de registro legado
+`max_field_bytes * columnas_físicas + columnas_físicas` (`max_field_bytes` inicia
+en 1 MiB). Es un presupuesto derivado para el registro completo, no una
+validación individual por campo. Puede configurarse por fuente sin cambiar a
+streaming:
+
+```milena
+dataset cargar datos("datos/ventas.csv") con filas hasta 100000 con columnas de 64 con registros de hasta 8 MiB con memoria hasta 256 MiB con entrada hasta 2048 MiB con tiempo hasta 30000 ms
+```
+
+Las cláusulas de filas (1–1.000.000.000; cuentan todos los registros de datos
+leídos, incluidos inválidos y vacíos), columnas (1–4096), registro (5 KiB–64 MiB,
+pasos de 1 KiB), tiempo (1–3.600.000 ms), memoria retenida (1 byte–1024 MiB,
+convertida exactamente a bytes) y entrada (entero positivo de MiB representable
+como bytes) se validan antes de cargar; una cláusula no se puede repetir ni ser
+cero. Al superar un límite falla la carga antes de publicar y el archivo de
+reporte previo permanece intacto. La carga materializada no cambia a streaming
+automáticamente.
+
+`con memoria hasta N MiB` es un presupuesto por fuente de las capacidades
+solicitadas actualmente para las asignaciones retenidas del `Dataset` cargador:
+nombre de archivo, strings de encabezados/celdas, vectores de campos del
+encabezado y filas, y vector de punteros a filas. No es RSS: excluye metadatos y
+fragmentación del allocator, buffer crudo de entrada del registro, picos
+transitorios de `realloc`, conversión a `MilenaTable` y copias/operaciones
+posteriores. `con entrada hasta N MiB` es distinto: limita el tamaño del archivo
+CSV en bytes físicos crudos, incluyendo encabezado y separadores; CRLF cuenta
+como dos bytes. El tamaño exacto al límite se acepta y el primer byte adicional
+se rechaza antes de añadirse al buffer del registro. Por defecto, ambos
+presupuestos son ilimitados (cero en la API; la cláusula explícita no admite
+cero). El cap del archivo no limita memoria retenida y el presupuesto de
+asignaciones no limita los bytes físicos del origen; ninguno garantiza un techo
+de memoria/RSS para el proceso.
+
+Usa la ruta `datos desde` descrita a continuación cuando el plan admita CSV en
+streaming; no hay fallback automático.
+
 ### Modo flujo para grandes CSV
 
 Para resúmenes numéricos que no necesitan conservar toda la tabla, Milena ofrece
@@ -165,7 +205,7 @@ de latencia fija.
 La ruta admite `suma`, `media`, `minimo`, `maximo`, `conteo`, `varianza` y
 `desviacion_estandar`, sin agrupaciones ilimitadas, joins, medianas, percentiles,
 spill a disco ni procesamiento distribuido. La sintaxis legacy de PR24 sigue
-siendo compatible. Consulta [la documentación del modo flujo](docs/STREAMING_EXECUTION.md).
+siendo compatible. Consulta [la documentación del modo flujo](docs/STREAMING_EXECUTION.md) y la [matriz de operadores por backend](docs/BIG_DATA_OPERATOR_MATRIX.md).
 
 ## Instalación y uso
 
@@ -265,7 +305,7 @@ Los comandos objetivo, la arquitectura de cada artefacto, su disponibilidad y lo
 |---|---|---|
 | Windows x64 | `winget install --id 46Neon.Milena --exact` | Manifiestos adjuntos a una Release; publicación/indexación WinGet y prueba limpia pendientes. |
 | Debian/Ubuntu Linux amd64 | `sudo apt install milena` | `.deb` local/de Release; repositorio APT Linux firmado y registrado pendiente. |
-| Android/Termux AArch64 | `pkg install milena` | Receta candidata; aceptación/publicación y prueba en Android/Bionic pendientes. |
+| Android/Termux AArch64 | Todavía no disponible: `pkg install milena` | Receta candidata; aceptación/publicación y prueba en Android/Bionic pendientes. |
 
 Los paquetes Linux y Termux son diferentes aunque ambos usen formato `.deb`: Linux usa su ABI y rutas `/usr`; Termux usa Bionic y `$PREFIX`. El workflow `.github/workflows/publish-apt.yml` corresponde al repositorio Termux/AArch64, no al canal APT de Debian/Ubuntu. Consulta la matriz para los gates y límites exactos por canal.
 
@@ -277,11 +317,11 @@ El proyecto se encuentra en una etapa de **consolidación avanzada del núcleo d
 
 ## Volumen de datos y alcance industrial
 
-Milena trabaja principalmente con datasets y tablas cargados en memoria para transformaciones, joins y análisis completos. Además, PR24 incorpora una ruta de flujo para resúmenes numéricos CSV: esa ruta procesa el archivo secuencialmente y mantiene memoria acotada, sin materializar todas las filas.
+Milena combina rutas distintas y acotadas: operaciones de tabla que materializan datasets CSV en memoria; agregación global y agrupada en streaming CSV, incluido un reducer con spill local explícito; un candidato de lectura/proyección/filtro Arrow IPC STREAM; y un baseline SQLite raw SQL con un slice tipado pequeño. Hay un grafo lógico tipado compartido únicamente para la intersección documentada de agrupación CSV local entre HIR de tabla y CSV streaming; no un planner/ejecutor físico común para todos los backends. Los nombres de operación coincidentes no implican la misma semántica, forma JSON ni límites de recursos.
 
-El modo flujo no convierte automáticamente cualquier operación en streaming. Todavía no ofrece procesamiento distribuido, clústeres, joins externos ni garantías de latencia fija para volúmenes masivos. Leer todas las filas tiene un coste proporcional al archivo; los milisegundos se miden como observabilidad, no como una promesa universal.
+El modo streaming no convierte automáticamente cualquier operación en streaming. En particular, transformaciones tabulares y joins siguen materializando datos; no hay join externo/distribuido, y no se prometen límites de RSS global ni latencia fija. Arrow IPC STREAM continúa como trabajo en progreso no verificado ni publicado; SQLite tipado no es un ORM completo. Consulta la [matriz de operadores y límites](docs/BIG_DATA_OPERATOR_MATRIX.md) para el comportamiento exacto, los formatos admitidos y las exclusiones.
 
-Para convertirse en una plataforma preparada para grandes soluciones tecnológicas del mercado deberá ampliar el streaming a agrupaciones y joins externos, incorporar más formatos, medir benchmarks de alto volumen, mejorar la planificación, mantener políticas de memoria, añadir observabilidad y completar el empaquetado oficial.
+El grafo lógico común cubre solo un subconjunto estrecho; la cobertura entre formatos y la planificación física compartida siguen en desarrollo. Los benchmarks de un millón de filas y archivo grande son mediciones reproducibles de fixtures concretos, no una garantía universal ni evidencia de procesamiento distribuido.
 
 La descripción más honesta es:
 

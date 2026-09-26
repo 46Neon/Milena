@@ -764,14 +764,16 @@ static void check_architecture(void)
         "milena_stream_execution_plan_build(", "milena_arrow_ipc_execution_plan_build(",
         "milena_sql_execution_plan_build(", "milena_canonical_program_parse(",
         "milena_canonical_program_bind_table(", "milena_canonical_compiler_input(",
-        "milena_canonical_program_execute_data(", "milena_sql_run_plan(",
-        "milena_arrow_ipc_stream_transform(", "run_stream_dataset_with_options("
+        "milena_canonical_program_execute_data(", "milena_data_operator_plan_execute_materialized(",
+        "milena_sql_run_plan(", "milena_arrow_ipc_stream_transform(",
+        "run_stream_dataset_with_options("
     };
     static const char *const planner_validation_tokens[] = {
         "milena_stream_execution_plan_validate(plan, error)",
         "milena_arrow_ipc_execution_plan_validate(plan, error)",
         "milena_sql_execution_plan_validate(plan, error)", "MILENA_LOGICAL_CSV_SCAN",
-        "MILENA_LOGICAL_JSON_REPORT"
+        "MILENA_LOGICAL_JSON_REPORT", "milena_data_operator_plan_execute_materialized(",
+        "milena_table_filter_numeric(", "milena_table_group_by("
     };
     static const char *const hir_tokens[] = {
         "milena_canonical_program_parse(", "data_hir_build(",
@@ -813,6 +815,7 @@ static void check_architecture(void)
     Span script_router;
     Span legacy_adapter;
     Span data_runtime;
+    Span materialized_plan_executor;
     StringList sources;
     StringList entrypoints;
     StringList parsers;
@@ -939,6 +942,20 @@ static void check_architecture(void)
         }
     }
     ordered(data_runtime, data_hir_stages, ARRAY_COUNT(data_hir_stages), "data-HIR runtime");
+    {
+        const char *common_branch = span_find(
+            data_runtime,
+            "if (status == MILENA_OK && has_common_materialized_preflight)");
+        const char *common_call = span_find(
+            data_runtime, "milena_data_operator_plan_execute_materialized(");
+        const char *legacy_call = span_find(
+            data_runtime, "milena_canonical_program_execute_data(");
+        need(common_branch != NULL && common_call != NULL &&
+             legacy_call != NULL && common_call > common_branch &&
+             legacy_call > common_call &&
+             span_has(data_runtime, "&common_materialized_preflight"),
+             "the common materialized plan must execute before the unchanged HIR fallback");
+    }
 
     planner_source = read_file("src/query_plan.c");
     for (index = 0U; index < ARRAY_COUNT(planner_validation_tokens); ++index) {
@@ -947,6 +964,17 @@ static void check_architecture(void)
                  planner_validation_tokens[index]);
         }
     }
+    materialized_plan_executor = function_body(
+        planner_source, "MilenaStatus milena_data_operator_plan_execute_materialized(",
+        "plan-driven materialized physical executor");
+    need(span_has(materialized_plan_executor, "plan->operators[i]") &&
+         span_has(materialized_plan_executor, "plan->filter_column") &&
+         span_has(materialized_plan_executor, "plan->metrics[metric]") &&
+         span_has(materialized_plan_executor, "plan->group_key") &&
+         span_has(materialized_plan_executor, "milena_table_filter_numeric(") &&
+         span_has(materialized_plan_executor, "milena_table_group_by(") &&
+         !span_has(materialized_plan_executor, "hir->operations"),
+         "materialized overlap must consume common-plan parameters and reuse table kernels");
     need(strstr(planner_source, "main(") == NULL,
          "query planner must not define another executable");
     hir_source = read_file("src/canonical_compiler.c");

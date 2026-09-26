@@ -21,12 +21,21 @@ typedef enum {
     MILENA_ARROW_VALUE_TEXTO = 2    /* Arrow UTF-8 string */
 } MilenaArrowValueType;
 
+/* Existing standalone programs keep strict validation of every input text
+ * value. The shared typed text-equality subset validates only returned projected
+ * text values, after bytewise row filtering, matching typed SQLite SELECT. */
+typedef enum {
+    MILENA_ARROW_UTF8_VALIDATE_ALL_INPUT = 0,
+    MILENA_ARROW_UTF8_VALIDATE_PROJECTED_RESULTS
+} MilenaArrowUtf8ValidationPolicy;
+
 typedef struct {
     const char *input_path;
     const char *output_path;
     const char *const *projection;
     const MilenaArrowValueType *projection_types;
     size_t projection_count;
+    MilenaArrowUtf8ValidationPolicy utf8_validation_policy;
     MilenaArrowFilterKind filter_kind;
     const char *filter_column;
     MilenaArrowValueType filter_column_type;

@@ -154,6 +154,8 @@ typedef struct {
     size_t max_rows;
     size_t max_columns;
     size_t max_record_bytes;
+    size_t max_memory_bytes;
+    size_t max_input_bytes; /* Raw source-file size; not memory/RSS. */
     double max_elapsed_milliseconds;
     MilenaHIRSourceSpan span;
 } MilenaHIRDatasetSource;
@@ -195,7 +197,7 @@ typedef struct {
     } as;
 } MilenaHIRDataOperation;
 
-typedef struct {
+typedef struct MilenaDataHIR {
     MilenaHIRDatasetSource source;
     MilenaHIRColumnRef *declared_schema;
     size_t declared_column_count;

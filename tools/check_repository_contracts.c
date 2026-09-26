@@ -27,6 +27,9 @@ typedef struct {
     size_t capacity;
 } StringList;
 
+static bool file_exists(const char *path);
+static char *optional_read_file(const char *path);
+
 static const char *const product_sources[] = {
     "analysis.c", "array.c", "arrow_ipc.c", "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "common.c",
     "dataset.c", "entrypoints.c", "external_merge.c", "external_sort.c",
@@ -51,9 +54,6 @@ static const char *const experimental_sources[] = {
     "ir.c", "module.c", "semantic.c", "temp_scope.c"
 };
 static const char *const reference_sources[] = {"vm.c"};
-
-static bool file_exists(const char *path);
-static char *optional_read_file(const char *path);
 
 static void list_init(StringList *list)
 {
@@ -369,7 +369,7 @@ static bool make_has_source_token(Span sources, const char *name, bool restricte
     return false;
 }
 
-static bool is_exempt_from_experimental_isolation(const char *name)
+static bool is_experimental(const char *name)
 {
     size_t index;
     for (index = 0U; index < ARRAY_COUNT(experimental_sources); ++index) {
@@ -377,6 +377,12 @@ static bool is_exempt_from_experimental_isolation(const char *name)
             return true;
         }
     }
+    return false;
+}
+
+static bool is_reference(const char *name)
+{
+    size_t index;
     for (index = 0U; index < ARRAY_COUNT(reference_sources); ++index) {
         if (strcmp(name, reference_sources[index]) == 0) {
             return true;
@@ -728,7 +734,7 @@ static void check_experimental_isolation(int argc, char **argv)
         const char *name = slash == NULL ? argv[argument] : slash + 1;
         size_t header_index;
         char *text;
-        if (is_exempt_from_experimental_isolation(name)) {
+        if (is_experimental(name) || is_reference(name)) {
             continue;
         }
         text = read_file(argv[argument]);
