@@ -1,0 +1,25 @@
+name: Big-data canonical operator parity
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  data-engine-parity:
+    name: .milena parity (${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build canonical runtime and run end-to-end parity/error test
+        run: |
+          set -euxo pipefail
+          make clean
+          timeout 900 make CC=${{ matrix.compiler }} test-data-engine-parity
