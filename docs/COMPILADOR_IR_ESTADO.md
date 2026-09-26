@@ -2,6 +2,12 @@
 
 Este registro complementa el contrato normativo de dos fases en `COMPILADOR_DOS_FASES.md`; no crea una fase, ruta ni IR adicional. Describe el estado parcial de la PR #33; la evidencia de CI debe consultarse contra el SHA exacto que publique estos cambios. La fase 1 continúa incompleta.
 
+## Ledger exhaustivo de variantes AST: instrumentación, no cierre
+
+`docs/AST_TYPED_IR_COVERAGE.json` contiene una fila por cada una de las 72 variantes reales de `ASTNodeType`; excluye `AST_NODE_TYPE_COUNT`, que es solo el sentinel. `tools/check_ast_ir_coverage.py`, integrado en `make check-hir-ast-coverage`, compara la lista del ledger con `include/ast.h` y valida orden, duplicados, omisiones, extras, sentinel, estados permitidos y los invariantes `0 full / 7 partial / 65 not_lowered`. `tests/test_ast_ir_coverage.py` ejerce rechazos de mutaciones del ledger y de la enumeración. Una futura marca `full` exige evidencia verificable de contrato del lenguaje, parser, análisis semántico, lowering a IR tipada, bytecode portable, ejecución de referencia, pruebas diferenciales, contratos de errores/spans/ownership/recursos y gates de CI multiplataforma para el SHA exacto; la presencia de un caso HIR/lowerer no basta.
+
+El ledger refleja la clasificación documental ya existente: 47 variantes con contrato sintáctico documentado, 21 parser-reachable cuyo contrato público sigue sin resolver y 4 enum-only cuyo estado legado/histórico no está confirmado. Esas etiquetas describen únicamente lo que las fuentes citadas permiten afirmar; no resuelven sintaxis ambigua ni afirman que la semántica esté implementada. La documentación disponible no permite asignar de forma fiable estado semántico ni pruebas end-to-end completas por variante, por lo que ambos campos permanecen explícitamente `unresolved_per_variant`. Este artefacto solo instrumenta el inventario; no implementa lowering nuevo ni satisface el primer criterio normativo de fase 1, y no declara la fase completada.
+
 ## Cobertura implementada en este incremento
 
 El constructor tipado y el validador fail-closed operan sobre una representación canónica independiente, declarada en `include/typed_ir.h` e implementada en `src/canonical_ir.c`. `MilenaIRProgram` / `MilenaIRInstruction` contienen solo datos tipados, IDs SSA, bloques, parámetros y argumentos de arista; no incluyen las cadenas ni los opcodes del IR legado. El constructor y el verificador admiten exactamente:
