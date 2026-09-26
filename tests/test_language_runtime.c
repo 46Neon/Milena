@@ -128,7 +128,8 @@ static int run_materialized_source_limits(void) {
     slow_content[9u + slow_record_length] = '\0';
     CHECK(expect_materialized_limit_failure(
         "test-materialized-time-limit.csv", slow_content,
-        "con tiempo hasta 1 ms", "test-materialized-time-limit.json",
+        "con registros de hasta 64 MiB con tiempo hasta 1 ms",
+        "test-materialized-time-limit.json",
         "test-materialized-time-limit.milena", "tiempo") == 0,
         "límite de tiempo materializado no se aplicó durante la lectura");
     free(slow_content);

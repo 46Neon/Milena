@@ -136,8 +136,10 @@ Ejecútalo con:
 #### Límites de carga materializada
 
 La sintaxis heredada `dataset cargar datos("...")` conserva sus defaults si no
-se añaden cláusulas: 5.000 filas, 70 columnas, y el límite de registro histórico
-derivado de 1 MiB por campo y el número físico de columnas. Puede configurarse
+se añaden cláusulas: 5.000 filas, 70 columnas y el límite de registro legado
+`max_field_bytes * columnas_físicas + columnas_físicas` (`max_field_bytes` inicia
+en 1 MiB). Es un presupuesto derivado para el registro completo, no un límite
+individual de cada campo. Puede configurarse
 por fuente, sin cambiar a streaming:
 
 ```milena

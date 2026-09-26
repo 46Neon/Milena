@@ -58,8 +58,9 @@ dataset cargar datos("entrada.csv") con filas hasta 100000 con columnas de 64 co
 en pasos de 1 KiB; y `tiempo`, 1–3.600.000 ms. Cada cláusula se admite una sola
 vez; los valores cero y las repeticiones se rechazan. Si una cláusula se omite,
 se conserva el default materializado previo: máximo de 5.000 filas, 70 columnas
-y el límite legado de registro derivado de 1 MiB por campo y el número físico de
-columnas; no se activa timeout. La ruta `datos desde`/`dataset cargar flujo`
+y el límite de registro legado `max_field_bytes * columnas_físicas +
+columnas_físicas` (`max_field_bytes` inicia en 1 MiB); no se activa timeout. Este
+valor acota el registro completo y no es una validación independiente por campo. La ruta `datos desde`/`dataset cargar flujo`
 permanece separada y no se cambia ni se selecciona automáticamente como
 fallback.
 
