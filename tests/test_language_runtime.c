@@ -49,8 +49,8 @@ static int expect_materialized_limit_failure(const char *csv_path,
         ".analisis limites_materializados {\n"
         "  variable importe numerica\n"
         "  dataset cargar datos(\"%s\") %s\n"
-        "  resumir { #suma(\"importe\"); }\n"
-        "  guardar resultado en \"%s\"\n"
+        "  .resumir dataset { #suma(\"importe\"); }\n"
+        "  .exportar { (\"%s\") }\n"
         "}\n", csv_path, source_options, output_path);
     CHECK(length > 0 && (size_t)length < sizeof(source),
           "límites materializados: la fuente del programa se truncó");
@@ -77,8 +77,8 @@ static int run_materialized_source_limits(void) {
         ".analisis limites_hir {\n"
         "  variable importe numerica\n"
         "  dataset cargar datos(\"missing-materialized-limits.csv\") con filas hasta 1 con columnas de 2 con registros de hasta 0.0048828125 MiB con tiempo hasta 30000 ms\n"
-        "  resumir { #suma(\"importe\"); }\n"
-        "  guardar resultado en \"unused-limits.json\"\n"
+        "  .resumir dataset { #suma(\"importe\"); }\n"
+        "  .exportar { (\"unused-limits.json\") }\n"
         "}\n";
     MilenaCanonicalProgram canonical;
     milena_canonical_program_init(&canonical);
