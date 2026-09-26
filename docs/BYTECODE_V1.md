@@ -7,7 +7,10 @@ in `src/bytecode_native.c`. The verifier/VM and HIR lowerer are linked into the
 official CLI for the explicit `vm` path; the native object is linked only for a
 native Linux x86-64 build and is excluded from Windows and Termux builds. This is
 not full language/backend integration. The PR remains partial: compiler-plan
-phase 2 and full phase 3 are not complete.
+phase 2 and full phase 3 are not complete. Data-HIR execution is **not
+implemented** in the verifier, VM, CLI or AOT backend. [`BYTECODE_DATA_ABI.md`](BYTECODE_DATA_ABI.md)
+is a proposed, design-only contract for a narrowly bounded first data-plan
+slice; it does not add executable support or parity claims.
 
 ## Wire compatibility and records
 
