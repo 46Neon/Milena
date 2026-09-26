@@ -105,6 +105,54 @@ bool milena_data_operator_plans_same_logic(
     const MilenaDataOperatorPlan *left,
     const MilenaDataOperatorPlan *right);
 
+/* Deliberately narrow logical descriptor for the actual Arrow IPC STREAM /
+ * typed SQLite SELECT overlap. It carries no physical operators or SQL text;
+ * raw SQL is explicitly outside this interface. Projection array order and
+ * source row sequence are logical result semantics. */
+#define MILENA_SHARED_QUERY_MAX_COLUMNS 128u
+#define MILENA_SHARED_QUERY_MAX_OPERATORS 4u
+typedef enum {
+    MILENA_SHARED_QUERY_SCAN = 1,
+    MILENA_SHARED_QUERY_TEXT_EQUAL_FILTER,
+    MILENA_SHARED_QUERY_PROJECT,
+    MILENA_SHARED_QUERY_RESULT
+} MilenaSharedQueryOperator;
+typedef enum {
+    MILENA_SHARED_QUERY_VALUE_NUMERIC = 1,
+    MILENA_SHARED_QUERY_VALUE_TEXT
+} MilenaSharedQueryValueType;
+typedef enum {
+    MILENA_SHARED_QUERY_SINK_ARROW_IPC_STREAM = 1,
+    MILENA_SHARED_QUERY_SINK_SQLITE_RESULT
+} MilenaSharedQuerySink;
+typedef struct {
+    const char *name;
+    MilenaSharedQueryValueType type;
+} MilenaSharedQueryProjection;
+typedef struct {
+    const char *source;
+    bool has_text_equal_filter;
+    const char *filter_column;
+    const char *filter_text; /* non-NULL, valid UTF-8 when filter is present */
+    size_t filter_text_length;
+    const MilenaSharedQueryProjection *projections; /* borrowed from adapter/plan owner */
+    size_t projection_count;
+    MilenaSharedQuerySink sink;
+    bool preserve_source_order;
+    MilenaSharedQueryOperator operators[MILENA_SHARED_QUERY_MAX_OPERATORS];
+    size_t operator_count;
+} MilenaSharedQueryPlan;
+MilenaStatus milena_shared_query_plan_build(
+    const char *source, bool has_text_equal_filter,
+    const char *filter_column, const char *filter_text,
+    const MilenaSharedQueryProjection *projections, size_t projection_count,
+    MilenaSharedQuerySink sink, MilenaSharedQueryPlan *plan,
+    MilenaError *error);
+MilenaStatus milena_shared_query_plan_validate(
+    const MilenaSharedQueryPlan *plan, MilenaError *error);
+bool milena_shared_query_plans_same_logic(
+    const MilenaSharedQueryPlan *left, const MilenaSharedQueryPlan *right);
+
 /* Typed logical and physical plan annotations for the canonical .analisis path.
  * AST references are borrowed and remain valid while the runtime owns the AST. */
 typedef enum {
@@ -262,6 +310,9 @@ typedef struct {
     MilenaSqlPlanOperationKind kind;
     const ASTNode *source;
     const char *statement;
+    bool has_shared_query_plan;
+    MilenaSharedQueryPlan shared_query_plan;
+    MilenaSharedQueryProjection *shared_projections;
     char *owned_statement; /* generated only for a validated typed SQL operation */
     MilenaSqlPlanParameter *parameters;
     size_t parameter_count;

@@ -141,59 +141,103 @@ static void check_typed_insert_execution(MilenaSqlConnection *db) {
     ast_destroy(program);
 }
 
-static size_t run_typed_text_equality(const char *literal) {
+static void run_typed_text_equality(const char *literal,
+                                    MilenaSqlConnection *db,
+                                    MilenaTable *result) {
     ASTNode *program = ast_create_leaf(AST_SQL_PROGRAM, DB_PATH);
     ASTNode *schema = ast_create_leaf(AST_SQL_TABLE_SCHEMA, "casefold");
-    ASTNode *schema_column = ast_create_leaf(AST_SQL_SCHEMA_COLUMN, "note");
+    ASTNode *note_column = ast_create_leaf(AST_SQL_SCHEMA_COLUMN, "note");
+    ASTNode *label_column = ast_create_leaf(AST_SQL_SCHEMA_COLUMN, "label");
+    ASTNode *ordinal_column = ast_create_leaf(AST_SQL_SCHEMA_COLUMN, "ordinal");
     ASTNode *select = ast_create(AST_SQL_TYPED_SELECT);
     ASTNode *table = ast_create_leaf(AST_SQL_TABLE_REFERENCE, "casefold");
     ASTNode *projection = ast_create(AST_SQL_PROJECTION_LIST);
-    ASTNode *projected_column = ast_create_leaf(AST_SQL_PROJECTED_COLUMN, "note");
+    ASTNode *projected_label = ast_create_leaf(AST_SQL_PROJECTED_COLUMN, "label");
+    ASTNode *projected_ordinal = ast_create_leaf(AST_SQL_PROJECTED_COLUMN, "ordinal");
     ASTNode *filter = ast_create(AST_SQL_FILTER);
     ASTNode *filter_column = ast_create_leaf(AST_SQL_FILTER_COLUMN, "note");
     ASTNode *filter_operator = ast_create(AST_SQL_FILTER_OPERATOR);
     ASTNode *parameter = test_sql_parameter(literal, "texto", AST_SQL_TYPE_TEXT);
-    assert(program && schema && schema_column && select && table && projection &&
-           projected_column && filter && filter_column && filter_operator && parameter);
-    schema_column->type_name = milena_strdup("texto");
-    schema_column->sql_type = AST_SQL_TYPE_TEXT;
+    assert(program && schema && note_column && label_column && ordinal_column &&
+           select && table && projection && projected_label && projected_ordinal &&
+           filter && filter_column && filter_operator && parameter);
+    note_column->type_name = milena_strdup("texto");
+    note_column->sql_type = AST_SQL_TYPE_TEXT;
+    label_column->type_name = milena_strdup("texto");
+    label_column->sql_type = AST_SQL_TYPE_TEXT;
+    ordinal_column->type_name = milena_strdup("entero");
+    ordinal_column->sql_type = AST_SQL_TYPE_INTEGER;
     filter_operator->sql_operator = AST_SQL_OPERATOR_EQUAL;
-    assert(schema_column->type_name &&
-           ast_add_child(schema, schema_column) && ast_add_child(program, schema) &&
-           ast_add_child(projection, projected_column) &&
-           ast_add_child(filter, filter_column) &&
-           ast_add_child(filter, filter_operator) && ast_add_child(filter, parameter) &&
-           ast_add_child(select, table) && ast_add_child(select, projection) &&
-           ast_add_child(select, filter) && ast_add_child(program, select));
+    assert(note_column->type_name && label_column->type_name &&
+           ordinal_column->type_name && ast_add_child(schema, note_column) &&
+           ast_add_child(schema, label_column) && ast_add_child(schema, ordinal_column) &&
+           ast_add_child(program, schema) &&
+           ast_add_child(projection, projected_label) &&
+           ast_add_child(projection, projected_ordinal) &&
+           ast_add_child(filter, filter_column) && ast_add_child(filter, filter_operator) &&
+           ast_add_child(filter, parameter) && ast_add_child(select, table) &&
+           ast_add_child(select, projection) && ast_add_child(select, filter) &&
+           ast_add_child(program, select));
 
     MilenaSqlExecutionPlan plan = {0};
     MilenaError error;
     assert(milena_sql_execution_plan_build(program, &plan, &error) == MILENA_OK);
-    assert(plan.operation_count == 2 &&
-           strcmp(plan.operations[1].statement,
-                  "SELECT \"note\" FROM \"casefold\" WHERE \"note\" COLLATE BINARY = ?") == 0);
+    const MilenaSqlPlanOperation *operation = &plan.operations[1];
+    assert(plan.operation_count == 2 && operation->has_shared_query_plan &&
+           operation->shared_query_plan.projection_count == 2u &&
+           strcmp(operation->shared_query_plan.projections[0].name, "label") == 0 &&
+           strcmp(operation->shared_query_plan.projections[1].name, "ordinal") == 0 &&
+           strcmp(operation->statement,
+               "SELECT \"label\", \"ordinal\" FROM \"casefold\" WHERE \"note\" COLLATE BINARY = ? ORDER BY rowid ASC") == 0);
     FILE *output = tmpfile();
     assert(output && milena_sql_run_plan(&plan, output, &error) == MILENA_OK);
-    rewind(output);
-    char header[128];
-    size_t rows = SIZE_MAX;
-    assert(fgets(header, sizeof(header), output) &&
-           sscanf(header, "Tabla Milena: %zu filas", &rows) == 1);
-    fclose(output);
+    assert(fclose(output) == 0);
+    MilenaSqlValue bound = {.type = MILENA_SQL_TEXT,
+        .as.text = {literal, strlen(literal)}};
+    MilenaSqlLimits limits = milena_sql_default_limits();
+    milena_table_destroy(result);
+    milena_table_init(result);
+    assert(milena_sql_execute(db, operation->statement, &bound, 1u, &limits,
+                              result, &error) == MILENA_OK);
     milena_sql_execution_plan_destroy(&plan);
     ast_destroy(program);
-    return rows;
 }
 
 static void check_typed_text_equality_ignores_physical_nocase(MilenaSqlConnection *db) {
     MilenaTable result;
     milena_table_init(&result);
-    run(db, "CREATE TABLE casefold(note TEXT COLLATE NOCASE)", NULL, 0,
-        &result, MILENA_OK);
-    run(db, "INSERT INTO casefold(note) VALUES('Alice')", NULL, 0,
-        &result, MILENA_OK);
-    assert(run_typed_text_equality("alice") == 0);
-    assert(run_typed_text_equality("Alice") == 1);
+    run(db, "CREATE TABLE casefold(note TEXT COLLATE NOCASE, label TEXT, ordinal INTEGER)",
+        NULL, 0, &result, MILENA_OK);
+    run(db, "INSERT INTO casefold(note,label,ordinal) VALUES('Alice','first',2)",
+        NULL, 0, &result, MILENA_OK);
+    run(db, "INSERT INTO casefold(note,label,ordinal) VALUES('alice','casefold-only',1)",
+        NULL, 0, &result, MILENA_OK);
+    run(db, "INSERT INTO casefold(note,label,ordinal) VALUES('Alice','third',3)",
+        NULL, 0, &result, MILENA_OK);
+    run(db, "INSERT INTO casefold(note,label,ordinal) "
+             "VALUES(CAST(x'C0AF' AS TEXT),'unmatched-invalid-source',4)",
+        NULL, 0, &result, MILENA_OK);
+
+    run_typed_text_equality("alice", db, &result);
+    assert(result.row_count == 0 && result.column_count == 2);
+    milena_table_destroy(&result);
+    milena_table_init(&result);
+    run_typed_text_equality("Alice", db, &result);
+    assert(result.row_count == 2 && result.column_count == 2 &&
+           strcmp(result.columns[0].name, "label") == 0 &&
+           strcmp(result.columns[1].name, "ordinal") == 0);
+    const char *first = NULL;
+    const char *third = NULL;
+    const void *ordinal = NULL;
+    MilenaError error;
+    assert(milena_table_get_string(&result, 0, 0, &first, &error) == MILENA_OK &&
+           strcmp(first, "first") == 0);
+    assert(milena_table_get_array_value(&result, 1, 0, &ordinal, &error) == MILENA_OK &&
+           *(const int64_t *)ordinal == 2);
+    assert(milena_table_get_string(&result, 0, 1, &third, &error) == MILENA_OK &&
+           strcmp(third, "third") == 0);
+    assert(milena_table_get_array_value(&result, 1, 1, &ordinal, &error) == MILENA_OK &&
+           *(const int64_t *)ordinal == 3);
     milena_table_destroy(&result);
 }
 

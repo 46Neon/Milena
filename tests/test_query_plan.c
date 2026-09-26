@@ -549,6 +549,59 @@ static void test_common_data_operator_overlap(void) {
            MILENA_ERR_UNSUPPORTED);
 }
 
+static void test_shared_text_scan_filter_project_plan(void) {
+    static const MilenaSharedQueryProjection projections[] = {
+        {"label", MILENA_SHARED_QUERY_VALUE_TEXT},
+        {"amount", MILENA_SHARED_QUERY_VALUE_NUMERIC}
+    };
+    MilenaSharedQueryPlan arrow_plan = {0};
+    MilenaSharedQueryPlan sqlite_plan = {0};
+    MilenaError error;
+    assert(milena_shared_query_plan_build(
+        "local.arrow", true, "tag", "match", projections, 2u,
+        MILENA_SHARED_QUERY_SINK_ARROW_IPC_STREAM, &arrow_plan, &error) ==
+        MILENA_OK);
+    assert(milena_shared_query_plan_build(
+        "records", true, "tag", "match", projections, 2u,
+        MILENA_SHARED_QUERY_SINK_SQLITE_RESULT, &sqlite_plan, &error) ==
+        MILENA_OK);
+    assert(arrow_plan.operator_count == 4u &&
+           arrow_plan.operators[0] == MILENA_SHARED_QUERY_SCAN &&
+           arrow_plan.operators[1] == MILENA_SHARED_QUERY_TEXT_EQUAL_FILTER &&
+           arrow_plan.operators[2] == MILENA_SHARED_QUERY_PROJECT &&
+           arrow_plan.operators[3] == MILENA_SHARED_QUERY_RESULT &&
+           arrow_plan.preserve_source_order &&
+           arrow_plan.filter_text_length == strlen("match") &&
+           arrow_plan.projections[0].name == projections[0].name &&
+           arrow_plan.projections[1].name == projections[1].name &&
+           milena_shared_query_plans_same_logic(&arrow_plan, &sqlite_plan));
+
+    MilenaSharedQueryPlan unfiltered = {0};
+    assert(milena_shared_query_plan_build(
+        "local.arrow", false, NULL, NULL, projections, 2u,
+        MILENA_SHARED_QUERY_SINK_ARROW_IPC_STREAM, &unfiltered, &error) ==
+        MILENA_OK);
+    assert(unfiltered.operator_count == 3u &&
+           unfiltered.operators[0] == MILENA_SHARED_QUERY_SCAN &&
+           unfiltered.operators[1] == MILENA_SHARED_QUERY_PROJECT &&
+           unfiltered.operators[2] == MILENA_SHARED_QUERY_RESULT);
+
+    MilenaSharedQueryPlan invalid = {0};
+    assert(milena_shared_query_plan_build(
+        "records", true, "tag", NULL, projections, 2u,
+        MILENA_SHARED_QUERY_SINK_SQLITE_RESULT, &invalid, &error) ==
+        MILENA_ERR_TYPE);
+    static const char bad_utf8[] = {(char)0xc0, (char)0xaf, '\0'};
+    assert(milena_shared_query_plan_build(
+        "records", true, "tag", bad_utf8, projections, 2u,
+        MILENA_SHARED_QUERY_SINK_SQLITE_RESULT, &invalid, &error) ==
+        MILENA_ERR_TYPE);
+    MilenaSharedQueryPlan reordered = arrow_plan;
+    reordered.operators[1] = MILENA_SHARED_QUERY_PROJECT;
+    assert(milena_shared_query_plan_validate(&reordered, &error) ==
+           MILENA_ERR_DATA);
+}
+
 int main(void) {
     test_global_stream_plan();
     test_grouped_stream_plan();
@@ -560,6 +613,7 @@ int main(void) {
     test_legacy_global_summary_plan();
     test_ambiguous_and_unsupported_plans();
     test_common_data_operator_overlap();
-    puts("Canonical logical/physical stream plans and shared data-operator overlap validated.");
+    test_shared_text_scan_filter_project_plan();
+    puts("Canonical logical/physical stream plans and shared query overlap validated.");
     return 0;
 }

@@ -367,8 +367,15 @@ static MilenaStatus arrow_validate_options(const MilenaArrowIpcOptions *options,
         options->filter_kind > MILENA_ARROW_FILTER_NUMERIC_GREATER ||
         (options->filter_kind != MILENA_ARROW_FILTER_NONE &&
          (!options->filter_column || !options->filter_column[0])) ||
+        options->utf8_validation_policy < MILENA_ARROW_UTF8_VALIDATE_ALL_INPUT ||
+        options->utf8_validation_policy >
+            MILENA_ARROW_UTF8_VALIDATE_PROJECTED_RESULTS ||
         (options->filter_kind == MILENA_ARROW_FILTER_TEXT_EQUAL &&
-         (!options->filter_text || options->filter_column_type != MILENA_ARROW_VALUE_TEXTO)) ||
+         (!options->filter_text || options->filter_column_type != MILENA_ARROW_VALUE_TEXTO ||
+          !arrow_utf8_valid(options->filter_text, strlen(options->filter_text)))) ||
+        (options->utf8_validation_policy ==
+             MILENA_ARROW_UTF8_VALIDATE_PROJECTED_RESULTS &&
+         options->filter_kind != MILENA_ARROW_FILTER_TEXT_EQUAL) ||
         (options->filter_kind == MILENA_ARROW_FILTER_NUMERIC_GREATER &&
          options->filter_column_type != MILENA_ARROW_VALUE_NUMERICA) ||
         (options->filter_kind == MILENA_ARROW_FILTER_NUMERIC_GREATER &&
@@ -707,25 +714,53 @@ MilenaStatus milena_arrow_ipc_stream_transform(
                 status = MILENA_ERR_OVERFLOW;
                 goto cleanup;
             }
-            /* Validate UTF-8 even in non-projected scalar string columns; null
-             * rows are guarded by Arrow's validity bitmap. */
-            for (int64_t col = 0; col < input_schema.n_children; ++col) {
-                const struct ArrowArrayView *field = input_view.children[col];
-                if (field->storage_type == NANOARROW_TYPE_STRING &&
-                    !ArrowArrayViewIsNull(field, row)) {
-                    struct ArrowStringView value = ArrowArrayViewGetStringUnsafe(field, row);
-                    if (value.size_bytes < 0 ||
-                        !arrow_utf8_valid(value.data, (size_t)value.size_bytes)) {
-                        output_batch.release(&output_batch);
-                        batch.release(&batch);
-                        arrow_runtime_error(error, MILENA_ERR_DATA,
-                                            "Arrow UTF-8 field contains invalid text");
-                        status = MILENA_ERR_DATA;
-                        goto cleanup;
+            /* Standalone Arrow retains its established strict whole-input
+             * check. The shared text-equality plan checks only values that
+             * survive bytewise filtering and are present in the result. */
+            if (options->utf8_validation_policy ==
+                MILENA_ARROW_UTF8_VALIDATE_ALL_INPUT) {
+                for (int64_t col = 0; col < input_schema.n_children; ++col) {
+                    const struct ArrowArrayView *field = input_view.children[col];
+                    if (field->storage_type == NANOARROW_TYPE_STRING &&
+                        !ArrowArrayViewIsNull(field, row)) {
+                        struct ArrowStringView value =
+                            ArrowArrayViewGetStringUnsafe(field, row);
+                        if (value.size_bytes < 0 ||
+                            !arrow_utf8_valid(value.data,
+                                              (size_t)value.size_bytes)) {
+                            output_batch.release(&output_batch);
+                            batch.release(&batch);
+                            arrow_runtime_error(error, MILENA_ERR_DATA,
+                                                "Arrow UTF-8 field contains invalid text");
+                            status = MILENA_ERR_DATA;
+                            goto cleanup;
+                        }
                     }
                 }
             }
             if (!arrow_filter_matches(options, &input_view, filter_index, row)) continue;
+            if (options->utf8_validation_policy ==
+                MILENA_ARROW_UTF8_VALIDATE_PROJECTED_RESULTS) {
+                for (size_t col = 0; col < options->projection_count; ++col) {
+                    const struct ArrowArrayView *field =
+                        input_view.children[projection_indices[col]];
+                    if (field->storage_type == NANOARROW_TYPE_STRING &&
+                        !ArrowArrayViewIsNull(field, row)) {
+                        struct ArrowStringView value =
+                            ArrowArrayViewGetStringUnsafe(field, row);
+                        if (value.size_bytes < 0 ||
+                            !arrow_utf8_valid(value.data,
+                                              (size_t)value.size_bytes)) {
+                            output_batch.release(&output_batch);
+                            batch.release(&batch);
+                            arrow_runtime_error(error, MILENA_ERR_DATA,
+                                "Returned Arrow UTF-8 projection contains invalid text");
+                            status = MILENA_ERR_DATA;
+                            goto cleanup;
+                        }
+                    }
+                }
+            }
             for (size_t col = 0; col < options->projection_count; ++col) {
                 ArrowErrorCode append_status = arrow_append_value(
                     output_batch.children[col], input_view.children[projection_indices[col]], row);

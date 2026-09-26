@@ -710,6 +710,144 @@ bool milena_data_operator_plans_same_logic(
     return true;
 }
 
+static bool shared_query_identifier_valid(const char *name) {
+    if (!name || !name[0]) return false;
+    unsigned char first = (unsigned char)name[0];
+    if (!((first >= 'A' && first <= 'Z') ||
+          (first >= 'a' && first <= 'z') || first == '_')) return false;
+    for (const unsigned char *p = (const unsigned char *)name + 1; *p; ++p)
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+              (*p >= '0' && *p <= '9') || *p == '_')) return false;
+    return true;
+}
+
+static bool shared_query_utf8_valid(const unsigned char *text, size_t length) {
+    if (!text && length) return false;
+    for (size_t i = 0; i < length;) {
+        unsigned char c = text[i++];
+        if (c < 0x80u) continue;
+        unsigned continuation = c >= 0xc2u && c <= 0xdfu ? 1u :
+            c >= 0xe0u && c <= 0xefu ? 2u :
+            c >= 0xf0u && c <= 0xf4u ? 3u : 99u;
+        if (continuation == 99u || (size_t)continuation > length - i)
+            return false;
+        unsigned char first = text[i];
+        if ((c == 0xe0u && first < 0xa0u) ||
+            (c == 0xedu && first >= 0xa0u) ||
+            (c == 0xf0u && first < 0x90u) ||
+            (c == 0xf4u && first >= 0x90u)) return false;
+        for (unsigned j = 0; j < continuation; ++j) {
+            if ((text[i] & 0xc0u) != 0x80u) return false;
+            ++i;
+        }
+    }
+    return true;
+}
+
+MilenaStatus milena_shared_query_plan_validate(
+    const MilenaSharedQueryPlan *plan, MilenaError *error) {
+    if (!plan || !plan->source || !plan->source[0] ||
+        !plan->projections || !plan->projection_count ||
+        plan->projection_count > MILENA_SHARED_QUERY_MAX_COLUMNS ||
+        !plan->preserve_source_order ||
+        (plan->sink != MILENA_SHARED_QUERY_SINK_ARROW_IPC_STREAM &&
+         plan->sink != MILENA_SHARED_QUERY_SINK_SQLITE_RESULT))
+        return plan_error(error, MILENA_ERR_DATA,
+                          "Invalid shared scan/filter/project/result plan");
+    size_t expected_count = plan->has_text_equal_filter ? 4u : 3u;
+    if (plan->operator_count != expected_count ||
+        plan->operators[0] != MILENA_SHARED_QUERY_SCAN ||
+        (plan->has_text_equal_filter &&
+         plan->operators[1] != MILENA_SHARED_QUERY_TEXT_EQUAL_FILTER) ||
+        plan->operators[expected_count - 2u] != MILENA_SHARED_QUERY_PROJECT ||
+        plan->operators[expected_count - 1u] != MILENA_SHARED_QUERY_RESULT)
+        return plan_error(error, MILENA_ERR_DATA,
+                          "Shared logical operator order is invalid");
+    if (plan->has_text_equal_filter) {
+        if (!shared_query_identifier_valid(plan->filter_column) ||
+            !plan->filter_text ||
+            strlen(plan->filter_text) != plan->filter_text_length ||
+            !shared_query_utf8_valid((const unsigned char *)plan->filter_text,
+                                     plan->filter_text_length))
+            return plan_error(error, MILENA_ERR_TYPE,
+                              "Shared text equality requires an identifier and a non-NULL valid UTF-8 operand");
+    } else if (plan->filter_column || plan->filter_text ||
+               plan->filter_text_length != 0u) {
+        return plan_error(error, MILENA_ERR_DATA,
+                          "Unfiltered shared plan contains a filter operand");
+    }
+    for (size_t i = 0; i < plan->projection_count; ++i) {
+        const MilenaSharedQueryProjection *projection = &plan->projections[i];
+        if (!shared_query_identifier_valid(projection->name) ||
+            (projection->type != MILENA_SHARED_QUERY_VALUE_NUMERIC &&
+             projection->type != MILENA_SHARED_QUERY_VALUE_TEXT))
+            return plan_error(error, MILENA_ERR_TYPE,
+                              "Shared projection requires unique numeric/text identifiers");
+        for (size_t prior = 0; prior < i; ++prior)
+            if (strcmp(plan->projections[prior].name, projection->name) == 0)
+                return plan_error(error, MILENA_ERR_TYPE,
+                                  "Shared projection columns must be unique");
+    }
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}
+
+MilenaStatus milena_shared_query_plan_build(
+    const char *source, bool has_text_equal_filter,
+    const char *filter_column, const char *filter_text,
+    const MilenaSharedQueryProjection *projections, size_t projection_count,
+    MilenaSharedQuerySink sink, MilenaSharedQueryPlan *plan,
+    MilenaError *error) {
+    if (error) milena_error_clear(error);
+    if (!plan || !source || !source[0] || !projections ||
+        !projection_count || projection_count > MILENA_SHARED_QUERY_MAX_COLUMNS)
+        return plan_error(error, MILENA_ERR_ARGUMENT,
+                          "Shared query plan builder arguments are invalid");
+    memset(plan, 0, sizeof(*plan));
+    plan->source = source;
+    plan->has_text_equal_filter = has_text_equal_filter;
+    plan->filter_column = has_text_equal_filter ? filter_column : NULL;
+    plan->filter_text = has_text_equal_filter ? filter_text : NULL;
+    plan->filter_text_length = has_text_equal_filter && filter_text
+        ? strlen(filter_text) : 0u;
+    plan->projections = projections;
+    plan->projection_count = projection_count;
+    plan->sink = sink;
+    plan->preserve_source_order = true;
+    plan->operators[plan->operator_count++] = MILENA_SHARED_QUERY_SCAN;
+    if (has_text_equal_filter)
+        plan->operators[plan->operator_count++] =
+            MILENA_SHARED_QUERY_TEXT_EQUAL_FILTER;
+    plan->operators[plan->operator_count++] = MILENA_SHARED_QUERY_PROJECT;
+    plan->operators[plan->operator_count++] = MILENA_SHARED_QUERY_RESULT;
+    return milena_shared_query_plan_validate(plan, error);
+}
+
+bool milena_shared_query_plans_same_logic(
+    const MilenaSharedQueryPlan *left, const MilenaSharedQueryPlan *right) {
+    if (!left || !right ||
+        left->has_text_equal_filter != right->has_text_equal_filter ||
+        left->projection_count != right->projection_count ||
+        left->operator_count != right->operator_count ||
+        left->preserve_source_order != right->preserve_source_order ||
+        (left->has_text_equal_filter &&
+         (!left->filter_column || !right->filter_column ||
+          strcmp(left->filter_column, right->filter_column) != 0 ||
+          !left->filter_text || !right->filter_text ||
+          left->filter_text_length != right->filter_text_length ||
+          memcmp(left->filter_text, right->filter_text,
+                 left->filter_text_length) != 0)))
+        return false;
+    for (size_t i = 0; i < left->operator_count; ++i)
+        if (left->operators[i] != right->operators[i]) return false;
+    for (size_t i = 0; i < left->projection_count; ++i)
+        if (!left->projections[i].name || !right->projections[i].name ||
+            strcmp(left->projections[i].name, right->projections[i].name) != 0 ||
+            left->projections[i].type != right->projections[i].type)
+            return false;
+    return true;
+}
+
 static bool supported_analysis_child(ASTNodeType type) {
     return type == AST_LLAMADA_CARGAR ||
            type == AST_BLOQUE_RESUMIR ||
@@ -1362,6 +1500,14 @@ MilenaStatus milena_sql_semantic_validate(const ASTNode *program,
             if (!declared_filter)
                 return plan_error(error, MILENA_ERR_TYPE,
                                   "El filtro SQL refiere una columna no declarada en el esquema");
+            if (declared_filter->sql_type == AST_SQL_TYPE_TEXT &&
+                parameter->type_name &&
+                strcmp(parameter->type_name, "texto") == 0 &&
+                (!parameter->value || !shared_query_utf8_valid(
+                    (const unsigned char *)parameter->value,
+                    strlen(parameter->value))))
+                return plan_error(error, MILENA_ERR_DATA,
+                                  "El operando de igualdad TEXT debe ser UTF-8 válido y no nulo");
             if (!sql_parameter_type_matches_ast(parameter) ||
                 parameter->sql_type == AST_SQL_TYPE_UNSPECIFIED ||
                 parameter->sql_type != declared_filter->sql_type)
@@ -1648,6 +1794,156 @@ static char *sql_build_typed_statement(const ASTNode *table,
     return statement;
 }
 
+static bool sql_schema_has_name_ascii_casefold(const ASTNode *schema,
+                                                const char *name) {
+    if (!schema || !name) return false;
+    for (size_t i = 0; i < schema->child_count; ++i) {
+        const ASTNode *column = schema->children[i];
+        if (!column || !column->value) continue;
+        const unsigned char *left = (const unsigned char *)column->value;
+        const unsigned char *right = (const unsigned char *)name;
+        size_t position = 0;
+        while (left[position] && right[position]) {
+            unsigned char a = left[position];
+            unsigned char b = right[position];
+            if (a >= 'A' && a <= 'Z') a = (unsigned char)(a + ('a' - 'A'));
+            if (b >= 'A' && b <= 'Z') b = (unsigned char)(b + ('a' - 'A'));
+            if (a != b) break;
+            ++position;
+        }
+        if (!left[position] && !right[position]) return true;
+    }
+    return false;
+}
+
+static const char *sql_shared_source_order_key(const ASTNode *schema) {
+    static const char *const candidates[] = {"rowid", "_rowid_", "oid"};
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i)
+        if (!sql_schema_has_name_ascii_casefold(schema, candidates[i]))
+            return candidates[i];
+    return NULL;
+}
+
+static char *sql_build_shared_query_statement(
+        const MilenaSharedQueryPlan *plan, const ASTNode *schema) {
+    static const char *where_suffix = "\" COLLATE BINARY = ?";
+    static const char *order_prefix = " ORDER BY ";
+    static const char *order_suffix = " ASC";
+    const char *order_key = sql_shared_source_order_key(schema);
+    if (!plan || milena_shared_query_plan_validate(plan, NULL) != MILENA_OK ||
+        plan->sink != MILENA_SHARED_QUERY_SINK_SQLITE_RESULT ||
+        !plan->has_text_equal_filter || !plan->preserve_source_order ||
+        !order_key)
+        return NULL;
+    size_t length = 1u;
+    if (!sql_add_size(&length, strlen("SELECT ")) ||
+        !sql_add_size(&length, strlen(" FROM \"")) ||
+        !sql_add_size(&length, strlen(plan->source) + 1u) ||
+        !sql_add_size(&length, strlen(" WHERE \"")) ||
+        !sql_add_size(&length, strlen(plan->filter_column)) ||
+        !sql_add_size(&length, strlen(where_suffix)) ||
+        !sql_add_size(&length, strlen(order_prefix)) ||
+        !sql_add_size(&length, strlen(order_key)) ||
+        !sql_add_size(&length, strlen(order_suffix)))
+        return NULL;
+    for (size_t i = 0; i < plan->projection_count; ++i)
+        if (!sql_add_size(&length, strlen(plan->projections[i].name) + 2u) ||
+            (i && !sql_add_size(&length, 2u))) return NULL;
+    if (length > MILENA_SQL_PLAN_MAX_TEXT) return NULL;
+    char *statement = malloc(length);
+    if (!statement) return NULL;
+    char *cursor = statement;
+    memcpy(cursor, "SELECT ", 7u); cursor += 7u;
+    for (size_t i = 0; i < plan->projection_count; ++i) {
+        if (i) { memcpy(cursor, ", ", 2u); cursor += 2u; }
+        *cursor++ = '"';
+        size_t n = strlen(plan->projections[i].name);
+        memcpy(cursor, plan->projections[i].name, n); cursor += n;
+        *cursor++ = '"';
+    }
+    memcpy(cursor, " FROM \"", 7u); cursor += 7u;
+    size_t n = strlen(plan->source);
+    memcpy(cursor, plan->source, n); cursor += n;
+    *cursor++ = '"';
+    memcpy(cursor, " WHERE \"", 8u); cursor += 8u;
+    n = strlen(plan->filter_column);
+    memcpy(cursor, plan->filter_column, n); cursor += n;
+    memcpy(cursor, where_suffix, strlen(where_suffix));
+    cursor += strlen(where_suffix);
+    memcpy(cursor, order_prefix, strlen(order_prefix));
+    cursor += strlen(order_prefix);
+    n = strlen(order_key);
+    memcpy(cursor, order_key, n); cursor += n;
+    memcpy(cursor, order_suffix, strlen(order_suffix));
+    cursor += strlen(order_suffix);
+    *cursor = '\0';
+    return statement;
+}
+
+static MilenaStatus sql_shared_text_select_plan(
+        const ASTNode *table, const ASTNode *schema,
+        const ASTNode *projection, const ASTNode *filter_column,
+        const ASTNode *parameter, MilenaSharedQueryPlan *shared_plan,
+        bool *is_shared, MilenaSharedQueryProjection **owned_projections,
+        MilenaError *error) {
+    if (is_shared) *is_shared = false;
+    if (owned_projections) *owned_projections = NULL;
+    if (!table || !schema || !projection || !filter_column || !parameter ||
+        !shared_plan || !is_shared || !owned_projections)
+        return plan_error(error, MILENA_ERR_ARGUMENT,
+                          "Typed SELECT common-plan preflight is incomplete");
+    const ASTNode *filter_schema = sql_schema_find_column(schema,
+                                                           filter_column->value);
+    if (!filter_schema || filter_schema->sql_type != AST_SQL_TYPE_TEXT ||
+        !parameter->type_name || strcmp(parameter->type_name, "texto") != 0 ||
+        !sql_shared_source_order_key(schema))
+        return MILENA_OK;
+    if (projection->child_count == 0 ||
+        projection->child_count > MILENA_SHARED_QUERY_MAX_COLUMNS)
+        return MILENA_OK;
+    MilenaSharedQueryProjection local_projections[MILENA_SHARED_QUERY_MAX_COLUMNS];
+    memset(local_projections, 0, sizeof(local_projections));
+    for (size_t i = 0; i < projection->child_count; ++i) {
+        const ASTNode *field = projection->children[i];
+        const ASTNode *column = field && field->value
+            ? sql_schema_find_column(schema, field->value) : NULL;
+        if (!column) return plan_error(error, MILENA_ERR_TYPE,
+                                       "Common SELECT projection has no declared column");
+        if (column->sql_type == AST_SQL_TYPE_TEXT)
+            local_projections[i].type = MILENA_SHARED_QUERY_VALUE_TEXT;
+        else if (column->sql_type == AST_SQL_TYPE_INTEGER ||
+                 column->sql_type == AST_SQL_TYPE_REAL)
+            local_projections[i].type = MILENA_SHARED_QUERY_VALUE_NUMERIC;
+        else
+            return MILENA_OK; /* e.g. BOOLEAN remains typed-SQL-only */
+        local_projections[i].name = field->value;
+    }
+    MilenaSharedQueryProjection *plan_projections = calloc(
+        projection->child_count, sizeof(*plan_projections));
+    if (!plan_projections)
+        return plan_error(error, MILENA_ERR_MEMORY,
+                          "Sin memoria para la proyección lógica compartida");
+    memcpy(plan_projections, local_projections,
+           projection->child_count * sizeof(*plan_projections));
+    MilenaStatus status = milena_shared_query_plan_build(
+        table->value, true, filter_column->value, parameter->value,
+        plan_projections, projection->child_count,
+        MILENA_SHARED_QUERY_SINK_SQLITE_RESULT, shared_plan, error);
+    if (status == MILENA_ERR_TYPE &&
+        (!parameter->value || !shared_query_utf8_valid(
+            (const unsigned char *)parameter->value, strlen(parameter->value)))) {
+        free(plan_projections);
+        return status;
+    }
+    if (status != MILENA_OK) {
+        free(plan_projections);
+        return status;
+    }
+    *owned_projections = plan_projections;
+    *is_shared = true;
+    return MILENA_OK;
+}
+
 static char *sql_build_typed_insert_statement(const ASTNode *table,
                                                const ASTNode *columns) {
     if (!table || !table->value || !columns || !columns->child_count ||
@@ -1761,6 +2057,7 @@ void milena_sql_execution_plan_destroy(MilenaSqlExecutionPlan *plan) {
     for (size_t i = 0; i < plan->operation_count; ++i) {
         free(plan->operations[i].parameters);
         free(plan->operations[i].projections);
+        free(plan->operations[i].shared_projections);
         free(plan->operations[i].insert_columns);
         free(plan->operations[i].insert_values);
         free(plan->operations[i].update_assignments);
@@ -1791,6 +2088,8 @@ MilenaStatus milena_sql_execution_plan_validate(const MilenaSqlExecutionPlan *pl
         const MilenaSqlPlanOperation *op = &plan->operations[i];
         if (!op->source || op->source != plan->source->children[i] ||
             op->source->parent != plan->source ||
+            ((op->has_shared_query_plan || op->shared_projections) &&
+             op->kind != MILENA_SQL_PLAN_TYPED_SELECT) ||
             op->parameter_count > MILENA_SQL_PLAN_MAX_PARAMETERS ||
             (op->parameter_count && !op->parameters))
             return plan_error(error, MILENA_ERR_PARSE,
@@ -1852,14 +2151,39 @@ MilenaStatus milena_sql_execution_plan_validate(const MilenaSqlExecutionPlan *pl
                     return plan_error(error, MILENA_ERR_TYPE,
                                       "Proyección del plan SQL no coincide con el esquema validado");
             }
-            char *expected_statement = sql_build_typed_statement(table, projection,
-                                                                  filter_column);
+            MilenaSharedQueryPlan expected_shared_plan = {0};
+            MilenaSharedQueryProjection *expected_shared_projections = NULL;
+            bool expects_shared_plan = false;
+            MilenaStatus shared_status = sql_shared_text_select_plan(
+                table, schema, projection, filter_column, parameter,
+                &expected_shared_plan, &expects_shared_plan,
+                &expected_shared_projections, error);
+            if (shared_status != MILENA_OK) return shared_status;
+            if (op->has_shared_query_plan != expects_shared_plan ||
+                (expects_shared_plan &&
+                 op->shared_query_plan.projections != op->shared_projections) ||
+                (!expects_shared_plan && op->shared_projections) ||
+                (expects_shared_plan &&
+                 (op->shared_query_plan.sink !=
+                      MILENA_SHARED_QUERY_SINK_SQLITE_RESULT ||
+                  !op->shared_query_plan.source ||
+                  strcmp(op->shared_query_plan.source, table->value) != 0 ||
+                  !milena_shared_query_plans_same_logic(
+                      &op->shared_query_plan, &expected_shared_plan)))) {
+                free(expected_shared_projections);
+                return plan_error(error, MILENA_ERR_DATA,
+                                  "Logical shared SELECT plan differs from its typed AST");
+            }
+            char *expected_statement = expects_shared_plan
+                ? sql_build_shared_query_statement(&expected_shared_plan, schema)
+                : sql_build_typed_statement(table, projection, filter_column);
+            free(expected_shared_projections);
             bool statement_matches = expected_statement &&
                 strcmp(expected_statement, op->statement) == 0;
             free(expected_statement);
             if (!statement_matches)
                 return plan_error(error, MILENA_ERR_PARSE,
-                                  "SQL generado no coincide con el AST tipado validado");
+                                  "SQL generated from the typed logical plan does not match the AST");
         } else if (op->kind == MILENA_SQL_PLAN_TYPED_INSERT) {
             const ASTNode *insert = op->source;
             const ASTNode *table = insert->children[0];
@@ -2065,8 +2389,19 @@ MilenaStatus milena_sql_execution_plan_build(const ASTNode *program,
                 op->projections[p] = (MilenaSqlTypedProjection){
                     field, column, field->value, column->sql_type};
             }
-            op->owned_statement = sql_build_typed_statement(table, projection,
-                                                             filter_column);
+            bool has_shared_plan = false;
+            MilenaStatus shared_status = sql_shared_text_select_plan(
+                table, schema, projection, filter_column, parameter,
+                &op->shared_query_plan, &has_shared_plan,
+                &op->shared_projections, error);
+            if (shared_status != MILENA_OK) {
+                milena_sql_execution_plan_destroy(plan);
+                return shared_status;
+            }
+            op->has_shared_query_plan = has_shared_plan;
+            op->owned_statement = has_shared_plan
+                ? sql_build_shared_query_statement(&op->shared_query_plan, schema)
+                : sql_build_typed_statement(table, projection, filter_column);
             if (!op->owned_statement) {
                 milena_sql_execution_plan_destroy(plan);
                 return plan_error(error, MILENA_ERR_MEMORY,

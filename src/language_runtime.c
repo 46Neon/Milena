@@ -1686,6 +1686,17 @@ static MilenaStatus run_stream_dataset_with_options(
     return status;
 }
 
+static bool runtime_shared_query_identifier_valid(const char *name) {
+    if (!name || !name[0]) return false;
+    unsigned char first = (unsigned char)name[0];
+    if (!((first >= 'A' && first <= 'Z') ||
+          (first >= 'a' && first <= 'z') || first == '_')) return false;
+    for (const unsigned char *p = (const unsigned char *)name + 1; *p; ++p)
+        if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+              (*p >= '0' && *p <= '9') || *p == '_')) return false;
+    return true;
+}
+
 static bool runtime_common_materialized_preflight_candidate(
     const MilenaDataHIR *hir) {
     if (!hir || hir->source.streaming) return false;
@@ -1907,12 +1918,59 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     status = MILENA_ERR_TYPE;
                 }
             }
+            MilenaSharedQueryProjection shared_projections[
+                MILENA_SHARED_QUERY_MAX_COLUMNS] = {{0}};
+            MilenaSharedQueryPlan shared_plan = {0};
+            bool use_shared_plan = false;
+            if (status == MILENA_OK &&
+                arrow_hir->projection_count <= MILENA_SHARED_QUERY_MAX_COLUMNS &&
+                (!arrow_hir->has_filter ||
+                 arrow_hir->filter.kind == MILENA_ARROW_HIR_FILTER_TEXT_EQUAL)) {
+                bool compatible = true; /* Arrow sources are paths, not SQL identifiers. */
+                for (size_t i = 0; compatible &&
+                     i < arrow_hir->projection_count; ++i) {
+                    compatible = runtime_shared_query_identifier_valid(
+                        arrow_hir->projections[i].name);
+                    shared_projections[i].name = arrow_hir->projections[i].name;
+                    shared_projections[i].type =
+                        arrow_hir->projections[i].type == MILENA_ARROW_HIR_TEXT
+                            ? MILENA_SHARED_QUERY_VALUE_TEXT
+                            : MILENA_SHARED_QUERY_VALUE_NUMERIC;
+                }
+                const char *shared_filter_column = NULL;
+                const char *shared_filter_text = NULL;
+                if (arrow_hir->has_filter) {
+                    shared_filter_column = arrow_hir->filter.column;
+                    shared_filter_text = arrow_hir->filter.text_value;
+                    compatible = compatible &&
+                        runtime_shared_query_identifier_valid(shared_filter_column);
+                }
+                if (compatible) {
+                    status = milena_shared_query_plan_build(
+                        arrow_hir->source_path, arrow_hir->has_filter,
+                        shared_filter_column, shared_filter_text,
+                        shared_projections, arrow_hir->projection_count,
+                        MILENA_SHARED_QUERY_SINK_ARROW_IPC_STREAM,
+                        &shared_plan, error);
+                    use_shared_plan = status == MILENA_OK;
+                }
+            }
             MilenaArrowIpcOptions options = {0};
             options.input_path = input;
             options.output_path = output_path;
+            if (use_shared_plan) {
+                for (size_t i = 0; i < shared_plan.projection_count; ++i) {
+                    projection[i] = shared_plan.projections[i].name;
+                    projection_types[i] = shared_plan.projections[i].type ==
+                        MILENA_SHARED_QUERY_VALUE_TEXT
+                            ? MILENA_ARROW_VALUE_TEXTO
+                            : MILENA_ARROW_VALUE_NUMERICA;
+                }
+            }
             options.projection = projection;
             options.projection_types = projection_types;
-            options.projection_count = arrow_hir->projection_count;
+            options.projection_count = use_shared_plan
+                ? shared_plan.projection_count : arrow_hir->projection_count;
             options.max_batch_rows = arrow_hir->batch_rows;
             options.max_rows = arrow_hir->max_rows;
             options.max_batch_bytes = arrow_hir->max_batch_bytes;
@@ -1921,7 +1979,16 @@ MilenaStatus milena_run_dataset_program(const char *source,
             options.max_output_bytes = arrow_hir->max_output_bytes;
             options.max_elapsed_milliseconds =
                 arrow_hir->max_elapsed_milliseconds;
-            if (arrow_hir->has_filter) {
+            if (use_shared_plan) {
+                if (shared_plan.has_text_equal_filter) {
+                    options.filter_kind = MILENA_ARROW_FILTER_TEXT_EQUAL;
+                    options.filter_column = shared_plan.filter_column;
+                    options.filter_column_type = MILENA_ARROW_VALUE_TEXTO;
+                    options.filter_text = shared_plan.filter_text;
+                    options.utf8_validation_policy =
+                        MILENA_ARROW_UTF8_VALIDATE_PROJECTED_RESULTS;
+                }
+            } else if (arrow_hir->has_filter) {
                 options.filter_column = arrow_hir->filter.column;
                 if (arrow_hir->filter.kind == MILENA_ARROW_HIR_FILTER_TEXT_EQUAL) {
                     options.filter_kind = MILENA_ARROW_FILTER_TEXT_EQUAL;

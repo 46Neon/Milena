@@ -130,6 +130,81 @@ static int test_valid_ast_and_plan(void) {
     return 0;
 }
 
+static int test_shared_text_select_plan(void) {
+    const char *path = "sqlite-shared-text-no-open.db";
+    (void)remove(path);
+    const char *source =
+        "sql desde \"sqlite-shared-text-no-open.db\" {\n"
+        "  tabla records (tag texto, label texto, id entero);\n"
+        "  seleccionar label, id de records donde tag = \"Alice\";\n"
+        "}";
+    ASTNode *root = parse_sql(source);
+    CHECK(root && root->child_count == 1,
+          "parser rejected a text-filter SELECT for the shared plan");
+    ASTNode *program = root->children[0];
+    ASTNode *select = program->children[1];
+    MilenaError error;
+    CHECK(milena_sql_semantic_validate(program, &error) == MILENA_OK,
+          error.message);
+    MilenaSqlExecutionPlan plan = {0};
+    CHECK(milena_sql_execution_plan_build(program, &plan, &error) == MILENA_OK,
+          error.message);
+    const MilenaSqlPlanOperation *operation = &plan.operations[1];
+    CHECK(operation->kind == MILENA_SQL_PLAN_TYPED_SELECT &&
+          operation->has_shared_query_plan &&
+          operation->shared_query_plan.sink ==
+              MILENA_SHARED_QUERY_SINK_SQLITE_RESULT &&
+          operation->shared_query_plan.operator_count == 4u &&
+          operation->shared_query_plan.operators[0] == MILENA_SHARED_QUERY_SCAN &&
+          operation->shared_query_plan.operators[1] ==
+              MILENA_SHARED_QUERY_TEXT_EQUAL_FILTER &&
+          operation->shared_query_plan.operators[2] == MILENA_SHARED_QUERY_PROJECT &&
+          operation->shared_query_plan.operators[3] == MILENA_SHARED_QUERY_RESULT &&
+          operation->shared_query_plan.preserve_source_order &&
+          operation->shared_query_plan.projection_count == 2u &&
+          strcmp(operation->shared_query_plan.projections[0].name, "label") == 0 &&
+          strcmp(operation->shared_query_plan.projections[1].name, "id") == 0 &&
+          operation->parameters[0].kind == MILENA_SQL_PLAN_TEXT &&
+          strcmp(operation->parameters[0].value.text.data, "Alice") == 0 &&
+          strcmp(operation->statement,
+              "SELECT \"label\", \"id\" FROM \"records\" WHERE \"tag\" COLLATE BINARY = ? ORDER BY rowid ASC") == 0,
+          "typed SELECT did not derive ordered SQLite SQL from the shared logical plan");
+
+    static const MilenaSharedQueryProjection arrow_projection[] = {
+        {"label", MILENA_SHARED_QUERY_VALUE_TEXT},
+        {"id", MILENA_SHARED_QUERY_VALUE_NUMERIC}
+    };
+    MilenaSharedQueryPlan arrow_plan = {0};
+    CHECK(milena_shared_query_plan_build(
+        "records.arrow", true, "tag", "Alice", arrow_projection, 2u,
+        MILENA_SHARED_QUERY_SINK_ARROW_IPC_STREAM, &arrow_plan, &error) ==
+        MILENA_OK &&
+        milena_shared_query_plans_same_logic(
+            &arrow_plan, &operation->shared_query_plan),
+        "Arrow and typed SQLite adapters do not share the same logical descriptor");
+    milena_sql_execution_plan_destroy(&plan);
+    ast_destroy(root);
+    CHECK(database_was_not_created(path),
+          "shared query preflight unexpectedly opened the declared SQLite database");
+
+    ASTNode *raw_program = ast_create_leaf(AST_SQL_PROGRAM, path);
+    ASTNode *raw_query = ast_create_leaf(AST_SQL_QUERY, "SELECT 1");
+    CHECK(raw_program && raw_query && ast_add_child(raw_program, raw_query),
+          "could not construct raw SQL exclusion case");
+    MilenaSqlExecutionPlan raw_plan = {0};
+    CHECK(milena_sql_execution_plan_build(raw_program, &raw_plan, &error) ==
+              MILENA_OK &&
+          raw_plan.operations[0].kind == MILENA_SQL_PLAN_QUERY &&
+          !raw_plan.operations[0].has_shared_query_plan &&
+          raw_plan.operations[0].shared_projections == NULL,
+          "raw SQL was incorrectly lowered through the shared typed plan");
+    milena_sql_execution_plan_destroy(&raw_plan);
+    ast_destroy(raw_program);
+    (void)remove(path);
+    (void)select;
+    return 0;
+}
+
 static int test_update_ast_and_plan(void) {
     const char *path = "sqlite-typed-update-no-open.db";
     (void)remove(path);
@@ -277,6 +352,8 @@ static int test_semantic_rejection_before_open(void) {
 
 int main(void) {
     CHECK(test_valid_ast_and_plan() == 0, "valid AST/plan case failed");
+    CHECK(test_shared_text_select_plan() == 0,
+          "shared typed text SELECT plan case failed");
     CHECK(test_update_ast_and_plan() == 0, "typed UPDATE AST/plan case failed");
     CHECK(test_typed_null_bindings() == 0, "typed NULL binding case failed");
     CHECK(test_semantic_rejection_before_open() == 0,
