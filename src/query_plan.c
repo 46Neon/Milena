@@ -79,6 +79,175 @@ static bool common_aggregate_from_stream(ASTStreamOperation source,
     return true;
 }
 
+static bool common_plan_numeric_dtype(MilenaDType dtype) {
+    return (dtype >= MILENA_DTYPE_INT8 && dtype <= MILENA_DTYPE_FLOAT64);
+}
+
+static MilenaStatus common_plan_table_column_types(
+    const MilenaDataOperatorPlan *plan, const MilenaTable *table,
+    MilenaError *error) {
+    int key_index = milena_table_column_index(table, plan->group_key);
+    if (key_index < 0 ||
+        table->columns[(size_t)key_index].type != MILENA_COLUMN_STRING)
+        return plan_error(error, MILENA_ERR_TYPE,
+                          "Common materialized group key must be a text column");
+    for (size_t i = 0; i < plan->metric_count; ++i) {
+        int metric_index = milena_table_column_index(
+            table, plan->metrics[i].input_column);
+        if (metric_index < 0)
+            return plan_error(error, MILENA_ERR_DATA,
+                              "Common materialized metric column is missing");
+        const MilenaTableColumn *column =
+            &table->columns[(size_t)metric_index];
+        if (column->type != MILENA_COLUMN_ARRAY ||
+            !common_plan_numeric_dtype(column->values.dtype))
+            return plan_error(error, MILENA_ERR_TYPE,
+                              "Common materialized metrics must be numeric columns");
+    }
+    return MILENA_OK;
+}
+
+static bool common_plan_table_aggregate(
+    MilenaDataAggregateKind operation, MilenaAggregateOp *table_operation) {
+    if (!table_operation) return false;
+    switch (operation) {
+        case MILENA_DATA_AGGREGATE_SUM:
+            *table_operation = MILENA_AGG_SUM;
+            return true;
+        case MILENA_DATA_AGGREGATE_MEAN:
+            *table_operation = MILENA_AGG_MEAN;
+            return true;
+        case MILENA_DATA_AGGREGATE_COUNT:
+            *table_operation = MILENA_AGG_COUNT;
+            return true;
+        default:
+            return false;
+    }
+}
+
+MilenaStatus milena_data_operator_plan_execute_materialized(
+    const MilenaDataOperatorPlan *plan, const MilenaTable *input,
+    size_t max_input_rows, size_t max_output_rows, size_t max_columns,
+    MilenaTable *output, MilenaError *error) {
+    if (error) milena_error_clear(error);
+    if (!plan || !input || !output || input == output)
+        return plan_error(error, MILENA_ERR_ARGUMENT,
+                          "Materialized plan execution requires distinct input and output tables");
+    MilenaStatus status = milena_data_operator_plan_validate(plan, error);
+    if (status != MILENA_OK) return status;
+    if (plan->execution_mode != MILENA_DATA_EXECUTION_MATERIALIZED_TABLE)
+        return common_plan_unsupported(error,
+            "CSV record-stream plans cannot use the materialized executor");
+    status = milena_table_validate(input, error);
+    if (status != MILENA_OK) return status;
+    if (input->row_count > max_input_rows || input->column_count > max_columns)
+        return plan_error(error, MILENA_ERR_OVERFLOW,
+                          "Materialized input exceeds the HIR resource policy");
+    status = milena_table_validate(output, error);
+    if (status != MILENA_OK) return status;
+
+    MilenaTable working = {0};
+    MilenaTable next = {0};
+    milena_table_init(&working);
+    milena_table_init(&next);
+    status = milena_table_clone(&working, input, error);
+    bool scanned = false, filtered = false, grouped = false, sunk = false;
+    for (size_t i = 0; status == MILENA_OK && i < plan->operator_count; ++i) {
+        switch (plan->operators[i]) {
+            case MILENA_DATA_OPERATOR_CSV_SCAN:
+                if (i != 0u || scanned) {
+                    status = plan_error(error, MILENA_ERR_DATA,
+                                        "Common materialized CSV_SCAN is out of order");
+                } else {
+                    scanned = true;
+                }
+                break;
+            case MILENA_DATA_OPERATOR_NUMERIC_GREATER_FILTER:
+                if (!scanned || filtered || grouped || sunk ||
+                    !plan->has_numeric_greater_filter) {
+                    status = plan_error(error, MILENA_ERR_DATA,
+                                        "Common materialized filter is out of order");
+                    break;
+                }
+                status = milena_table_filter_numeric(
+                    &next, &working, plan->filter_column, ">",
+                    plan->filter_threshold, error);
+                if (status == MILENA_OK) {
+                    milena_table_swap(&working, &next);
+                    filtered = true;
+                }
+                milena_table_destroy(&next);
+                milena_table_init(&next);
+                break;
+            case MILENA_DATA_OPERATOR_GROUP_AGGREGATE: {
+                if (!scanned || grouped || sunk ||
+                    (plan->has_numeric_greater_filter && !filtered) ||
+                    (!plan->has_numeric_greater_filter && filtered)) {
+                    status = plan_error(error, MILENA_ERR_DATA,
+                                        "Common materialized group aggregate is out of order");
+                    break;
+                }
+                status = common_plan_table_column_types(plan, &working, error);
+                MilenaAggregateSpec specifications[MILENA_DATA_PLAN_MAX_METRICS];
+                memset(specifications, 0, sizeof(specifications));
+                for (size_t metric = 0;
+                     status == MILENA_OK && metric < plan->metric_count;
+                     ++metric) {
+                    MilenaAggregateOp operation;
+                    if (!common_plan_table_aggregate(
+                            plan->metrics[metric].operation, &operation)) {
+                        status = plan_error(error, MILENA_ERR_UNSUPPORTED,
+                                            "Common aggregate is not supported by the table kernel");
+                        break;
+                    }
+                    specifications[metric].value_column =
+                        plan->metrics[metric].input_column;
+                    specifications[metric].operation = operation;
+                    specifications[metric].output_name = NULL;
+                }
+                if (status == MILENA_OK) {
+                    const char *keys[1] = {plan->group_key};
+                    status = milena_table_group_by(&next, &working, keys, 1u,
+                        specifications, plan->metric_count, error);
+                }
+                if (status == MILENA_OK) {
+                    milena_table_swap(&working, &next);
+                    grouped = true;
+                }
+                milena_table_destroy(&next);
+                milena_table_init(&next);
+                break;
+            }
+            case MILENA_DATA_OPERATOR_JSON_SINK:
+                if (!grouped || sunk || i + 1u != plan->operator_count) {
+                    status = plan_error(error, MILENA_ERR_DATA,
+                                        "Common materialized JSON_SINK is out of order");
+                } else {
+                    sunk = true;
+                }
+                break;
+            default:
+                status = plan_error(error, MILENA_ERR_UNSUPPORTED,
+                                    "Common materialized operator is not executable");
+                break;
+        }
+        if (status == MILENA_OK &&
+            plan->operators[i] != MILENA_DATA_OPERATOR_CSV_SCAN &&
+            plan->operators[i] != MILENA_DATA_OPERATOR_JSON_SINK &&
+            (working.row_count > max_output_rows ||
+             working.column_count > max_columns))
+            status = plan_error(error, MILENA_ERR_OVERFLOW,
+                                "Materialized operator exceeds the HIR output policy");
+    }
+    if (status == MILENA_OK && (!scanned || !grouped || !sunk))
+        status = plan_error(error, MILENA_ERR_DATA,
+                            "Common materialized plan did not reach its JSON sink");
+    if (status == MILENA_OK) milena_table_swap(output, &working);
+    milena_table_destroy(&working);
+    milena_table_destroy(&next);
+    return status;
+}
+
 MilenaStatus milena_data_operator_plan_from_hir(
     const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
     MilenaError *error) {

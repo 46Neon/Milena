@@ -2196,15 +2196,23 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     status = dataset_runtime_path(report_path, script_filename,
                         true, output_path, sizeof(output_path), error);
             }
-            MilenaCanonicalCompilerInput compiler_input = {0};
-            if (status == MILENA_OK)
-                status = milena_canonical_compiler_input(&canonical_program,
-                                                         &compiler_input, error);
             MilenaTable executed = {0};
             milena_table_init(&executed);
-            if (status == MILENA_OK)
-                status = milena_canonical_program_execute_data(&canonical_program,
-                                                               NULL, &executed, error);
+            if (status == MILENA_OK && has_common_materialized_preflight) {
+                const MilenaHIRResourcePolicy *limits =
+                    &canonical_program.data_hir->resource_policy;
+                status = milena_data_operator_plan_execute_materialized(
+                    &common_materialized_preflight, &canonical_table,
+                    limits->max_input_rows, limits->max_output_rows,
+                    limits->max_columns, &executed, error);
+            } else if (status == MILENA_OK) {
+                MilenaCanonicalCompilerInput compiler_input = {0};
+                status = milena_canonical_compiler_input(&canonical_program,
+                                                         &compiler_input, error);
+                if (status == MILENA_OK)
+                    status = milena_canonical_program_execute_data(
+                        &canonical_program, NULL, &executed, error);
+            }
             if (status == MILENA_OK) {
                 milena_table_swap(&canonical_table, &executed);
                 for (size_t i = 0; i < canonical_program.data_hir->operation_count; ++i) {

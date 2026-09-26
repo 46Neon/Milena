@@ -3,6 +3,7 @@
 
 #include "ast.h"
 #include "common.h"
+#include "table.h"
 
 /* Canonical logical contract for the current, intentionally narrow overlap
  * between materialized table HIR and CSV record-streaming execution. Strings
@@ -92,6 +93,12 @@ MilenaStatus milena_data_operator_plan_from_stream(
     MilenaDataOperatorPlan *plan, MilenaError *error);
 MilenaStatus milena_data_operator_plan_validate(
     const MilenaDataOperatorPlan *plan, MilenaError *error);
+/* Executes only the validated materialized overlap by following the common
+ * operator sequence. Input is borrowed; output is replaced transactionally. */
+MilenaStatus milena_data_operator_plan_execute_materialized(
+    const MilenaDataOperatorPlan *plan, const MilenaTable *input,
+    size_t max_input_rows, size_t max_output_rows, size_t max_columns,
+    MilenaTable *output, MilenaError *error);
 bool milena_data_operator_plans_same_logic(
     const MilenaDataOperatorPlan *left,
     const MilenaDataOperatorPlan *right);

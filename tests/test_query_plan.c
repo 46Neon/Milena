@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -335,6 +336,81 @@ static ASTNode *typed_declaration(const char *name, const char *type_name) {
     return node;
 }
 
+static double test_table_numeric_value(const MilenaTable *table,
+                                       const char *column, size_t row) {
+    int index = milena_table_column_index(table, column);
+    assert(index >= 0);
+    const void *raw = NULL;
+    assert(milena_table_get_array_value(table, (size_t)index, row, &raw, NULL) ==
+           MILENA_OK);
+    const MilenaTableColumn *data =
+        milena_table_column(table, (size_t)index);
+    assert(data && raw);
+    if (data->values.dtype == MILENA_DTYPE_FLOAT64)
+        return *(const double *)raw;
+    if (data->values.dtype == MILENA_DTYPE_INT64)
+        return (double)*(const int64_t *)raw;
+    assert(data->values.dtype == MILENA_DTYPE_FLOAT64 ||
+           data->values.dtype == MILENA_DTYPE_INT64);
+    return 0.0;
+}
+
+static void test_materialized_executor_uses_common_plan(
+    const MilenaDataOperatorPlan *source_plan, MilenaError *error) {
+    const char *groups[] = {"same", "same", "same", "same"};
+    const char *buckets[] = {"A", "B", "A", "B"};
+    const double values[] = {3.0, 5.0, 6.0, 8.0};
+    const size_t shape[] = {4u};
+    MilenaArray numeric = {0};
+    MilenaTable input = {0};
+    MilenaTable output = {0};
+    milena_array_init(&numeric);
+    milena_table_init(&input);
+    milena_table_init(&output);
+    assert(milena_table_add_string_column_copy(&input, "grupo", groups, 4u,
+                                               NULL, error) == MILENA_OK);
+    assert(milena_table_add_string_column_copy(&input, "bucket", buckets, 4u,
+                                               NULL, error) == MILENA_OK);
+    assert(milena_array_from_f64(&numeric, 1u, shape, values, error) ==
+           MILENA_OK);
+    assert(milena_table_add_column_copy(&input, "other", &numeric, NULL,
+                                        error) == MILENA_OK);
+    milena_array_release(&numeric);
+
+    /* Deliberately vary every materialized execution operand after building the
+     * plan from HIR. The executor receives no HIR and must follow these plan
+     * parameters, rather than re-discovering the original filter/key/metrics. */
+    MilenaDataOperatorPlan execution_plan = *source_plan;
+    execution_plan.filter_column = "other";
+    execution_plan.filter_threshold = 4.0;
+    execution_plan.group_key = "bucket";
+    for (size_t i = 0; i < execution_plan.metric_count; ++i)
+        execution_plan.metrics[i].input_column = "other";
+    assert(milena_data_operator_plan_execute_materialized(
+        &execution_plan, &input, 100u, 100u, 8u, &output, error) == MILENA_OK);
+    assert(output.row_count == 2u && output.column_count == 4u);
+    const char *key = NULL;
+    assert(milena_table_get_string(&output, 0u, 0u, &key, error) == MILENA_OK);
+    assert(strcmp(key, "B") == 0);
+    assert(milena_table_get_string(&output, 0u, 1u, &key, error) == MILENA_OK);
+    assert(strcmp(key, "A") == 0);
+    assert(test_table_numeric_value(&output, "other_suma", 0u) == 13.0);
+    assert(test_table_numeric_value(&output, "other_media", 0u) == 6.5);
+    assert(test_table_numeric_value(&output, "other_conteo", 0u) == 2.0);
+    assert(test_table_numeric_value(&output, "other_suma", 1u) == 6.0);
+    assert(test_table_numeric_value(&output, "other_media", 1u) == 6.0);
+    assert(test_table_numeric_value(&output, "other_conteo", 1u) == 1.0);
+
+    /* A malformed operator order fails without replacing the previous result. */
+    MilenaDataOperatorPlan malformed = execution_plan;
+    malformed.operators[1] = MILENA_DATA_OPERATOR_GROUP_AGGREGATE;
+    assert(milena_data_operator_plan_execute_materialized(
+        &malformed, &input, 100u, 100u, 8u, &output, error) == MILENA_ERR_DATA);
+    assert(output.row_count == 2u && output.column_count == 4u);
+    milena_table_destroy(&output);
+    milena_table_destroy(&input);
+}
+
 static void test_common_data_operator_overlap(void) {
     MilenaHIRDataOperation hir_operations[2] = {{0}};
     MilenaHIRAggregate hir_aggregates[3] = {{0}};
@@ -370,6 +446,7 @@ static void test_common_data_operator_overlap(void) {
     assert(in_memory.execution_mode ==
            MILENA_DATA_EXECUTION_MATERIALIZED_TABLE);
     assert(in_memory.operator_count == 4u && in_memory.has_numeric_greater_filter);
+    test_materialized_executor_uses_common_plan(&in_memory, &error);
 
     ASTNode *analysis = ast_create(AST_BLOQUE_ANALISIS);
     assert(analysis);
