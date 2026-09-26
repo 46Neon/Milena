@@ -1,6 +1,6 @@
-# Proposed MLBC v1.3 data-plan ABI — design only
+# MLBC v1.3 data-plan ABI — wire-format foundation
 
-> **Status: NOT IMPLEMENTED.** The current VM, verifier, compiler, CLI and AOT backend support scalar/boolean v1.2 only. This document is a bounded design for the first data-HIR slice; it does not add an opcode, change the accepted bytecode, enable `milena vm` for data programs, or claim VM/AOT parity. The existing data-HIR is still executed only by the canonical language runtime. Do not treat this proposal as executable ABI until code and acceptance tests land.
+> **Wire-format status:** the public v1.3 `DATA_PLAN_ONLY` encoder and standalone verifier are implemented. Focused SUM/COUNT format tests are integrated into `make test-bytecode` and bytecode CI; check the containing commit's CI result before calling those tests passing. Compiler lowering, data-run API/loader integration, CLI routing, and AOT remain **NOT IMPLEMENTED**. Scalar verification and VM execution remain v1.2-only; this wire-format increment does not enable data-HIR execution or claim VM/AOT parity. The existing data-HIR is still executed only by the canonical language runtime.
 
 This proposal deliberately covers one vertical slice: one non-streaming CSV source, exactly one declared numeric column, exactly one global summary (`#suma` or `#conteo`) over that column, and one required JSON export. It is intended to make the next implementation small enough to verify and differentially test against the existing canonical data-HIR runtime.
 

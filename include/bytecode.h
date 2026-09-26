@@ -2,9 +2,9 @@
 #define MILENA_BYTECODE_H
 
 /*
- * Portable Milena bytecode v1.0/v1.1/v1.2.
- *
- * This is a versioned, little-endian bytecode format, not native machine code.
+ * Portable scalar Milena bytecode v1.0/v1.1/v1.2 plus an explicit v1.3
+ * data-plan wire API. This is a versioned, little-endian format, not native
+ * machine code. Scalar verification and execution remain limited to v1.2.
  * v1.0 is single-function; v1.1 adds bounded non-recursive scalar calls;
  * v1.2 adds explicit static numeric/boolean register and function-return types.
  */
@@ -22,8 +22,18 @@ extern "C" {
 #define MILENA_BYTECODE_V1_MINOR 0u
 #define MILENA_BYTECODE_VERSION_CALL_MINOR 1u
 #define MILENA_BYTECODE_VERSION_TYPED_MINOR 2u
+/* Explicit wire-only data-plan schema; scalar verifier/run stay at v1.2. */
+#define MILENA_BYTECODE_VERSION_DATA_MINOR 3u
 #define MILENA_BYTECODE_MAX_MINOR MILENA_BYTECODE_VERSION_TYPED_MINOR
 #define MILENA_BYTECODE_HEADER_SIZE 16u
+#define MILENA_BYTECODE_DATA_MAX_MODULE_BYTES 65536u
+#define MILENA_BYTECODE_DATA_MAX_STRING_BYTES 4096u
+#define MILENA_BYTECODE_DATA_MAX_TOTAL_STRING_BYTES 16384u
+#define MILENA_BYTECODE_DATA_MAX_INPUT_FILE_BYTES 67108864u
+#define MILENA_BYTECODE_DATA_MAX_INPUT_DATA_ROWS 5000u
+#define MILENA_BYTECODE_DATA_MAX_INPUT_COLUMNS 70u
+#define MILENA_BYTECODE_DATA_MAX_CSV_FIELD_BYTES 1048576u
+#define MILENA_BYTECODE_DATA_MAX_OUTPUT_ROWS 1u
 #define MILENA_BYTECODE_INSTRUCTION_SIZE 24u
 #define MILENA_BYTECODE_MAX_INSTRUCTIONS 65536u
 #define MILENA_BYTECODE_MAX_REGISTERS 256u
@@ -116,6 +126,84 @@ typedef struct {
     size_t byte_offset;
     char message[128];
 } MilenaBytecodeDiagnostic;
+
+/* v1.3 data-only summary operation IDs and logical type IDs. */
+enum {
+    MILENA_BYTECODE_DATA_SUM = 1,
+    MILENA_BYTECODE_DATA_COUNT = 2,
+    MILENA_BYTECODE_DATA_TYPE_NUMBER = 1
+};
+
+/* A length-delimited UTF-8 byte span. It is never required to be NUL-terminated. */
+typedef struct {
+    const uint8_t *data;
+    size_t length;
+} MilenaBytecodeDataStringView;
+
+/* Each encoded input cap must be nonzero and no greater than its hard maximum. */
+typedef struct {
+    uint32_t max_input_file_bytes;
+    uint32_t max_input_data_rows;
+    uint32_t max_input_columns;
+    uint32_t max_csv_field_bytes;
+} MilenaBytecodeDataLimits;
+
+/*
+ * Encoder input for the fixed v1.3 DATA_PLAN_ONLY shape. The result column is
+ * derived as input_column + "_suma" or "_conteo"; the fixed dataset,
+ * declaration, operation, output-row and string counts are not caller-settable.
+ */
+typedef struct {
+    MilenaBytecodeDataStringView source_path;
+    MilenaBytecodeDataStringView export_path;
+    MilenaBytecodeDataStringView input_column;
+    uint8_t operation;
+    bool span_present;
+    uint32_t source_line;
+    uint32_t source_column;
+    MilenaBytecodeDataLimits limits;
+} MilenaBytecodeDataPlan;
+
+/*
+ * Verified data-plan view. All string pointers borrow the input bytecode
+ * buffer; keep that buffer alive and unmodified for as long as this view is
+ * used. `view_out` is assigned only after complete verification and must not
+ * overlap `bytes`. The verifier allocates nothing and retains no pointer after
+ * return.
+ */
+typedef struct {
+    MilenaBytecodeDataStringView source_path;
+    MilenaBytecodeDataStringView export_path;
+    MilenaBytecodeDataStringView input_column;
+    MilenaBytecodeDataStringView result_column;
+    uint8_t operation;
+    bool span_present;
+    uint32_t source_line;
+    uint32_t source_column;
+    MilenaBytecodeDataLimits limits;
+} MilenaBytecodeDataPlanView;
+
+/*
+ * v1.3 wire-only APIs. They accept/produce precisely DATA_PLAN_ONLY modules;
+ * the scalar verifier and milena_bytecode_run continue to reject v1.3.
+ * `data_encoded_size` is false for an invalid plan or unrepresentable size.
+ * Encoder input spans must remain readable through the call and must not
+ * overlap the output buffer. A null output and zero capacity on encode is a
+ * size query: BUFFER_TOO_SMALL is returned and *written receives the size.
+ */
+bool milena_bytecode_data_encoded_size(const MilenaBytecodeDataPlan *plan,
+                                       size_t *size_out);
+MilenaBytecodeStatus milena_bytecode_data_encode(
+    const MilenaBytecodeDataPlan *plan,
+    uint8_t *out,
+    size_t capacity,
+    size_t *written,
+    MilenaBytecodeDiagnostic *diagnostic);
+MilenaBytecodeStatus milena_bytecode_verify_data(
+    const uint8_t *bytes,
+    size_t length,
+    MilenaBytecodeDataPlanView *view_out,
+    MilenaBytecodeDiagnostic *diagnostic);
 
 /* Return header + fixed-width record bytes (v1.0/v1.1 base), or false on overflow/cap. */
 bool milena_bytecode_encoded_size(size_t instruction_count, size_t *size_out);

@@ -28,7 +28,7 @@ typedef struct {
 } StringList;
 
 static const char *const product_sources[] = {
-    "analysis.c", "array.c", "arrow_ipc.c", "bytecode.c", "bytecode_compiler.c", "canonical_compiler.c", "common.c",
+    "analysis.c", "array.c", "arrow_ipc.c", "bytecode.c", "bytecode_compiler.c", "bytecode_data.c", "canonical_compiler.c", "common.c",
     "dataset.c", "entrypoints.c", "external_merge.c", "external_sort.c",
     "finance.c", "group_key_codec.c", "grouped_aggregate.c", "interpreter.c",
     "language_grouped_spill.c", "language_runtime.c", "logger.c", "main.c",
