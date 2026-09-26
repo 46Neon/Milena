@@ -68,9 +68,10 @@ cat >"$tmpdir/global.milena" <<'MILENA'
 funcion principal() { retornar 1; }
 variable extra = 2;
 MILENA
-# The normal interpreter path remains intact even though the bytecode CLI must
-# reject its unsupported global-statement construct rather than falling back.
-"$cli" run "$tmpdir/global.milena"
+# `run` accepts canonical function programs through the AST interpreter; the
+# legacy numeric-function parser uses a different return keyword and must not
+# intercept this source. The bytecode CLI still rejects the global statement.
+"$cli" run "$tmpdir/global.milena" >"$tmpdir/interpreter.out"
 expect_failure "$cli" vm "$tmpdir/global.milena"
 expect_failure "$cli" build "$tmpdir/global.milena" -o "$tmpdir/unsupported-program"
 grep -E -i 'global|sentencias|HIR|soport' "$tmpdir/failure.err" >/dev/null

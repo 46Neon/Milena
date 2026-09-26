@@ -861,7 +861,8 @@ static ScriptPipeline script_pipeline_for_source(const char *script,
         return SCRIPT_PIPELINE_PARSE_ERROR;
     if (parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_DATASET ||
         parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_ARRAY ||
-        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_SQL) return parsed_pipeline;
+        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_SQL ||
+        parsed_pipeline == SCRIPT_PIPELINE_CANONICAL_FUNCTION) return parsed_pipeline;
     if (strstr(script, "funcion") != NULL) {
         return SCRIPT_PIPELINE_LEGACY_NUMERIC_FUNCTIONS;
     }
