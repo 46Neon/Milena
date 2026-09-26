@@ -1,5 +1,88 @@
 #include "dataset.h"
 
+#include <ctype.h>
+
+static bool dataset_runtime_file_exists(const char *path) {
+    FILE *file = path ? fopen(path, "rb") : NULL;
+    if (!file) return false;
+    fclose(file);
+    return true;
+}
+
+static bool dataset_runtime_absolute(const char *path) {
+    return path && (path[0] == '/' ||
+                    (isalpha((unsigned char)path[0]) && path[1] == ':' &&
+                     (path[2] == '\\' || path[2] == '/')));
+}
+
+MilenaStatus dataset_resolve_runtime_path(const char *requested,
+                                         const char *source_filename,
+                                         bool output,
+                                         char *resolved,
+                                         size_t resolved_size,
+                                         MilenaError *error) {
+    if (!requested || !resolved || resolved_size == 0) {
+        milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
+                         "Ruta de dataset inválida");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (dataset_runtime_absolute(requested)) {
+        if (strlen(requested) + 1 > resolved_size) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "Ruta demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        strcpy(resolved, requested);
+        if (!output && !dataset_runtime_file_exists(resolved)) {
+            milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                             "No se pudo abrir el dataset");
+            return MILENA_ERR_IO;
+        }
+        return MILENA_OK;
+    }
+    if (!output && dataset_runtime_file_exists(requested)) {
+        if (strlen(requested) + 1 > resolved_size) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "Ruta demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        strcpy(resolved, requested);
+        return MILENA_OK;
+    }
+
+    char base[1024] = ".";
+    if (source_filename && source_filename[0]) {
+        size_t length = strlen(source_filename);
+        if (length >= sizeof(base)) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                             "Ruta del script demasiado larga");
+            return MILENA_ERR_OVERFLOW;
+        }
+        memcpy(base, source_filename, length + 1);
+        char *slash = strrchr(base, '/');
+        char *backslash = strrchr(base, '\\');
+        if (backslash && (!slash || backslash > slash)) slash = backslash;
+        if (slash) {
+            if (slash == base) base[1] = '\\0';
+            else *slash = '\\0';
+        } else {
+            strcpy(base, ".");
+        }
+    }
+    int written = snprintf(resolved, resolved_size, "%s/%s", base, requested);
+    if (written < 0 || (size_t)written >= resolved_size) {
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "Ruta demasiado larga");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (!output && !dataset_runtime_file_exists(resolved)) {
+        milena_error_set(error, MILENA_ERR_IO, 0, 0, 0,
+                         "No se pudo abrir el dataset indicado");
+        return MILENA_ERR_IO;
+    }
+    return MILENA_OK;
+}
+
 DatasetLimits dataset_default_limits(void) {
     DatasetLimits limits = {5000, 70, 1024 * 1024};
     return limits;

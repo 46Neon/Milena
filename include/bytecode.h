@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "common.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -149,6 +150,13 @@ typedef struct {
 } MilenaBytecodeDataLimits;
 
 /*
+ * Optional per-invocation reductions for the explicit data runner. A zero
+ * member keeps the corresponding encoded limit; a nonzero member is
+ * intersected with (never raises) the encoded cap.
+ */
+typedef MilenaBytecodeDataLimits MilenaBytecodeDataRunLimits;
+
+/*
  * Encoder input for the fixed v1.3 DATA_PLAN_ONLY shape. The result column is
  * derived as input_column + "_suma" or "_conteo"; the fixed dataset,
  * declaration, operation, output-row and string counts are not caller-settable.
@@ -204,6 +212,23 @@ MilenaBytecodeStatus milena_bytecode_verify_data(
     size_t length,
     MilenaBytecodeDataPlanView *view_out,
     MilenaBytecodeDiagnostic *diagnostic);
+
+/*
+ * Execute the exact verified v1.3 DATA_PLAN_ONLY module using the original
+ * .milena source filename only as path-resolution context. No source text is
+ * read or reparsed. On success, one canonical typed JSON report is atomically
+ * published at the plan's export path; on failure, no partial report is
+ * published and an existing destination is preserved. `source_filename` may
+ * be NULL (relative paths then use the process working directory). Optional
+ * nonzero run limits only lower the encoded limits. All per-run resources are
+ * owned and released by this call; the caller retains ownership of `bytes`.
+ */
+MilenaStatus milena_bytecode_run_data(
+    const uint8_t *bytes,
+    size_t length,
+    const char *source_filename,
+    const MilenaBytecodeDataRunLimits *run_limits,
+    MilenaError *error);
 
 /* Return header + fixed-width record bytes (v1.0/v1.1 base), or false on overflow/cap. */
 bool milena_bytecode_encoded_size(size_t instruction_count, size_t *size_out);
