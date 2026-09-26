@@ -63,8 +63,8 @@ MilenaStatus dataset_resolve_runtime_path(const char *requested,
         char *backslash = strrchr(base, '\\');
         if (backslash && (!slash || backslash > slash)) slash = backslash;
         if (slash) {
-            if (slash == base) base[1] = '\\0';
-            else *slash = '\\0';
+            if (slash == base) base[1] = '\0';
+            else *slash = '\0';
         } else {
             strcpy(base, ".");
         }

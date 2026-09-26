@@ -140,14 +140,14 @@ static int test_hir_strings_are_copied(void) {
 
 static int reject_source(const char *source, bool expect_parse_error) {
     MilenaError error;
-    uint8_t *bytes = (uint8_t *)malloc(1u);
+    uint8_t sentinel = 0u;
+    uint8_t *bytes = &sentinel;
     size_t length = 123u;
-    if (!bytes) return 1;
     MilenaStatus status = milena_bytecode_compile_data_source(
         source, &bytes, &length, &error);
     if (status == MILENA_OK || bytes != NULL || length != 0u) {
         fprintf(stderr, "unsupported/malformed source returned bytecode\n");
-        free(bytes);
+        if (bytes != &sentinel) free(bytes);
         return 1;
     }
     if (expect_parse_error) {
