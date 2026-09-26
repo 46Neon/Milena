@@ -802,34 +802,289 @@ lower_fail:
 }
 
 
-MilenaStatus milena_bytecode_compile_source(const char *source,
+static bool data_hir_cstring_length(const char *text, size_t maximum,
+                                    size_t *length_out) {
+    if (!text || !length_out) return false;
+    for (size_t length = 0u; length <= maximum; ++length) {
+        if (text[length] == '\0') {
+            *length_out = length;
+            return true;
+        }
+    }
+    return false;
+}
+
+static MilenaStatus data_hir_reject(MilenaError *error, MilenaStatus status,
+                                    const MilenaHIRSourceSpan *span,
+                                    const char *message) {
+    return fail_at(error, status, span, message);
+}
+
+static const char *data_operation_suffix(MilenaAggregateOp operation) {
+    if (operation == MILENA_AGG_SUM) return "_suma";
+    if (operation == MILENA_AGG_COUNT) return "_conteo";
+    return NULL;
+}
+
+static bool data_hir_name_matches(const char *input_name,
+                                  const char *output_name,
+                                  const char *suffix) {
+    size_t input_length = 0u, output_length = 0u, suffix_length;
+    if (!input_name || !output_name || !suffix ||
+        !data_hir_cstring_length(input_name,
+            MILENA_BYTECODE_DATA_MAX_STRING_BYTES, &input_length) ||
+        !data_hir_cstring_length(output_name,
+            MILENA_BYTECODE_DATA_MAX_STRING_BYTES, &output_length)) return false;
+    suffix_length = strlen(suffix);
+    return input_length <= SIZE_MAX - suffix_length &&
+           output_length == input_length + suffix_length &&
+           memcmp(output_name, input_name, input_length) == 0 &&
+           memcmp(output_name + input_length, suffix, suffix_length) == 0;
+}
+
+MilenaStatus milena_bytecode_compile_data_hir(const MilenaDataHIR *hir,
+                                                uint8_t **bytes_out,
+                                                size_t *length_out,
+                                                MilenaError *error) {
+    MilenaError local_error;
+    if (!error) error = &local_error;
+    if (bytes_out) *bytes_out = NULL;
+    if (length_out) *length_out = 0u;
+    milena_error_clear(error);
+    if (!bytes_out || !length_out) {
+        milena_error_set(error, MILENA_ERR_ARGUMENT, 0u, 0u, 0u,
+                         "Las salidas son obligatorias para compilar un plan de datos MLBC");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (!hir) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, NULL,
+                               "No existe MilenaDataHIR para el lowerer de datos MLBC v1.3");
+    }
+
+    const MilenaHIRSourceSpan *diagnostic_span = &hir->source.span;
+    if (!hir->source.path || hir->source.resolved_dataset_id != 1u ||
+        hir->source.streaming || hir->source.chunk_rows != 0u ||
+        hir->source.max_rows != 0u || hir->source.max_columns != 0u ||
+        hir->source.max_record_bytes != 0u ||
+        hir->source.max_elapsed_milliseconds != 0.0) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "El plan de datos MLBC requiere una sola fuente CSV no streaming (dataset 1) sin opciones adicionales");
+    }
+    if (hir->declared_column_count != 1u || !hir->declared_schema) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "El plan de datos MLBC requiere exactamente una declaración de columna");
+    }
+    const MilenaHIRColumnRef *declaration = &hir->declared_schema[0];
+    if (declaration->declared_type != MILENA_HIR_COLUMN_NUMERIC ||
+        (declaration->type != MILENA_HIR_COLUMN_UNKNOWN &&
+         declaration->type != MILENA_HIR_COLUMN_NUMERIC)) {
+        return data_hir_reject(error, MILENA_ERR_TYPE, &declaration->span,
+            "La única declaración del plan de datos MLBC debe ser numérica");
+    }
+    size_t source_path_length = 0u, export_path_length = 0u;
+    size_t input_name_length = 0u;
+    if (!data_hir_cstring_length(hir->source.path,
+            MILENA_BYTECODE_DATA_MAX_STRING_BYTES, &source_path_length) ||
+        source_path_length == 0u) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "La fuente del plan de datos MLBC debe tener una ruta original no vacía y acotada");
+    }
+    if (!hir->export_path ||
+        !data_hir_cstring_length(hir->export_path,
+            MILENA_BYTECODE_DATA_MAX_STRING_BYTES, &export_path_length) ||
+        export_path_length == 0u) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "El plan de datos MLBC requiere una ruta de exportación JSON no vacía y acotada");
+    }
+    if (!declaration->name ||
+        !data_hir_cstring_length(declaration->name,
+            MILENA_BYTECODE_DATA_MAX_STRING_BYTES, &input_name_length) ||
+        input_name_length == 0u) {
+        return data_hir_reject(error, MILENA_ERR_TYPE, &declaration->span,
+            "La declaración numérica del plan MLBC debe tener un nombre válido");
+    }
+    if (hir->operation_count != 1u || !hir->operations ||
+        hir->operations[0].kind != MILENA_HIR_DATA_SUMMARIZE) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "El plan de datos MLBC requiere exactamente una operación de resumen global");
+    }
+    const MilenaHIRDataOperation *operation = &hir->operations[0];
+    if (operation->resolved_dataset_id != 1u) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, &operation->span,
+            "La operación de resumen debe referirse al dataset 1");
+    }
+    if (operation->as.summarize.aggregate_count != 1u ||
+        !operation->as.summarize.aggregates) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, &operation->span,
+            "El resumen global debe contener exactamente un agregado");
+    }
+    const MilenaHIRAggregate *aggregate = &operation->as.summarize.aggregates[0];
+    diagnostic_span = aggregate->span.has_source_span ? &aggregate->span :
+                      (aggregate->input.span.has_source_span
+                           ? &aggregate->input.span : &operation->span);
+    const char *suffix = data_operation_suffix(aggregate->operation);
+    if (!suffix) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "El plan de datos MLBC solo admite SUM o COUNT");
+    }
+    size_t aggregate_input_length = 0u;
+    if (!aggregate->input.name ||
+        !data_hir_cstring_length(aggregate->input.name,
+            MILENA_BYTECODE_DATA_MAX_STRING_BYTES, &aggregate_input_length) ||
+        aggregate_input_length != input_name_length ||
+        memcmp(aggregate->input.name, declaration->name, input_name_length) != 0) {
+        return data_hir_reject(error, MILENA_ERR_TYPE, diagnostic_span,
+            "El agregado MLBC debe usar exactamente la columna numérica declarada");
+    }
+    if ((aggregate->input.type != MILENA_HIR_COLUMN_UNKNOWN &&
+         aggregate->input.type != MILENA_HIR_COLUMN_NUMERIC) ||
+        (aggregate->input.declared_type != MILENA_HIR_COLUMN_UNKNOWN &&
+         aggregate->input.declared_type != MILENA_HIR_COLUMN_NUMERIC)) {
+        return data_hir_reject(error, MILENA_ERR_TYPE, diagnostic_span,
+            "La entrada SUM/COUNT del plan MLBC debe ser numérica");
+    }
+    if (!data_hir_name_matches(declaration->name, aggregate->output_name,
+                               suffix)) {
+        return data_hir_reject(error, MILENA_ERR_TYPE, diagnostic_span,
+            "El nombre de resultado HIR no coincide con el sufijo canónico del agregado");
+    }
+    if (aggregate->percentile != 0.0) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "El agregado HIR contiene un parámetro no representado en el plan MLBC");
+    }
+    if (hir->resource_policy.max_input_rows != SIZE_MAX ||
+        hir->resource_policy.max_output_rows != SIZE_MAX ||
+        hir->resource_policy.max_columns != SIZE_MAX) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "El plan HIR contiene una política de recursos no representada por el ABI MLBC v1.3");
+    }
+    MilenaHIRSourceSpan aggregate_span = {0};
+    if (aggregate->span.has_source_span)
+        aggregate_span = aggregate->span;
+    else if (aggregate->input.span.has_source_span)
+        aggregate_span = aggregate->input.span;
+    if (aggregate_span.has_source_span &&
+        (aggregate_span.line == 0u || aggregate_span.column == 0u ||
+         aggregate_span.line > UINT32_MAX || aggregate_span.column > UINT32_MAX)) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "El span del agregado no se puede representar en el ABI MLBC v1.3");
+    }
+
+    MilenaBytecodeDataPlan plan = {0};
+    plan.source_path.data = (const uint8_t *)hir->source.path;
+    plan.source_path.length = source_path_length;
+    plan.export_path.data = (const uint8_t *)hir->export_path;
+    plan.export_path.length = export_path_length;
+    plan.input_column.data = (const uint8_t *)declaration->name;
+    plan.input_column.length = input_name_length;
+    plan.operation = aggregate->operation == MILENA_AGG_SUM
+        ? MILENA_BYTECODE_DATA_SUM : MILENA_BYTECODE_DATA_COUNT;
+    plan.span_present = aggregate_span.has_source_span;
+    plan.source_line = plan.span_present ? (uint32_t)aggregate_span.line : 0u;
+    plan.source_column = plan.span_present ? (uint32_t)aggregate_span.column : 0u;
+    plan.limits.max_input_file_bytes = MILENA_BYTECODE_DATA_MAX_INPUT_FILE_BYTES;
+    plan.limits.max_input_data_rows = MILENA_BYTECODE_DATA_MAX_INPUT_DATA_ROWS;
+    plan.limits.max_input_columns = MILENA_BYTECODE_DATA_MAX_INPUT_COLUMNS;
+    plan.limits.max_csv_field_bytes = MILENA_BYTECODE_DATA_MAX_CSV_FIELD_BYTES;
+
+    size_t required = 0u;
+    if (!milena_bytecode_data_encoded_size(&plan, &required)) {
+        return data_hir_reject(error, MILENA_ERR_UNSUPPORTED, diagnostic_span,
+            "Las cadenas o nombres HIR exceden los límites representables del ABI MLBC v1.3");
+    }
+    uint8_t *encoded = (uint8_t *)malloc(required);
+    if (!encoded) {
+        return data_hir_reject(error, MILENA_ERR_MEMORY, diagnostic_span,
+            "Sin memoria para serializar el plan de datos MLBC v1.3");
+    }
+    size_t written = 0u;
+    MilenaBytecodeDiagnostic diagnostic;
+    MilenaBytecodeStatus bytecode_status = milena_bytecode_data_encode(
+        &plan, encoded, required, &written, &diagnostic);
+    if (bytecode_status != MILENA_BC_OK || written != required) {
+        free(encoded);
+        return data_hir_reject(error, MILENA_ERR_INTERNAL, diagnostic_span,
+            "No se pudo codificar el plan de datos HIR para MLBC v1.3");
+    }
+    bytecode_status = milena_bytecode_verify_data(encoded, written, NULL,
+                                                   &diagnostic);
+    if (bytecode_status != MILENA_BC_OK) {
+        free(encoded);
+        return data_hir_reject(error, MILENA_ERR_INTERNAL, diagnostic_span,
+            "El plan de datos creado por el compilador no pasó el verificador MLBC v1.3");
+    }
+    *bytes_out = encoded;
+    *length_out = written;
+    milena_error_clear(error);
+    return MILENA_OK;
+}
+
+static MilenaStatus compile_source_program(const MilenaCanonicalProgram *canonical,
+                                           bool data_only,
+                                           uint8_t **bytes_out,
+                                           size_t *length_out,
+                                           MilenaError *error) {
+    if (canonical->data_hir)
+        return milena_bytecode_compile_data_hir(canonical->data_hir,
+                                                bytes_out, length_out, error);
+    if (data_only) {
+        if (canonical->hir) {
+            const ASTNode *node = canonical->ast && canonical->ast->child_count
+                ? canonical->ast->children[0] : NULL;
+            milena_error_set(error, MILENA_ERR_UNSUPPORTED,
+                node && node->line > 0 ? (size_t)node->line : 0u,
+                node && node->column > 0 ? (size_t)node->column : 0u, 0u,
+                "La fuente no contiene el MilenaDataHIR requerido por MLBC v1.3");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+    } else if (canonical->hir) {
+        return milena_bytecode_compile_hir(canonical->hir, bytes_out,
+                                           length_out, error);
+    }
+    MilenaCanonicalCompilerInput canonical_input = {0};
+    return milena_canonical_compiler_input(canonical, &canonical_input, error);
+}
+
+static MilenaStatus compile_source_internal(const char *source,
+                                             bool data_only,
                                              uint8_t **bytes_out,
                                              size_t *length_out,
                                              MilenaError *error) {
     MilenaError local_error;
     if (!error) error = &local_error;
     if (bytes_out) *bytes_out = NULL;
-    if (length_out) *length_out = 0;
+    if (length_out) *length_out = 0u;
     milena_error_clear(error);
     if (!source || !bytes_out || !length_out) {
-        milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
-                         "Fuente y salidas son obligatorias para compilar bytecode v1");
+        milena_error_set(error, MILENA_ERR_ARGUMENT, 0u, 0u, 0u,
+            "Fuente y salidas son obligatorias para compilar bytecode MLBC");
         return MILENA_ERR_ARGUMENT;
     }
-
     MilenaCanonicalProgram canonical;
     milena_canonical_program_init(&canonical);
     MilenaStatus status = milena_canonical_program_parse(&canonical, source, error);
-    if (status != MILENA_OK) {
-        milena_canonical_program_release(&canonical);
-        return status;
-    }
-    MilenaCanonicalCompilerInput canonical_input = {0};
-    status = milena_canonical_compiler_input(&canonical, &canonical_input, error);
-    if (status == MILENA_OK) {
-        status = milena_bytecode_compile_hir(canonical_input.hir, bytes_out,
-                                             length_out, error);
-    }
+    if (status == MILENA_OK)
+        status = compile_source_program(&canonical, data_only,
+                                        bytes_out, length_out, error);
     milena_canonical_program_release(&canonical);
+    if (status != MILENA_OK) {
+        free(*bytes_out);
+        *bytes_out = NULL;
+        *length_out = 0u;
+    }
     return status;
+}
+
+MilenaStatus milena_bytecode_compile_data_source(const char *source,
+                                                   uint8_t **bytes_out,
+                                                   size_t *length_out,
+                                                   MilenaError *error) {
+    return compile_source_internal(source, true, bytes_out, length_out, error);
+}
+
+MilenaStatus milena_bytecode_compile_source(const char *source,
+                                             uint8_t **bytes_out,
+                                             size_t *length_out,
+                                             MilenaError *error) {
+    return compile_source_internal(source, false, bytes_out, length_out, error);
 }

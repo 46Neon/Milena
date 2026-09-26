@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   bytecode-v1:
-    name: Scalar v1.0-v1.2, v1.3 wire verifier, canonical lowering, and Linux x86-64 AOT (${{ matrix.compiler }})
+    name: Scalar v1.0-v1.2, v1.3 wire and source lowering, and Linux x86-64 AOT (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -20,7 +20,7 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
-      - name: Build and execute scalar bytecode, v1.3 data-plan wire, source-to-HIR-to-AOT, and native-runtime tests (Linux x86-64)
+      - name: Build and execute scalar bytecode, v1.3 wire plus canonical data-source lowering, source-to-HIR-to-AOT, and native-runtime tests (Linux x86-64)
         run: |
           set -euxo pipefail
           make clean
@@ -39,7 +39,7 @@ jobs:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - uses: actions/checkout@v4
-      - name: Build and execute bytecode, canonical lowering, and AOT tests under sanitizers
+      - name: Build and execute bytecode, canonical scalar and v1.3 data-plan lowering, and AOT tests under sanitizers
         run: |
           set -euxo pipefail
           make clean

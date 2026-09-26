@@ -77,7 +77,7 @@ TARGET = milena
 
 .PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-markdown-links check-compiler-boundary test-termux-packaging test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-dataset-byte-budget test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer test-ast-validation check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-hir-ast-coverage debug
 
-.PHONY: test-bytecode test-bytecode-data test-bytecode-compiler test-bytecode-native test-bytecode-cli
+.PHONY: test-bytecode test-bytecode-data test-bytecode-data-compiler test-bytecode-compiler test-bytecode-native test-bytecode-cli
 .PHONY: test-common-tokenizer
 test-common-tokenizer: tests/test_common_tokenizer
 	./tests/test_common_tokenizer
@@ -392,15 +392,21 @@ check-hir-ast-coverage:
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
-# Regression suite for the MLBC compatibility and explicitly experimental AOT slice.
-test-bytecode: tests/test_bytecode tests/test_bytecode_data tests/test_bytecode_compiler tests/test_bytecode_native
+# Regression suite for scalar compatibility, the v1.3 data-plan wire codec,
+# canonical source/HIR lowering, and the explicitly experimental scalar AOT slice.
+test-bytecode: tests/test_bytecode tests/test_bytecode_data tests/test_bytecode_data_compiler tests/test_bytecode_compiler tests/test_bytecode_native
 	./tests/test_bytecode
 	./tests/test_bytecode_data
+	$(MAKE) --no-print-directory test-bytecode-data-compiler
 	./tests/test_bytecode_compiler
 	./tests/test_bytecode_native
 
-test-bytecode-data: tests/test_bytecode_data
+test-bytecode-data: tests/test_bytecode_data tests/test_bytecode_data_compiler
 	./tests/test_bytecode_data
+	$(MAKE) --no-print-directory test-bytecode-data-compiler
+
+test-bytecode-data-compiler: tests/test_bytecode_data_compiler
+	./tests/test_bytecode_data_compiler
 
 test-bytecode-compiler: tests/test_bytecode_compiler
 	./tests/test_bytecode_compiler
@@ -432,11 +438,15 @@ tests/test_bytecode_data: tests/test_bytecode_data.c src/bytecode_data.c src/byt
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_bytecode_data.c src/bytecode_data.c src/bytecode.c $(LDFLAGS) -o $@
 
 BYTECODE_COMPILER_TEST_SOURCES = src/bytecode_compiler.c src/bytecode_native.c src/bytecode.c \
-	src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c \
+	src/bytecode_data.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c \
 	src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c \
 	src/schema.c src/common.c src/interpreter.c src/symbol.c
 
 tests/test_bytecode_compiler: tests/test_bytecode_compiler.c $(BYTECODE_COMPILER_TEST_SOURCES) \
+	include/bytecode_compiler.h include/canonical_compiler.h include/bytecode.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
+
+tests/test_bytecode_data_compiler: tests/test_bytecode_data_compiler.c $(BYTECODE_COMPILER_TEST_SOURCES) \
 	include/bytecode_compiler.h include/canonical_compiler.h include/bytecode.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
 

@@ -10,19 +10,38 @@ extern "C" {
 #endif
 
 /*
- * Experimental source-to-bytecode v1.2 boundary (while retaining v1.0/v1.1
- * wire compatibility). Source is parsed and semantically validated by
- * milena_canonical_program_parse; lowering consumes only canonical
- * MilenaScalarHIR. On success, *bytes_out owns a malloc-allocated encoded
- * program which the caller must free. Outputs are cleared on every failure.
- * The bounded source subset supports a zero-parameter numeric `principal`,
- * non-recursive numeric helpers, and the operations documented in BYTECODE_V1.md.
+ * Experimental source-to-bytecode boundary (retaining v1.0-v1.2 scalar wire
+ * compatibility). Scalar lowering consumes canonical MilenaScalarHIR. On
+ * success, *bytes_out owns a malloc-allocated encoded program which the caller
+ * must free. Outputs are cleared on every failure. The bounded scalar subset
+ * supports a zero-parameter numeric `principal`, non-recursive numeric helpers,
+ * and the operations documented in BYTECODE_V1.md.
  */
 MilenaStatus milena_bytecode_compile_hir(const MilenaScalarHIR *hir,
                                            uint8_t **bytes_out,
                                            size_t *length_out,
                                            MilenaError *error);
 
+/*
+ * Lower only the complete v1.3 data-plan HIR shape documented in
+ * BYTECODE_DATA_ABI.md. This is a compile-only operation: it does not resolve
+ * or read either path. The returned encoded bytes are independently verified
+ * with milena_bytecode_verify_data before success; the caller owns and must
+ * free them. Both outputs are cleared on every failure.
+ */
+MilenaStatus milena_bytecode_compile_data_hir(const MilenaDataHIR *hir,
+                                                uint8_t **bytes_out,
+                                                size_t *length_out,
+                                                MilenaError *error);
+
+/* Parse source once through the canonical lexer/parser/semantic/HIR builder,
+ * require its exact supported data-HIR shape, and return a verified v1.3 plan. */
+MilenaStatus milena_bytecode_compile_data_source(const char *source,
+                                                   uint8_t **bytes_out,
+                                                   size_t *length_out,
+                                                   MilenaError *error);
+
+/* Parse once and dispatch to the canonical scalar or exact v1.3 data lowerer. */
 MilenaStatus milena_bytecode_compile_source(const char *source,
                                              uint8_t **bytes_out,
                                              size_t *length_out,
