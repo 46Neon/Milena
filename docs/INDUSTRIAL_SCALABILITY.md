@@ -65,8 +65,10 @@ permanece separada y no se cambia ni se selecciona automáticamente como
 fallback.
 
 Los límites de filas, columnas y bytes de registro se aplican en el cargador:
-los registros están acotados antes de crecer su búfer, y el número de campos del
-encabezado se cuenta antes de construir sus strings. El registro incluye bytes
+filas cuenta cada registro de datos leído tras el encabezado, incluso líneas
+vacías o registros que luego resulten inválidos; los registros están acotados
+antes de crecer su búfer, y el número de campos del encabezado se cuenta antes
+de construir sus strings. El registro incluye bytes
 CSV lógicos y saltos internos normalizados, pero excluye el NUL y el separador de
 registro. El límite de tiempo se consulta durante la lectura y entre fases de
 parseo de registros; no interrumpe de forma preemptiva una llamada de I/O o una

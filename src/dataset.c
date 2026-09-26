@@ -479,6 +479,9 @@ MilenaStatus dataset_load_csv_with_resource_limits(
         goto fail;
     }
 
+    /* Count source records, not only accepted table rows, so malformed input
+     * cannot bypass the ingestion row budget. */
+    size_t rows_seen = 0;
     while (true) {
         status = read_record(file, &record, &line,
             data_record_limit, started_ms,
@@ -488,11 +491,12 @@ MilenaStatus dataset_load_csv_with_resource_limits(
             break;
         }
         if (status != MILENA_OK) goto fail;
-        if (tmp.row_count >= limits->max_rows) {
+        if (rows_seen >= limits->max_rows) {
             status = dataset_limit_error(error, line,
-                                         "El CSV supera el máximo de filas permitido");
+                                         "El CSV supera el máximo de filas de entrada permitido");
             goto fail;
         }
+        rows_seen++;
         if (record[0] == '\0') {
             free(record);
             record = NULL;

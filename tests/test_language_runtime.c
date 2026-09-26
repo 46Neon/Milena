@@ -94,7 +94,7 @@ static int run_materialized_source_limits(void) {
     milena_canonical_program_release(&canonical);
 
     CHECK(expect_materialized_limit_failure(
-        "test-materialized-row-limit.csv", "importe\n1\n2\n",
+        "test-materialized-row-limit.csv", "importe\nbroken,row\n1\n",
         "con filas hasta 1", "test-materialized-row-limit.json",
         "test-materialized-row-limit.milena", "filas") == 0,
         "límite de filas materializado no se aplicó antes de publicar");
