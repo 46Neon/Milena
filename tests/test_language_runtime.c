@@ -965,7 +965,7 @@ static int run_typed_sql_semantics(void) {
           plan.operations[0].kind == MILENA_SQL_PLAN_SCHEMA &&
           plan.operations[1].kind == MILENA_SQL_PLAN_TYPED_SELECT &&
           strcmp(plan.operations[1].statement,
-                 "SELECT \"id\", \"nombre\" FROM \"personas\" WHERE \"id\" = ?") == 0 &&
+                 "SELECT \"id\", \"nombre\" FROM \"personas\" WHERE \"id\" COLLATE BINARY = ?") == 0 &&
           plan.operations[1].parameter_count == 1 &&
           plan.operations[1].parameters[0].kind == MILENA_SQL_PLAN_INT64 &&
           plan.operations[1].parameters[0].value.i64 == 7 &&

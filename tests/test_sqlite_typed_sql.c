@@ -118,7 +118,7 @@ static int test_valid_ast_and_plan(void) {
           plan.operations[2].filter_operator == select->children[2]->children[1] &&
           plan.operations[2].typed_parameter == select->children[2]->children[2] &&
           strcmp(plan.operations[2].statement,
-                 "SELECT \"id\", \"nombre\" FROM \"personas\" WHERE \"id\" = ?") == 0 &&
+                 "SELECT \"id\", \"nombre\" FROM \"personas\" WHERE \"id\" COLLATE BINARY = ?") == 0 &&
           plan.operations[2].parameter_count == 1 &&
           plan.operations[2].parameters[0].kind == MILENA_SQL_PLAN_INT64 &&
           plan.operations[2].parameters[0].value.i64 == 7,
@@ -237,6 +237,7 @@ static int test_semantic_rejection_before_open(void) {
         {"unknown projection", "seleccionar ausente de personas donde id = 7;", MILENA_ERR_TYPE},
         {"unknown filter column", "seleccionar id de personas donde ausente = 7;", MILENA_ERR_TYPE},
         {"parameter type mismatch", "seleccionar id de personas donde id = \"7\";", MILENA_ERR_TYPE},
+        {"NULL filter operand", "seleccionar nombre de personas donde nombre = nulo;", MILENA_ERR_TYPE},
         {"unsupported comparison operator", "seleccionar id de personas donde id > 7;", MILENA_ERR_UNSUPPORTED},
         {"INSERT undeclared table", "insertar en fantasma (id) valores (7);", MILENA_ERR_TYPE},
         {"INSERT unknown column", "insertar en personas (ausente) valores (7);", MILENA_ERR_TYPE},

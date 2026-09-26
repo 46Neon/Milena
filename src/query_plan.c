@@ -1609,7 +1609,7 @@ static char *sql_build_typed_statement(const ASTNode *table,
         !sql_add_size(&length, strlen(table->value) + 2u) ||
         !sql_add_size(&length, strlen(" WHERE ")) ||
         !sql_add_size(&length, strlen(filter_column->value) + 2u) ||
-        !sql_add_size(&length, strlen(" = ?"))) return NULL;
+        !sql_add_size(&length, strlen(" COLLATE BINARY = ?"))) return NULL;
     for (size_t i = 0; i < projection->child_count; ++i) {
         const ASTNode *field = projection->children[i];
         if (!field || !field->value ||
@@ -1637,7 +1637,7 @@ static char *sql_build_typed_statement(const ASTNode *table,
     *cursor++ = '"';
     size_t filter_length = strlen(filter_column->value);
     memcpy(cursor, filter_column->value, filter_length); cursor += filter_length;
-    memcpy(cursor, "\" = ?", 5u); cursor += 5u;
+    memcpy(cursor, "\" COLLATE BINARY = ?", 20u); cursor += 20u;
     *cursor = '\0';
     return statement;
 }

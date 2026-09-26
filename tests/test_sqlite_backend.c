@@ -141,6 +141,62 @@ static void check_typed_insert_execution(MilenaSqlConnection *db) {
     ast_destroy(program);
 }
 
+static size_t run_typed_text_equality(const char *literal) {
+    ASTNode *program = ast_create_leaf(AST_SQL_PROGRAM, DB_PATH);
+    ASTNode *schema = ast_create_leaf(AST_SQL_TABLE_SCHEMA, "casefold");
+    ASTNode *schema_column = ast_create_leaf(AST_SQL_SCHEMA_COLUMN, "note");
+    ASTNode *select = ast_create(AST_SQL_TYPED_SELECT);
+    ASTNode *table = ast_create_leaf(AST_SQL_TABLE_REFERENCE, "casefold");
+    ASTNode *projection = ast_create(AST_SQL_PROJECTION_LIST);
+    ASTNode *projected_column = ast_create_leaf(AST_SQL_PROJECTED_COLUMN, "note");
+    ASTNode *filter = ast_create(AST_SQL_FILTER);
+    ASTNode *filter_column = ast_create_leaf(AST_SQL_FILTER_COLUMN, "note");
+    ASTNode *filter_operator = ast_create(AST_SQL_FILTER_OPERATOR);
+    ASTNode *parameter = test_sql_parameter(literal, "texto", AST_SQL_TYPE_TEXT);
+    assert(program && schema && schema_column && select && table && projection &&
+           projected_column && filter && filter_column && filter_operator && parameter);
+    schema_column->type_name = milena_strdup("texto");
+    schema_column->sql_type = AST_SQL_TYPE_TEXT;
+    filter_operator->sql_operator = AST_SQL_OPERATOR_EQUAL;
+    assert(schema_column->type_name &&
+           ast_add_child(schema, schema_column) && ast_add_child(program, schema) &&
+           ast_add_child(projection, projected_column) &&
+           ast_add_child(filter, filter_column) &&
+           ast_add_child(filter, filter_operator) && ast_add_child(filter, parameter) &&
+           ast_add_child(select, table) && ast_add_child(select, projection) &&
+           ast_add_child(select, filter) && ast_add_child(program, select));
+
+    MilenaSqlExecutionPlan plan = {0};
+    MilenaError error;
+    assert(milena_sql_execution_plan_build(program, &plan, &error) == MILENA_OK);
+    assert(plan.operation_count == 2 &&
+           strcmp(plan.operations[1].statement,
+                  "SELECT \"note\" FROM \"casefold\" WHERE \"note\" COLLATE BINARY = ?") == 0);
+    FILE *output = tmpfile();
+    assert(output && milena_sql_run_plan(&plan, output, &error) == MILENA_OK);
+    rewind(output);
+    char header[128];
+    size_t rows = SIZE_MAX;
+    assert(fgets(header, sizeof(header), output) &&
+           sscanf(header, "Tabla Milena: %zu filas", &rows) == 1);
+    fclose(output);
+    milena_sql_execution_plan_destroy(&plan);
+    ast_destroy(program);
+    return rows;
+}
+
+static void check_typed_text_equality_ignores_physical_nocase(MilenaSqlConnection *db) {
+    MilenaTable result;
+    milena_table_init(&result);
+    run(db, "CREATE TABLE casefold(note TEXT COLLATE NOCASE)", NULL, 0,
+        &result, MILENA_OK);
+    run(db, "INSERT INTO casefold(note) VALUES('Alice')", NULL, 0,
+        &result, MILENA_OK);
+    assert(run_typed_text_equality("alice") == 0);
+    assert(run_typed_text_equality("Alice") == 1);
+    milena_table_destroy(&result);
+}
+
 static void check_malformed_sql_plan_parameter(void) {
     ASTNode *program = ast_create_leaf(AST_SQL_PROGRAM, DB_PATH);
     ASTNode *query = ast_create_leaf(AST_SQL_QUERY, "SELECT ?");
@@ -408,6 +464,7 @@ int main(void) {
     milena_table_init(&table);
     run(db, "CREATE TABLE records(id INTEGER PRIMARY KEY, note TEXT, maybe INTEGER)",
         NULL, 0, &table, MILENA_OK);
+    check_typed_text_equality_ignores_physical_nocase(db);
 
     const char payload[] = "x'); DROP TABLE records; --";
     MilenaSqlValue insert_values[3] = {
