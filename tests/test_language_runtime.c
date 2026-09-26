@@ -85,12 +85,30 @@ static int run_materialized_source_limits(void) {
     milena_error_clear(&error);
     CHECK(milena_canonical_program_parse(&canonical, typed_source, &error) == MILENA_OK,
           error.message);
+    const ASTNode *analysis = canonical.ast && canonical.ast->child_count == 1
+        ? canonical.ast->children[0] : NULL;
+    const ASTNode *ast_load = NULL;
+    if (analysis && analysis->type == AST_BLOQUE_ANALISIS) {
+        for (size_t i = 0; i < analysis->child_count; ++i) {
+            if (analysis->children[i] &&
+                analysis->children[i]->type == AST_LLAMADA_CARGAR) {
+                ast_load = analysis->children[i];
+                break;
+            }
+        }
+    }
+    CHECK(ast_load != NULL && ast_load->source_max_rows == 1u &&
+          ast_load->source_max_columns == 2u &&
+          ast_load->source_max_record_bytes == 5120u &&
+          ast_load->source_max_elapsed_milliseconds == 30000.0,
+          "límites materializados: el parser no conservó las cuatro políticas en el AST");
     CHECK(canonical.data_hir != NULL &&
-          canonical.data_hir->source.max_rows == 1u &&
-          canonical.data_hir->source.max_columns == 2u &&
-          canonical.data_hir->source.max_record_bytes == 5120u &&
-          canonical.data_hir->source.max_elapsed_milliseconds == 30000.0,
-          "límites materializados: AST/HIR no conservó las cuatro políticas de fuente");
+          canonical.data_hir->source.max_rows == ast_load->source_max_rows &&
+          canonical.data_hir->source.max_columns == ast_load->source_max_columns &&
+          canonical.data_hir->source.max_record_bytes == ast_load->source_max_record_bytes &&
+          canonical.data_hir->source.max_elapsed_milliseconds ==
+              ast_load->source_max_elapsed_milliseconds,
+          "límites materializados: HIR no propagó las cuatro políticas del AST");
     milena_canonical_program_release(&canonical);
 
     CHECK(expect_materialized_limit_failure(

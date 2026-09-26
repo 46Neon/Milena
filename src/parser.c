@@ -47,6 +47,18 @@ static bool parser_is_identifier(Parser *parser) {
            parser_match(parser, TOKEN_KW_TOTAL);
 }
 
+/* Some grammatical words also have dedicated lexer tokens. Match by their
+ * spelling where grammar intends a word, regardless of token class. */
+static bool parser_match_word(Parser *parser, const char *word) {
+    return parser && word && parser->current.type != TOKEN_EOF &&
+           parser->current.type != TOKEN_ERROR &&
+           strcmp(parser->current.lexeme, word) == 0;
+}
+
+static bool parser_match_con(Parser *parser) {
+    return parser_match(parser, TOKEN_KW_CON) || parser_match_word(parser, "con");
+}
+
 bool parser_expect(Parser *parser, MilenaTokenType type, const char *msg) {
     if (!parser_match(parser, type)) {
         parser_error(parser, msg);
@@ -585,8 +597,7 @@ static ASTNode *parse_statistical_call(Parser *parser,
 }
 
 static bool parser_expect_word(Parser *parser, const char *word, const char *msg) {
-    if (!parser || !word || !parser_is_identifier(parser) ||
-        strcmp(parser->current.lexeme, word) != 0) {
+    if (!parser_match_word(parser, word)) {
         if (parser) parser_error(parser, msg);
         return false;
     }
@@ -870,7 +881,7 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
         if (!parser_expect(parser, TOKEN_KW_FILAS, "Se esperaba 'filas' después del tamaño del lote")) goto fail;
     }
     /* Las opciones son parte del contrato AST, no texto interpretado por el backend. */
-    while (parser_is_identifier(parser) && strcmp(parser->current.lexeme, "con") == 0) {
+    while (parser_match_con(parser)) {
         parser_advance(parser);
         if (parser_match(parser, TOKEN_KW_REGISTROS)) {
             parser_advance(parser);
@@ -1065,8 +1076,7 @@ static ASTNode *parse_human_stream_export(Parser *parser) {
  * datos desde, but keep these fields separate so the streaming route is inert. */
 static bool parse_materialized_source_limits(Parser *parser, ASTNode *load) {
     if (!parser || !load) return false;
-    while (parser_is_identifier(parser) &&
-           strcmp(parser->current.lexeme, "con") == 0) {
+    while (parser_match_con(parser)) {
         parser_advance(parser);
         if (parser_match(parser, TOKEN_KW_FILAS)) {
             parser_advance(parser);
@@ -1082,8 +1092,7 @@ static bool parse_materialized_source_limits(Parser *parser, ASTNode *load) {
                 return false;
             }
             load->source_max_rows = (size_t)value;
-        } else if (parser_is_identifier(parser) &&
-                   strcmp(parser->current.lexeme, "columnas") == 0) {
+        } else if (parser_match_word(parser, "columnas")) {
             parser_advance(parser);
             if (load->source_max_columns != 0) {
                 parser_error(parser, "El límite materializado de columnas no se puede repetir");
@@ -1118,8 +1127,7 @@ static bool parse_materialized_source_limits(Parser *parser, ASTNode *load) {
             }
             parser_advance(parser);
             load->source_max_record_bytes = (size_t)(value * 1024.0 * 1024.0);
-        } else if (parser_is_identifier(parser) &&
-                   strcmp(parser->current.lexeme, "tiempo") == 0) {
+        } else if (parser_match_word(parser, "tiempo")) {
             parser_advance(parser);
             if (load->source_max_elapsed_milliseconds != 0.0) {
                 parser_error(parser, "El límite materializado de tiempo no se puede repetir");
