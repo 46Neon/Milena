@@ -8,7 +8,7 @@
 
 | Plataforma | Arquitectura del artefacto | Comando objetivo | Estado comprobado |
 |---|---|---|---|
-| Windows | x64 | `winget install --id 46Neon.Milena --exact` | La Release `v0.2.0` contiene `milena.exe`, ZIP portable y tres manifiestos WinGet. CI validará esos manifiestos y probará instalación/ejecución/desinstalación usando el manifiesto local y el artefacto real; esto no demuestra que el paquete esté aceptado/indexado en la fuente pública de WinGet. El comando no se debe anunciar como disponible hasta probarlo desde esa fuente. |
+| Windows | x64 | `winget install --id 46Neon.Milena --exact` | La Release `v0.2.0` contiene `milena.exe`, ZIP portable y tres manifiestos WinGet. CI valida los manifiestos y prueba instalación/ejecución desde el manifiesto local en un runner efímero; no prueba desinstalación ni que el paquete esté aceptado/indexado en la fuente pública. El comando no se debe anunciar como disponible hasta probarlo desde esa fuente. |
 | Debian/Ubuntu Linux | amd64 | `sudo apt install milena` | La Release `v0.2.0` conserva un `.deb` histórico con `maintainers@milena.invalid`; no hay índice APT Linux publicado ni fuente verificada en una instalación limpia. Este PR actualiza el builder para futuros paquetes a `Milena SST <j7942281@gmail.com>`. El workflow `publish-apt.yml` es para Termux/AArch64 y no satisface este canal. |
 | Android con Termux | AArch64 (`aarch64`) y Bionic | `pkg install milena` | Hay una receta candidata para `termux-packages`, pero no consta aceptación en el repositorio oficial. La Release `v0.2.0` no contiene el `.deb` Termux/AArch64 ni su procedencia requeridos por el publicador APT. No hay runner self-hosted registrado para la validación física. El comando no se debe anunciar como disponible. |
 
@@ -35,7 +35,7 @@ No usar scripts remotos ejecutados directamente por `curl | sh` como sustituto d
 ### Windows / WinGet
 
 - Construir y probar `milena.exe` x64; producir checksum y manifiestos versionados con URL HTTPS y SHA-256 del artefacto real.
-- La CI validará `winget validate` sobre los tres manifiestos v0.2.0 y probará instalación, ejecución y desinstalación desde el manifiesto local contra el artefacto real de GitHub Release. Esto no prueba el índice público, la actualización ni una máquina limpia usando `winget install --id`; esos gates siguen pendientes.
+- La CI valida `winget validate` sobre los tres manifiestos v0.2.0 y prueba instalación y ejecución desde el manifiesto local contra el artefacto real de GitHub Release. El runner hospedado es efímero y se descarta tras el job; la prueba no cubre desinstalación, el índice público, actualización ni una máquina limpia usando `winget install --id`; esos gates siguen pendientes.
 - Publicar el manifiesto en la fuente aprobada antes de presentar el comando como disponible.
 
 ### Debian/Ubuntu / APT
