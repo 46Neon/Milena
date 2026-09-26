@@ -1145,6 +1145,27 @@ static bool parse_materialized_source_limits(Parser *parser, ASTNode *load) {
             }
             if (!parser_expect(parser, TOKEN_KW_MIB, "Se esperaba la unidad 'MiB'")) return false;
             load->source_max_memory_bytes = (size_t)bytes;
+        } else if (parser_match_word(parser, "entrada")) {
+            parser_advance(parser);
+            if (load->source_max_input_bytes != 0) {
+                parser_error(parser, "El límite materializado de entrada no se puede repetir");
+                return false;
+            }
+            if (!parser_expect(parser, TOKEN_KW_HASTA,
+                               "Se esperaba 'hasta' después de entrada") ||
+                !parser_expect(parser, TOKEN_NUMERO,
+                               "El límite de entrada debe ser numérico")) return false;
+            double value = parser->previous.number_value;
+            const size_t mebibyte = 1024u * 1024u;
+            if (!isfinite(value) || value < 1.0 || floor(value) != value ||
+                value > (double)(SIZE_MAX / mebibyte)) {
+                parser_error(parser,
+                    "El límite de entrada debe ser un entero positivo de MiB representable");
+                return false;
+            }
+            if (!parser_expect(parser, TOKEN_KW_MIB,
+                               "Se esperaba la unidad 'MiB'")) return false;
+            load->source_max_input_bytes = (size_t)value * mebibyte;
         } else if (parser_match_word(parser, "tiempo")) {
             parser_advance(parser);
             if (load->source_max_elapsed_milliseconds != 0.0) {
@@ -1161,7 +1182,7 @@ static bool parse_materialized_source_limits(Parser *parser, ASTNode *load) {
             if (!parser_expect_word(parser, "ms", "Se esperaba la unidad 'ms'")) return false;
             load->source_max_elapsed_milliseconds = value;
         } else {
-            parser_error(parser, "Se esperaba 'filas', 'columnas', 'registros', 'memoria' o 'tiempo' después de 'con'");
+            parser_error(parser, "Se esperaba 'filas', 'columnas', 'registros', 'memoria', 'entrada' o 'tiempo' después de 'con'");
             return false;
         }
     }

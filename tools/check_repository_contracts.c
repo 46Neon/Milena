@@ -35,7 +35,7 @@ static const char *const product_sources[] = {
     "dataset.c", "entrypoints.c", "external_merge.c", "external_sort.c",
     "finance.c", "group_key_codec.c", "grouped_aggregate.c", "interpreter.c",
     "language_grouped_spill.c", "language_runtime.c", "logger.c", "main.c",
-    "mergeable_aggregate.c", "metrics.c", "partition_executor.c", "partition_plan.c",
+    "mergeable_aggregate.c", "metrics.c", "native_aot.c", "partition_executor.c", "partition_plan.c",
     "partition_protocol.c", "partition_protocol_reduce.c", "partition_reduce.c",
     "process_executor.c", "query_plan.c", "schema.c", "script.c", "source_reader.c",
     "spill_store.c", "sqlite_backend.c", "sst_advanced.c", "sst_contingency.c",
@@ -567,7 +567,7 @@ static void check_compiler_boundary(int argc, char **argv)
     int argument;
     const char *const canonical[] = {
         "lexer.c", "parser.c", "ast.c", "language_semantic.c", "language_runtime.c",
-        "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "table.c", "dataset.c"
+        "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "native_aot.c", "table.c", "dataset.c"
     };
     const char *const guarded_headers[] = {"compiler.h", "ir.h", "vm.h", "gc.h"};
 
@@ -621,6 +621,30 @@ static void check_compiler_boundary(int argc, char **argv)
         free(reference_vm);
         free(vm_header);
         free(windows_build);
+    }
+    {
+        char *native_aot = optional_read_file("src/native_aot.c");
+        if (native_aot == NULL) {
+            list_add(&errors, "falta el backend nativo AOT del producto");
+        } else {
+            if (!has_include(native_aot, "typed_ir.h", false) ||
+                !contains(native_aot, "milena_canonical_program_compile_scalar_ir") ||
+                !contains(native_aot, "milena_ir_program_validate") ||
+                !contains(native_aot, "milena_ir_module_validate")) {
+                list_add(&errors, "AOT debe consumir y verificar la IR tipada canónica compilada");
+            }
+            if (contains(native_aot, "milena_ir_module_lower_scalar_hir") ||
+                contains(native_aot, "milena_ir_program_lower_scalar_function_body") ||
+                contains(native_aot, "system(") || contains(native_aot, "popen(")) {
+                list_add(&errors, "AOT no debe volver a bajar HIR ni ejecutar un shell");
+            }
+            if (!contains(native_aot, "execvp(") ||
+                !contains(native_aot, "mkstemp(") ||
+                !contains(native_aot, "rename(binary_template")) {
+                list_add(&errors, "AOT debe invocar argv/exec y reemplazar la salida atómicamente");
+            }
+        }
+        free(native_aot);
     }
     for (argument = 2; argument < argc; ++argument) {
         const char *name;

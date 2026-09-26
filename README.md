@@ -138,22 +138,40 @@ Ejecútalo con:
 La sintaxis heredada `dataset cargar datos("...")` conserva sus defaults si no
 se añaden cláusulas: 5.000 filas, 70 columnas y el límite de registro legado
 `max_field_bytes * columnas_físicas + columnas_físicas` (`max_field_bytes` inicia
-en 1 MiB). Es un presupuesto derivado para el registro completo, no un límite
-individual de cada campo. Puede configurarse
-por fuente, sin cambiar a streaming:
+en 1 MiB). Es un presupuesto derivado para el registro completo, no una
+validación individual por campo. Puede configurarse por fuente sin cambiar a
+streaming:
 
 ```milena
-dataset cargar datos("datos/ventas.csv") con filas hasta 100000 con columnas de 64 con registros de hasta 8 MiB con tiempo hasta 30000 ms
+dataset cargar datos("datos/ventas.csv") con filas hasta 100000 con columnas de 64 con registros de hasta 8 MiB con memoria hasta 256 MiB con entrada hasta 2048 MiB con tiempo hasta 30000 ms
 ```
 
-Los límites explícitos de filas (1–1.000.000.000; cuentan todos los registros de datos leídos, incluidos los inválidos/vacíos), columnas (1–4096), registro
-(5 KiB–64 MiB, pasos de 1 KiB) y tiempo (1–3.600.000 ms) se validan antes de
-cargar; una cláusula no se puede repetir ni ser cero. Al superar un límite falla
-la carga antes de publicar y el archivo de reporte previo permanece intacto.
-No se declara un presupuesto de memoria/RSS: la carga sigue materializando las
-cadenas, punteros y tabla completa, y parser/allocator y estructuras derivadas
-no se contabilizan en una cuota de bytes. Usa la ruta `datos desde` descrita a
-continuación cuando el plan admita CSV en streaming; no hay fallback automático.
+Las cláusulas de filas (1–1.000.000.000; cuentan todos los registros de datos
+leídos, incluidos inválidos y vacíos), columnas (1–4096), registro (5 KiB–64 MiB,
+pasos de 1 KiB), tiempo (1–3.600.000 ms), memoria retenida (1 byte–1024 MiB,
+convertida exactamente a bytes) y entrada (entero positivo de MiB representable
+como bytes) se validan antes de cargar; una cláusula no se puede repetir ni ser
+cero. Al superar un límite falla la carga antes de publicar y el archivo de
+reporte previo permanece intacto. La carga materializada no cambia a streaming
+automáticamente.
+
+`con memoria hasta N MiB` es un presupuesto por fuente de las capacidades
+solicitadas actualmente para las asignaciones retenidas del `Dataset` cargador:
+nombre de archivo, strings de encabezados/celdas, vectores de campos del
+encabezado y filas, y vector de punteros a filas. No es RSS: excluye metadatos y
+fragmentación del allocator, buffer crudo de entrada del registro, picos
+transitorios de `realloc`, conversión a `MilenaTable` y copias/operaciones
+posteriores. `con entrada hasta N MiB` es distinto: limita el tamaño del archivo
+CSV en bytes físicos crudos, incluyendo encabezado y separadores; CRLF cuenta
+como dos bytes. El tamaño exacto al límite se acepta y el primer byte adicional
+se rechaza antes de añadirse al buffer del registro. Por defecto, ambos
+presupuestos son ilimitados (cero en la API; la cláusula explícita no admite
+cero). El cap del archivo no limita memoria retenida y el presupuesto de
+asignaciones no limita los bytes físicos del origen; ninguno garantiza un techo
+de memoria/RSS para el proceso.
+
+Usa la ruta `datos desde` descrita a continuación cuando el plan admita CSV en
+streaming; no hay fallback automático.
 
 ### Modo flujo para grandes CSV
 
@@ -310,6 +328,10 @@ La descripción más honesta es:
 > Milena es un proyecto de ingeniería de lenguaje con un núcleo funcional avanzado, orientado a convertirse en una plataforma científica y de análisis de datos de alcance industrial.
 
 No es solamente un ejercicio educativo, pero tampoco se presenta todavía como una plataforma industrial masiva ya consolidada. Es una base tecnológica real, verificable y en evolución hacia ese objetivo.
+
+## Compilación nativa AOT (subconjunto de fase 1)
+
+En hosts POSIX con un compilador C17 disponible, `milena build programa.milena -o programa` genera un ejecutable nativo a partir de la IR tipada canónica verificada. No ejecuta ni empaqueta bytecode. El alcance está limitado a funciones escalares `F64`, comparaciones booleanas, CFG y llamadas internas verificadas; las operaciones no representadas se rechazan. Windows conserva el comando, pero el backend AOT no está habilitado allí. Consulta [el contrato y el subconjunto exacto de AOT](docs/NATIVE_AOT.md).
 
 ## Contribuir
 

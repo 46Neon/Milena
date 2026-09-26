@@ -18,13 +18,17 @@ typedef struct {
  * filename/header/cell strings, header/row field vectors, and the row vector.
  * It is not RSS: allocator overhead, the raw CSV-record input scratch buffer,
  * realloc transient peaks, and later MilenaTable/operator copies are excluded.
- * max_elapsed_milliseconds == 0 disables the elapsed-time limit. */
+ * max_input_bytes > 0 caps raw physical source-file bytes, including header and
+ * separators (CRLF counts as two); zero disables this independent file-size cap.
+ * Neither limit guarantees process-wide RSS. max_elapsed_milliseconds == 0
+ * disables the elapsed-time limit. */
 typedef struct {
     size_t max_rows;
     size_t max_columns;
     /* Zero selects the legacy per-field-derived record cap below. */
     size_t max_record_bytes;
     size_t max_memory_bytes;
+    size_t max_input_bytes;
     size_t max_field_bytes;
     double max_elapsed_milliseconds;
 } DatasetLoadLimits;

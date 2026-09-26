@@ -18,7 +18,7 @@ endif
 CPPFLAGS += -Iinclude -Ithird_party/nanoarrow/include -Ithird_party/sqlite
 SQLITE_CFLAGS = -DSQLITE_THREADSAFE=1 -DSQLITE_DQS=0 -DSQLITE_OMIT_LOAD_EXTENSION
 SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/dataset.c src/analysis.c src/script.c src/main.c \
-          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/arrow_ipc.c src/language_runtime.c src/language_grouped_spill.c src/canonical_compiler.c src/canonical_ir.c src/typed_bytecode.c src/interpreter.c \
+          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/arrow_ipc.c src/language_runtime.c src/language_grouped_spill.c src/canonical_compiler.c src/canonical_ir.c src/typed_bytecode.c src/native_aot.c src/interpreter.c \
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
@@ -340,6 +340,10 @@ tools/check_repository_contracts: tools/check_repository_contracts.c tools/milen
 check-hir-ast-coverage:
 	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_architecture.c -o tools/check_architecture && ./tools/check_architecture hir
 
+.PHONY: test-native-aot
+test-native-aot: $(TARGET)
+	sh tests/test_native_aot.sh
+
 test-typed-bytecode: tests/test_typed_bytecode
 	./tests/test_typed_bytecode
 
@@ -426,7 +430,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler test-typed-bytecode benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-data-engine-parity test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler test-typed-bytecode test-native-aot benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-data-engine-parity test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
 	./tests/run_tests.sh
 	./benchmarks/benchmark --help && rm -f benchmarks/benchmark
 

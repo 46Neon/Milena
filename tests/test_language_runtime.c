@@ -1,4 +1,5 @@
 #include "language_runtime.h"
+#include "dataset.h"
 #include "canonical_compiler.h"
 #include "language_grouped_spill.h"
 #include "language_semantic.h"
@@ -80,12 +81,83 @@ static int expect_materialized_limit_failure(const char *csv_path,
     return 0;
 }
 
+static int run_dataset_raw_input_byte_limit(void) {
+    const char *path = "test-materialized-total-bytes.csv";
+    CHECK(write_file(path, "h\r\nx\r\n"),
+          "límite total de bytes: no se pudo crear CSV CRLF");
+    Dataset dataset;
+    dataset_init(&dataset);
+    DatasetLoadLimits limits = dataset_default_load_limits();
+    CHECK(limits.max_input_bytes == 0u && limits.max_memory_bytes == 0u,
+          "límite total de bytes: los defaults de entrada y memoria deben permanecer sin cap explícito");
+    limits.max_memory_bytes = 1024u * 1024u;
+    limits.max_input_bytes = 6u;
+    MilenaError error;
+    milena_error_clear(&error);
+    CHECK(dataset_load_csv_with_resource_limits(&dataset, path, ',', &limits,
+          &error) == MILENA_OK,
+          error.message[0] ? error.message : "el CSV exacto debía caber en el límite total");
+    CHECK(dataset.column_count == 1u && dataset.row_count == 1u &&
+          strcmp(dataset.headers[0], "h") == 0 &&
+          strcmp(dataset.rows[0][0], "x") == 0,
+          "límite total de bytes: se alteró la lectura del CSV CRLF exacto");
+    char ***prior_rows = dataset.rows;
+    char **prior_headers = dataset.headers;
+    char *prior_filename = dataset.filename;
+    limits.max_input_bytes = 5u;
+    milena_error_clear(&error);
+    CHECK(dataset_load_csv_with_resource_limits(&dataset, path, ',', &limits,
+          &error) == MILENA_ERR_DATA && strstr(error.message, "bytes de entrada") != NULL,
+          "límite total de bytes: cap+1 físico debía fallar explícitamente");
+    CHECK(dataset.rows == prior_rows && dataset.headers == prior_headers &&
+          dataset.filename == prior_filename && dataset.row_count == 1u &&
+          strcmp(dataset.rows[0][0], "x") == 0,
+          "límite total de bytes: un fallo sustituyó el Dataset previo");
+
+    /* The header and its CRLF separator are charged before data records. */
+    limits.max_input_bytes = 2u;
+    milena_error_clear(&error);
+    CHECK(dataset_load_csv_with_resource_limits(&dataset, path, ',', &limits,
+          &error) == MILENA_ERR_DATA && strstr(error.message, "bytes de entrada") != NULL,
+          "límite total de bytes: el encabezado/CRLF debe contar en el cap");
+    CHECK(dataset.rows == prior_rows && dataset.headers == prior_headers &&
+          dataset.filename == prior_filename,
+          "límite total de bytes: fallo durante encabezado alteró el Dataset previo");
+
+    /* A non-LF lookahead after a bare CR is charged once, then consumed from
+     * the pending-byte slot rather than counted a second time. */
+    CHECK(write_file(path, "h\rx\r"),
+          "límite total de bytes: no se pudo crear CSV con CR aislados");
+    limits.max_input_bytes = 4u;
+    milena_error_clear(&error);
+    CHECK(dataset_load_csv_with_resource_limits(&dataset, path, ',', &limits,
+          &error) == MILENA_OK && dataset.row_count == 1u &&
+          strcmp(dataset.rows[0][0], "x") == 0,
+          "límite total de bytes: el lookahead CR sin LF se contó dos veces");
+    prior_rows = dataset.rows;
+    prior_headers = dataset.headers;
+    prior_filename = dataset.filename;
+    limits.max_input_bytes = 3u;
+    milena_error_clear(&error);
+    CHECK(dataset_load_csv_with_resource_limits(&dataset, path, ',', &limits,
+          &error) == MILENA_ERR_DATA,
+          "límite total de bytes: faltó rechazar cap+1 tras lookahead CR");
+    CHECK(dataset.rows == prior_rows && dataset.headers == prior_headers &&
+          dataset.filename == prior_filename && dataset.row_count == 1u,
+          "límite total de bytes: el lookahead alteró el Dataset previo al fallar");
+    dataset_destroy(&dataset);
+    remove(path);
+    return 0;
+}
+
 static int run_materialized_source_limits(void) {
+    CHECK(run_dataset_raw_input_byte_limit() == 0,
+          "falló el límite total de bytes de la API CSV materializada");
     MilenaError error;
     const char *typed_source =
         ".analisis limites_hir {\n"
         "  variable importe numerica\n"
-        "  dataset cargar datos(\"missing-materialized-limits.csv\") con filas hasta 1 con columnas de 2 con registros de hasta 0.0048828125 MiB con tiempo hasta 30000 ms con memoria hasta 0.00000095367431640625 MiB\n"
+        "  dataset cargar datos(\"missing-materialized-limits.csv\") con filas hasta 1 con columnas de 2 con registros de hasta 0.0048828125 MiB con tiempo hasta 30000 ms con memoria hasta 0.00000095367431640625 MiB con entrada hasta 7 MiB\n"
         "  .resumir dataset { #suma(\"importe\"); }\n"
         "  .exportar { (\"unused-limits.json\") }\n"
         "}\n";
@@ -110,8 +182,9 @@ static int run_materialized_source_limits(void) {
           ast_load->source_max_columns == 2u &&
           ast_load->source_max_record_bytes == 5120u &&
           ast_load->source_max_elapsed_milliseconds == 30000.0 &&
-          ast_load->source_max_memory_bytes == 1u,
-          "límites materializados: el parser no conservó las cinco políticas en el AST");
+          ast_load->source_max_memory_bytes == 1u &&
+          ast_load->source_max_input_bytes == 7u * 1024u * 1024u,
+          "límites materializados: el parser no conservó las seis políticas en el AST");
     CHECK(canonical.data_hir != NULL &&
           canonical.data_hir->source.max_rows == ast_load->source_max_rows &&
           canonical.data_hir->source.max_columns == ast_load->source_max_columns &&
@@ -119,8 +192,10 @@ static int run_materialized_source_limits(void) {
           canonical.data_hir->source.max_elapsed_milliseconds ==
               ast_load->source_max_elapsed_milliseconds &&
           canonical.data_hir->source.max_memory_bytes ==
-              ast_load->source_max_memory_bytes,
-          "límites materializados: HIR no propagó las cinco políticas del AST");
+              ast_load->source_max_memory_bytes &&
+          canonical.data_hir->source.max_input_bytes ==
+              ast_load->source_max_input_bytes,
+          "límites materializados: HIR no propagó las seis políticas del AST");
     milena_canonical_program_release(&canonical);
 
     CHECK(expect_materialized_limit_failure(
@@ -163,6 +238,22 @@ static int run_materialized_source_limits(void) {
         "test-materialized-time-limit.milena", "tiempo") == 0,
         "límite de tiempo materializado no se aplicó durante la lectura");
     free(slow_content);
+
+    const size_t input_cap = 1024u * 1024u;
+    const char *input_header = "importe\n";
+    size_t input_header_length = strlen(input_header);
+    char *over_input = (char *)malloc(input_cap + 2u);
+    CHECK(over_input != NULL, "límite total de bytes: sin memoria para fixture");
+    memcpy(over_input, input_header, input_header_length);
+    memset(over_input + input_header_length, '1',
+           input_cap + 1u - input_header_length);
+    over_input[input_cap + 1u] = '\0';
+    CHECK(expect_materialized_limit_failure(
+        "test-materialized-input-limit.csv", over_input,
+        "con memoria hasta 1 MiB con entrada hasta 1 MiB", "test-materialized-input-limit.json",
+        "test-materialized-input-limit.milena", "bytes de entrada") == 0,
+        "límite total de bytes materializado no preservó el reporte previo");
+    free(over_input);
 
     const char *memory_csv_path = "test-materialized-memory.csv";
     const char *memory_csv_content = "importe\n1\n";
@@ -218,6 +309,27 @@ static int run_materialized_source_limits(void) {
         memory_option, memory_output_path, memory_program_path,
         "memoria retenida") == 0,
         "límite de memoria: una asignación que excedía el cap no se rechazó");
+
+    const char *invalid_input_clauses[] = {
+        "con entrada hasta 0 MiB",
+        "con entrada hasta 1.5 MiB",
+        "con entrada hasta 18446744073709551616 MiB",
+        "con entrada hasta 1",
+        "con entrada hasta 1 MiB con entrada hasta 2 MiB"
+    };
+    for (size_t i = 0; i < sizeof(invalid_input_clauses) /
+                            sizeof(invalid_input_clauses[0]); ++i) {
+        char invalid_input_source[1024];
+        int written = snprintf(invalid_input_source, sizeof(invalid_input_source),
+            ".analisis limite_entrada_invalido { dataset cargar datos(\"missing.csv\") %s }",
+            invalid_input_clauses[i]);
+        CHECK(written > 0 && (size_t)written < sizeof(invalid_input_source),
+              "límite total de bytes: no se pudo preparar cláusula inválida");
+        milena_error_clear(&error);
+        CHECK(milena_run_dataset_program(invalid_input_source, NULL, NULL,
+              &error) == MILENA_ERR_PARSE,
+              "límite total de bytes: el parser aceptó valor cero, fraccionario, desbordado, sin unidad o repetido");
+    }
 
     const char *invalid_source =
         ".analisis limite_cero {\n"

@@ -262,6 +262,8 @@ MilenaStatus milena_data_operator_plan_from_hir(
     plan->source_path = hir->source.path;
     plan->sink_path = hir->export_path;
     plan->execution_mode = MILENA_DATA_EXECUTION_MATERIALIZED_TABLE;
+    plan->source_max_memory_bytes = hir->source.max_memory_bytes;
+    plan->source_max_input_bytes = hir->source.max_input_bytes;
     plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_CSV_SCAN;
     const MilenaHIRDataOperation *group = NULL;
     bool filter_seen = false;
@@ -458,6 +460,7 @@ MilenaStatus milena_data_operator_plan_preflight_from_hir(
     plan->source_max_columns = hir->source.max_columns;
     plan->source_max_record_bytes = hir->source.max_record_bytes;
     plan->source_max_memory_bytes = hir->source.max_memory_bytes;
+    plan->source_max_input_bytes = hir->source.max_input_bytes;
     plan->source_max_elapsed_milliseconds = hir->source.max_elapsed_milliseconds;
     plan->has_preflight_identity = true;
     plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_CSV_SCAN;
@@ -558,6 +561,7 @@ MilenaStatus milena_data_operator_plan_check_bound_hir(
         preflight->source_max_columns != bound_hir->source.max_columns ||
         preflight->source_max_record_bytes != bound_hir->source.max_record_bytes ||
         preflight->source_max_memory_bytes != bound_hir->source.max_memory_bytes ||
+        preflight->source_max_input_bytes != bound_hir->source.max_input_bytes ||
         preflight->source_max_elapsed_milliseconds !=
             bound_hir->source.max_elapsed_milliseconds)
         return plan_error(error, MILENA_ERR_DATA,

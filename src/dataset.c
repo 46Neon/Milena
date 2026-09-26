@@ -27,7 +27,7 @@ static bool dataset_record_limit_from_legacy(const DatasetLimits *limits,
 DatasetLoadLimits dataset_default_load_limits(void) {
     DatasetLimits legacy = dataset_default_limits();
     DatasetLoadLimits limits = {
-        legacy.max_rows, legacy.max_columns, 0, 0, legacy.max_field_bytes, 0.0
+        legacy.max_rows, legacy.max_columns, 0, 0, 0, legacy.max_field_bytes, 0.0
     };
     return limits;
 }
@@ -130,12 +130,47 @@ static MilenaStatus dataset_memory_resize(DatasetMemoryBudget *budget,
     return MILENA_OK;
 }
 
+typedef struct {
+    size_t max_bytes;
+    size_t bytes_read;
+    int pending_byte;
+    bool has_pending_byte;
+} DatasetInputBudget;
+
+/* Physical bytes are charged once when first read. A non-LF byte looked ahead
+ * after CR remains pending for the next record, without being charged again. */
+static MilenaStatus read_source_byte(FILE *file, DatasetInputBudget *budget,
+                                     int *byte, size_t line,
+                                     MilenaError *error) {
+    if (!file || !byte) return MILENA_ERR_ARGUMENT;
+    if (budget && budget->has_pending_byte) {
+        *byte = budget->pending_byte;
+        budget->has_pending_byte = false;
+        return MILENA_OK;
+    }
+    int ch = fgetc(file);
+    if (ch == EOF) {
+        *byte = EOF;
+        return MILENA_ERR_IO;
+    }
+    if (budget && budget->max_bytes > 0) {
+        if (budget->bytes_read >= budget->max_bytes)
+            return dataset_limit_error(error, line,
+                "El CSV supera el límite total de bytes de entrada configurado");
+        budget->bytes_read++;
+    }
+    *byte = ch;
+    return MILENA_OK;
+}
+
 /* Reads one CSV record with a strict logical-byte cap before growing the buffer. */
 static MilenaStatus read_record(FILE *file, char **record, size_t *line,
-                              size_t max_record_bytes, double started_ms,
+                              size_t max_record_bytes,
+                              DatasetInputBudget *input_budget,
+                              double started_ms,
                               double max_elapsed_milliseconds,
                               MilenaError *error) {
-    if (!file || !record || !line || max_record_bytes == 0 ||
+    if (!file || !record || !line || !input_budget || max_record_bytes == 0 ||
         max_record_bytes == SIZE_MAX) return MILENA_ERR_ARGUMENT;
     *record = NULL;
     size_t capacity = 0, length = 0, start_line = *line;
@@ -143,7 +178,18 @@ static MilenaStatus read_record(FILE *file, char **record, size_t *line,
     bool in_quotes = false;
     int ch;
 
-    while ((ch = fgetc(file)) != EOF) {
+    while (true) {
+        MilenaStatus byte_status = read_source_byte(file, input_budget, &ch,
+                                                   start_line, error);
+        if (byte_status == MILENA_ERR_IO) {
+            ch = EOF;
+            break;
+        }
+        if (byte_status != MILENA_OK) {
+            free(*record);
+            *record = NULL;
+            return byte_status;
+        }
         if (max_elapsed_milliseconds > 0.0 && (length & 4095u) == 0u &&
             dataset_time_exceeded(started_ms, max_elapsed_milliseconds)) {
             free(*record);
@@ -152,8 +198,18 @@ static MilenaStatus read_record(FILE *file, char **record, size_t *line,
                                        "El CSV superó el límite de tiempo de carga");
         }
         if (ch == '\r') {
-            int next = fgetc(file);
-            if (next != '\n' && next != EOF) (void)ungetc(next, file);
+            int next = EOF;
+            byte_status = read_source_byte(file, input_budget, &next,
+                                           start_line, error);
+            if (byte_status == MILENA_OK && next != '\n') {
+                input_budget->pending_byte = next;
+                input_budget->has_pending_byte = true;
+            } else if (byte_status != MILENA_OK &&
+                       byte_status != MILENA_ERR_IO) {
+                free(*record);
+                *record = NULL;
+                return byte_status;
+            }
             if (in_quotes) {
                 if (length >= max_record_bytes) goto too_large;
                 MilenaStatus st = grow_record(record, &capacity, length + 2u,
@@ -516,8 +572,9 @@ MilenaStatus dataset_load_csv_with_resource_limits(
 
     size_t line = 1;
     char *record = NULL;
+    DatasetInputBudget input_budget = {limits->max_input_bytes, 0u, 0, false};
     status = read_record(file, &record, &line,
-        header_record_limit, started_ms,
+        header_record_limit, &input_budget, started_ms,
         limits->max_elapsed_milliseconds, error);
     if (status != MILENA_OK) {
         if (status == MILENA_ERR_IO && feof(file)) {
@@ -578,7 +635,7 @@ MilenaStatus dataset_load_csv_with_resource_limits(
     size_t rows_seen = 0;
     while (true) {
         status = read_record(file, &record, &line,
-            data_record_limit, started_ms,
+            data_record_limit, &input_budget, started_ms,
             limits->max_elapsed_milliseconds, error);
         if (status == MILENA_ERR_IO && feof(file)) {
             status = MILENA_OK;
@@ -698,7 +755,7 @@ MilenaStatus dataset_load_csv_with_limits(Dataset *dataset, const char *filename
         return MILENA_ERR_OVERFLOW;
     }
     DatasetLoadLimits resource_limits = {
-        limits->max_rows, limits->max_columns, 0, 0,
+        limits->max_rows, limits->max_columns, 0, 0, 0,
         limits->max_field_bytes, 0.0
     };
     return dataset_load_csv_with_resource_limits(dataset, filename, delimiter,

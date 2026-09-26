@@ -418,6 +418,7 @@ static void test_common_data_operator_overlap(void) {
     MilenaHIRColumnRef declared_columns[2] = {{0}};
     hir.source.path = "rows.csv";
     hir.source.max_memory_bytes = 4096u;
+    hir.source.max_input_bytes = 8192u;
     hir.export_path = "memory.json";
     hir.schema_bound = true;
     declared_columns[0].name = "valor";
@@ -457,6 +458,8 @@ static void test_common_data_operator_overlap(void) {
            MILENA_OK);
     assert(in_memory.execution_mode ==
            MILENA_DATA_EXECUTION_MATERIALIZED_TABLE);
+    assert(in_memory.source_max_memory_bytes == hir.source.max_memory_bytes);
+    assert(in_memory.source_max_input_bytes == hir.source.max_input_bytes);
     assert(in_memory.operator_count == 4u && in_memory.has_numeric_greater_filter);
     test_materialized_executor_uses_common_plan(&in_memory, &error);
 
@@ -464,10 +467,15 @@ static void test_common_data_operator_overlap(void) {
     assert(milena_data_operator_plan_preflight_from_hir(
         &hir, &preflight, &error) == MILENA_OK);
     assert(preflight.source_max_memory_bytes == hir.source.max_memory_bytes);
+    assert(preflight.source_max_input_bytes == hir.source.max_input_bytes);
     assert(milena_data_operator_plan_check_bound_hir(
         &preflight, &hir, &error) == MILENA_OK);
     MilenaDataHIR changed_source = hir;
     changed_source.source.max_memory_bytes++;
+    assert(milena_data_operator_plan_check_bound_hir(
+        &preflight, &changed_source, &error) == MILENA_ERR_DATA);
+    changed_source = hir;
+    changed_source.source.max_input_bytes++;
     assert(milena_data_operator_plan_check_bound_hir(
         &preflight, &changed_source, &error) == MILENA_ERR_DATA);
 
@@ -511,6 +519,9 @@ static void test_common_data_operator_overlap(void) {
                                                   &streaming, &error) ==
            MILENA_OK);
     assert(streaming.execution_mode == MILENA_DATA_EXECUTION_CSV_RECORD_STREAM);
+    /* Resource caps are explicit preflight identity, not operator semantics. */
+    streaming.source_max_memory_bytes = 7u;
+    streaming.source_max_input_bytes = 9u;
     assert(milena_data_operator_plans_same_logic(&in_memory, &streaming));
     assert(strcmp(in_memory.source_path, streaming.source_path) == 0);
     assert(strcmp(in_memory.sink_path, "memory.json") == 0 &&

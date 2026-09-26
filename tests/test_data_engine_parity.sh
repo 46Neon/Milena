@@ -225,3 +225,55 @@ fi
   echo 'un error de límite reemplazó el reporte completo anterior' >&2
   exit 1
 }
+
+# Materialized input-byte limits count the whole raw source, including the
+# header and CRLF separators; this is an input-size cap, not a memory/RSS cap.
+python3 - "$TMP_DIR" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+cap = 1024 * 1024
+header = b"grupo,valor\r\n"
+valid_row = b"A,1\r\n"
+invalid_row = b"x" * (cap - len(header) - len(valid_row))
+exact = header + valid_row + invalid_row
+assert len(exact) == cap
+(p / "exact-bytes.csv").write_bytes(exact)
+(p / "over-bytes.csv").write_bytes(exact + b"x")
+PY
+cat > "$TMP_DIR/exact-input-limit.milena" <<'MILENA'
+.analisis entrada_exacta {
+  variable grupo texto
+  variable valor numerica
+  dataset cargar datos("exact-bytes.csv") con memoria hasta 1 MiB con entrada hasta 1 MiB
+  .agrupar dataset { #por("grupo") #suma("valor") }
+  .exportar { ("exact-bytes.json") }
+}
+MILENA
+(cd "$TMP_DIR" && "$MILENA_BIN" run exact-input-limit.milena)
+python3 - "$TMP_DIR/exact-bytes.csv" "$TMP_DIR/exact-bytes.json" <<'PY'
+import json, pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_bytes()
+report = json.loads(pathlib.Path(sys.argv[2]).read_text())
+assert len(source) == 1024 * 1024
+assert report["filas"] == 1
+assert report["datos"][0]["valor_suma"] == 1
+assert report["datos"][0]["grupo"] == "A"
+PY
+printf '%s\n' 'previous-complete-report' > "$TMP_DIR/stable.json"
+cat > "$TMP_DIR/over-input-limit.milena" <<'MILENA'
+.analisis entrada_excedida {
+  variable grupo texto
+  variable valor numerica
+  dataset cargar datos("over-bytes.csv") con memoria hasta 1 MiB con entrada hasta 1 MiB
+  .agrupar dataset { #por("grupo") #suma("valor") }
+  .exportar { ("stable.json") }
+}
+MILENA
+if (cd "$TMP_DIR" && "$MILENA_BIN" run over-input-limit.milena); then
+  echo 'el cap+1 de bytes de entrada materializada produjo éxito' >&2
+  exit 1
+fi
+[ "$(cat "$TMP_DIR/stable.json")" = 'previous-complete-report' ] || {
+  echo 'el exceso de bytes de entrada sustituyó el reporte anterior' >&2
+  exit 1
+}
