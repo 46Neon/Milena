@@ -8,7 +8,9 @@
 
 #define BC_MAX_BYTES (MILENA_BYTECODE_HEADER_SIZE + \
                       (size_t)MILENA_BYTECODE_MAX_INSTRUCTIONS * \
-                          MILENA_BYTECODE_INSTRUCTION_SIZE)
+                          MILENA_BYTECODE_INSTRUCTION_SIZE + \
+                      MILENA_BYTECODE_MAX_REGISTERS + \
+                      MILENA_BYTECODE_MAX_FUNCTIONS)
 
 static const uint8_t bc_magic[4] = {'M', 'L', 'B', 'C'};
 
@@ -149,6 +151,20 @@ bool milena_bytecode_encoded_size(size_t instruction_count, size_t *size_out) {
     return true;
 }
 
+bool milena_bytecode_typed_encoded_size(size_t instruction_count,
+                                        uint16_t register_count,
+                                        uint16_t function_count,
+                                        size_t *size_out) {
+    size_t base_size;
+    if (!size_out || register_count == 0 ||
+        register_count > MILENA_BYTECODE_MAX_REGISTERS ||
+        function_count == 0 || function_count > MILENA_BYTECODE_MAX_FUNCTIONS ||
+        !milena_bytecode_encoded_size(instruction_count, &base_size) ||
+        (size_t)register_count + function_count > SIZE_MAX - base_size) return false;
+    *size_out = base_size + register_count + function_count;
+    return true;
+}
+
 static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
                                             size_t length,
                                             const ResolvedLimits *limits,
@@ -158,7 +174,9 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
     uint16_t register_count;
     uint16_t minor_version;
     uint32_t instruction_count;
-    struct FunctionInfo { uint32_t start, end, parameter_base, arity; } functions[MILENA_BYTECODE_MAX_FUNCTIONS];
+    struct FunctionInfo { uint32_t start, end, parameter_base, arity; uint8_t return_type; } functions[MILENA_BYTECODE_MAX_FUNCTIONS];
+    const uint8_t *register_types = NULL;
+    const uint8_t *function_return_types = NULL;
     uint8_t call_edges[MILENA_BYTECODE_MAX_FUNCTIONS][MILENA_BYTECODE_MAX_FUNCTIONS] = {{0}};
     uint32_t function_count = 0;
     uint32_t *owners = NULL;
@@ -210,17 +228,22 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
                     "bytecode length overflows host size");
     }
     expected_size = MILENA_BYTECODE_HEADER_SIZE + body_size;
-    if (length != expected_size) {
-        return fail(diagnostic, MILENA_BC_BAD_FORMAT,
-                    length < expected_size ? length : expected_size,
-                    "bytecode length does not match instruction count");
+    if (minor_version < MILENA_BYTECODE_VERSION_TYPED_MINOR) {
+        if (length != expected_size) {
+            return fail(diagnostic, MILENA_BC_BAD_FORMAT,
+                        length < expected_size ? length : expected_size,
+                        "bytecode length does not match instruction count");
+        }
+    } else if (length < expected_size + register_count) {
+        return fail(diagnostic, MILENA_BC_BAD_FORMAT, length,
+                    "truncated v1.2 register type table");
     }
     if (!host_has_binary64()) {
         return fail(diagnostic, MILENA_BC_BAD_FORMAT, 0,
                     "host does not support IEEE-754 binary64 values");
     }
 
-    if (minor_version == 1u) {
+    if (minor_version >= MILENA_BYTECODE_VERSION_CALL_MINOR) {
         if (bytes[MILENA_BYTECODE_HEADER_SIZE] != MILENA_BC_FUNCTION) {
             return fail(diagnostic, MILENA_BC_BAD_FORMAT, MILENA_BYTECODE_HEADER_SIZE,
                         "v1.1 must begin with function zero");
@@ -242,7 +265,7 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
             }
             if (function_count) functions[function_count - 1u].end = pc;
             functions[function_count] = (struct FunctionInfo){
-                pc + 1u, instruction_count, parameter_base, arity
+                pc + 1u, instruction_count, parameter_base, arity, 0
             };
             function_count++;
         }
@@ -266,6 +289,44 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
                 owners[pc] = f;
     }
 
+    if (minor_version == MILENA_BYTECODE_VERSION_TYPED_MINOR) {
+        const size_t metadata_offset = expected_size;
+        size_t typed_size = 0;
+        if (!milena_bytecode_typed_encoded_size(instruction_count, register_count,
+                                                (uint16_t)function_count,
+                                                &typed_size) || length != typed_size) {
+            free(owners);
+            return fail(diagnostic, MILENA_BC_BAD_FORMAT,
+                        length < typed_size ? length : typed_size,
+                        "v1.2 type table length does not match register/function counts");
+        }
+        register_types = bytes + metadata_offset;
+        function_return_types = register_types + register_count;
+        if (!function_count || function_return_types[0] != MILENA_BC_TYPE_NUMBER) {
+            free(owners);
+            return fail(diagnostic, MILENA_BC_BAD_FORMAT, metadata_offset + register_count,
+                        "v1.2 entry function must declare a numeric return");
+        }
+        for (uint32_t r = 0; r < register_count; ++r) {
+            if (register_types[r] != MILENA_BC_TYPE_NUMBER &&
+                register_types[r] != MILENA_BC_TYPE_BOOLEAN) {
+                free(owners);
+                return fail(diagnostic, MILENA_BC_BAD_FORMAT, metadata_offset + r,
+                            "invalid v1.2 register type tag");
+            }
+        }
+        for (uint32_t f = 0; f < function_count; ++f) {
+            if (function_return_types[f] != MILENA_BC_TYPE_NUMBER &&
+                function_return_types[f] != MILENA_BC_TYPE_BOOLEAN) {
+                free(owners);
+                return fail(diagnostic, MILENA_BC_BAD_FORMAT,
+                            metadata_offset + register_count + f,
+                            "invalid v1.2 function return type tag");
+            }
+            functions[f].return_type = function_return_types[f];
+        }
+    }
+
     for (uint32_t pc = 0; pc < instruction_count; ++pc) {
         const size_t offset = MILENA_BYTECODE_HEADER_SIZE +
                               (size_t)pc * MILENA_BYTECODE_INSTRUCTION_SIZE;
@@ -287,6 +348,13 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
                 registers_valid = a < register_count && b == 0 && c == 0 &&
                                   isfinite(bits_to_double(immediate));
                 break;
+            case MILENA_BC_CONST_BOOL: {
+                double boolean_value = bits_to_double(immediate);
+                registers_valid = minor_version == MILENA_BYTECODE_VERSION_TYPED_MINOR &&
+                                  a < register_count && b == 0 && c == 0 &&
+                                  (boolean_value == 0.0 || boolean_value == 1.0);
+                break;
+            }
             case MILENA_BC_MOVE:
             case MILENA_BC_NEG:
                 registers_valid = a < register_count && b < register_count &&
@@ -318,7 +386,7 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
                                   immediate == 0;
                 break;
             case MILENA_BC_FUNCTION:
-                registers_valid = minor_version == 1u && a < function_count &&
+                registers_valid = minor_version >= MILENA_BYTECODE_VERSION_CALL_MINOR && a < function_count &&
                                   a < MILENA_BYTECODE_MAX_FUNCTIONS &&
                                   b <= register_count && c <= register_count - b &&
                                   immediate == 0 &&
@@ -327,7 +395,7 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
                 break;
             case MILENA_BC_CALL: {
                 double encoded_arity = bits_to_double(immediate);
-                registers_valid = minor_version == 1u && a < register_count &&
+                registers_valid = minor_version >= MILENA_BYTECODE_VERSION_CALL_MINOR && a < register_count &&
                                   b < function_count && isfinite(encoded_arity) &&
                                   encoded_arity >= 0.0 && encoded_arity <= MILENA_BYTECODE_MAX_REGISTERS &&
                                   floor(encoded_arity) == encoded_arity &&
@@ -341,7 +409,7 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
                 return fail(diagnostic, MILENA_BC_BAD_OPCODE, offset,
                             "unknown bytecode opcode");
         }
-        if (registers_valid && minor_version == 1u &&
+        if (registers_valid && minor_version >= MILENA_BYTECODE_VERSION_CALL_MINOR &&
             (opcode == MILENA_BC_JUMP || opcode == MILENA_BC_JUMP_IF_FALSE)) {
             uint32_t target = opcode == MILENA_BC_JUMP ? a : b;
             if (target >= instruction_count || owners[target] != owners[pc] ||
@@ -354,9 +422,64 @@ static MilenaBytecodeStatus verify_internal(const uint8_t *bytes,
             return fail(diagnostic, MILENA_BC_BAD_OPERAND, offset,
                         "invalid register, function, target, or immediate operand");
         }
+        if (minor_version == MILENA_BYTECODE_VERSION_TYPED_MINOR) {
+            bool types_valid = true;
+            const uint8_t number = MILENA_BC_TYPE_NUMBER;
+            const uint8_t boolean = MILENA_BC_TYPE_BOOLEAN;
+            switch (opcode) {
+                case MILENA_BC_CONST_F64:
+                    types_valid = register_types[a] == number;
+                    break;
+                case MILENA_BC_CONST_BOOL:
+                    types_valid = register_types[a] == boolean;
+                    break;
+                case MILENA_BC_MOVE:
+                    types_valid = register_types[a] == register_types[b];
+                    break;
+                case MILENA_BC_NEG:
+                    types_valid = register_types[a] == number && register_types[b] == number;
+                    break;
+                case MILENA_BC_ADD: case MILENA_BC_SUB: case MILENA_BC_MUL: case MILENA_BC_DIV:
+                    types_valid = register_types[a] == number && register_types[b] == number &&
+                                  register_types[c] == number;
+                    break;
+                case MILENA_BC_EQ: case MILENA_BC_NE:
+                    types_valid = register_types[b] == register_types[c] &&
+                                  register_types[a] == boolean;
+                    break;
+                case MILENA_BC_LT: case MILENA_BC_LE: case MILENA_BC_GT: case MILENA_BC_GE:
+                    types_valid = register_types[b] == number && register_types[c] == number &&
+                                  register_types[a] == boolean;
+                    break;
+                case MILENA_BC_JUMP_IF_FALSE:
+                    types_valid = register_types[a] == boolean;
+                    break;
+                case MILENA_BC_RETURN:
+                    types_valid = register_types[a] == functions[owners[pc]].return_type;
+                    break;
+                case MILENA_BC_CALL: {
+                    uint32_t arity = (uint32_t)bits_to_double(immediate);
+                    types_valid = register_types[a] == functions[b].return_type;
+                    for (uint32_t i = 0; types_valid && i < arity; ++i)
+                        types_valid = register_types[c + i] ==
+                                      register_types[functions[b].parameter_base + i];
+                    break;
+                }
+                case MILENA_BC_JUMP: case MILENA_BC_FUNCTION:
+                    break;
+                default:
+                    types_valid = false;
+                    break;
+            }
+            if (!types_valid) {
+                free(owners);
+                return fail(diagnostic, MILENA_BC_BAD_TYPE, offset,
+                            "v1.2 opcode operands disagree with declared types");
+            }
+        }
     }
 
-    if (minor_version == 1u) {
+    if (minor_version >= MILENA_BYTECODE_VERSION_CALL_MINOR) {
         /* Calls must form a DAG: this increment deliberately rejects recursion. */
         uint8_t color[MILENA_BYTECODE_MAX_FUNCTIONS] = {0};
         for (uint32_t root = 0; root < function_count; ++root) {
@@ -554,6 +677,8 @@ MilenaBytecodeStatus milena_bytecode_encode(
     MilenaBytecodeDiagnostic *diagnostic) {
     ResolvedLimits resolved;
     size_t required;
+    size_t base_required;
+    uint16_t encoded_function_count = 0;
     uint8_t *temporary;
     MilenaBytecodeStatus status;
 
@@ -573,7 +698,7 @@ MilenaBytecodeStatus milena_bytecode_encode(
     if (program->major != MILENA_BYTECODE_VERSION_MAJOR ||
         program->minor > MILENA_BYTECODE_MAX_MINOR) {
         return fail(diagnostic, MILENA_BC_BAD_VERSION, 4,
-                    "encoder only supports bytecode v1.0 and v1.1");
+                    "encoder only supports bytecode v1.0 through v1.2");
     }
     if (program->register_count == 0 ||
         program->register_count > resolved.max_registers ||
@@ -583,8 +708,37 @@ MilenaBytecodeStatus milena_bytecode_encode(
         return fail(diagnostic, MILENA_BC_LIMIT_EXCEEDED, 8,
                     "program exceeds configured registers/instructions or is empty");
     }
-    if (!milena_bytecode_encoded_size(program->instruction_count, &required) ||
-        required > resolved.max_bytecode_bytes) {
+    if (!milena_bytecode_encoded_size(program->instruction_count, &base_required)) {
+        return fail(diagnostic, MILENA_BC_LIMIT_EXCEEDED, 12,
+                    "encoded program exceeds configured size limit");
+    }
+    required = base_required;
+    if (program->minor == MILENA_BYTECODE_VERSION_TYPED_MINOR) {
+        for (size_t i = 0; i < program->instruction_count; ++i) {
+            if (program->instructions[i].opcode == MILENA_BC_FUNCTION) {
+                if (encoded_function_count >= MILENA_BYTECODE_MAX_FUNCTIONS) {
+                    return fail(diagnostic, MILENA_BC_BAD_FORMAT,
+                                MILENA_BYTECODE_HEADER_SIZE + i * MILENA_BYTECODE_INSTRUCTION_SIZE,
+                                "v1.2 exceeds the function type table limit");
+                }
+                encoded_function_count++;
+            }
+        }
+        if (program->register_type_count != program->register_count ||
+            program->function_return_type_count != encoded_function_count ||
+            !program->register_types ||
+            (encoded_function_count && !program->function_return_types) ||
+            !milena_bytecode_typed_encoded_size(program->instruction_count,
+                program->register_count, encoded_function_count, &required)) {
+            return fail(diagnostic, MILENA_BC_BAD_FORMAT, 12,
+                        "v1.2 requires exact register and function type tables");
+        }
+    } else if (program->register_types || program->register_type_count ||
+               program->function_return_types || program->function_return_type_count) {
+        return fail(diagnostic, MILENA_BC_BAD_FORMAT, 12,
+                    "type metadata is only valid in bytecode v1.2");
+    }
+    if (required > resolved.max_bytecode_bytes) {
         return fail(diagnostic, MILENA_BC_LIMIT_EXCEEDED, 12,
                     "encoded program exceeds configured size limit");
     }
@@ -620,19 +774,21 @@ MilenaBytecodeStatus milena_bytecode_encode(
         uint8_t *record = temporary + MILENA_BYTECODE_HEADER_SIZE +
                           i * MILENA_BYTECODE_INSTRUCTION_SIZE;
         if (source->opcode != MILENA_BC_CONST_F64 &&
+            source->opcode != MILENA_BC_CONST_BOOL &&
             source->opcode != MILENA_BC_CALL && source->immediate != 0.0) {
             free(temporary);
             *written = 0;
             return fail(diagnostic, MILENA_BC_BAD_OPERAND,
                         MILENA_BYTECODE_HEADER_SIZE +
                             i * MILENA_BYTECODE_INSTRUCTION_SIZE,
-                        "only CONST_F64 and v1.1 CALL may carry an immediate");
+                        "only constants and v1.1+ CALL may carry an immediate");
         }
         record[0] = source->opcode;
         write_u32le(record + 4, source->a);
         write_u32le(record + 8, source->b);
         write_u32le(record + 12, source->c);
         if (source->opcode == MILENA_BC_CONST_F64 ||
+            source->opcode == MILENA_BC_CONST_BOOL ||
             source->opcode == MILENA_BC_CALL) {
             if (!host_has_binary64()) {
                 free(temporary);
@@ -642,6 +798,12 @@ MilenaBytecodeStatus milena_bytecode_encode(
             }
             write_u64le(record + 16, double_to_bits(source->immediate));
         }
+    }
+    if (program->minor == MILENA_BYTECODE_VERSION_TYPED_MINOR) {
+        memcpy(temporary + base_required, program->register_types,
+               program->register_count);
+        memcpy(temporary + base_required + program->register_count,
+               program->function_return_types, encoded_function_count);
     }
 
     status = verify_internal(temporary, required, &resolved, diagnostic, NULL, NULL);
@@ -709,7 +871,7 @@ MilenaBytecodeStatus milena_bytecode_run(
         return fail(diagnostic, MILENA_BC_OUT_OF_MEMORY, 0,
                     "unable to allocate per-run registers");
     }
-    if (read_u16le(bytes + 6) == MILENA_BYTECODE_VERSION_CALL_MINOR) {
+    if (read_u16le(bytes + 6) >= MILENA_BYTECODE_VERSION_CALL_MINOR) {
         for (uint32_t i = 0; i < instruction_count; ++i) {
             const size_t off = MILENA_BYTECODE_HEADER_SIZE +
                                (size_t)i * MILENA_BYTECODE_INSTRUCTION_SIZE;
@@ -754,6 +916,7 @@ MilenaBytecodeStatus milena_bytecode_run(
         (void)read_instruction(bytes, pc, &a, &b, &c, &immediate);
         switch (opcode) {
             case MILENA_BC_CONST_F64:
+            case MILENA_BC_CONST_BOOL:
                 registers[a] = immediate;
                 ++pc;
                 break;
@@ -884,6 +1047,7 @@ const char *milena_bytecode_status_name(MilenaBytecodeStatus status) {
         case MILENA_BC_OUT_OF_MEMORY: return "out-of-memory";
         case MILENA_BC_RUNTIME_ERROR: return "runtime-error";
         case MILENA_BC_STEP_LIMIT: return "step-limit";
+        case MILENA_BC_BAD_TYPE: return "bad-type";
         default: return "unknown-status";
     }
 }

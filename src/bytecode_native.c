@@ -100,6 +100,9 @@ static bool emit_call_program(FILE *out, const uint8_t *bytes) {
                 case MILENA_BC_CONST_F64:
                     if (fprintf(out, "  r[%" PRIu32 "]=fn_f64(UINT64_C(0x%016" PRIx64 "));\n", a, immediate) < 0) return false;
                     break;
+                case MILENA_BC_CONST_BOOL:
+                    if (fprintf(out, "  r[%" PRIu32 "]=fn_f64(UINT64_C(0x%016" PRIx64 "));\n", a, immediate) < 0) return false;
+                    break;
                 case MILENA_BC_MOVE:
                     if (fprintf(out, "  r[%" PRIu32 "]=r[%" PRIu32 "];\n", a, b) < 0) return false;
                     break;
@@ -154,7 +157,7 @@ static bool emit_call_program(FILE *out, const uint8_t *bytes) {
 }
 
 static bool emit_program(FILE *out, const uint8_t *bytes) {
-    if (read_le16(bytes + 6) == MILENA_BYTECODE_VERSION_CALL_MINOR)
+    if (read_le16(bytes + 6) >= MILENA_BYTECODE_VERSION_CALL_MINOR)
         return emit_call_program(out, bytes);
     const uint16_t registers = read_le16(bytes + 8);
     const uint32_t instructions = read_le32(bytes + 12);
@@ -183,6 +186,7 @@ static bool emit_program(FILE *out, const uint8_t *bytes) {
                     "  ++steps;\n", i, NATIVE_STEP_LIMIT) < 0) return false;
         switch (op) {
             case MILENA_BC_CONST_F64:
+            case MILENA_BC_CONST_BOOL:
                 if (fprintf(out, "  r[%" PRIu32 "] = f64(UINT64_C(0x%016" PRIx64 "));\n",
                             a, immediate) < 0) return false;
                 break;

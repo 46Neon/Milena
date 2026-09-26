@@ -23,10 +23,10 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
                                              MilenaError *error);
 
 /*
- * Experimental Linux x86-64 AOT backend for verified MLBC v1.0/v1.1 bytes.
- * The generated artifact is native code built from source-specific C; v1.1
+ * Experimental Linux x86-64 AOT backend for verified MLBC v1.0/v1.1/v1.2 bytes.
+ * The generated artifact is native code built from source-specific C; v1.1/v1.2
  * function calls become direct C/native calls, not a bytecode-dispatch loop.
- * Input is verified before
+ * v1.2 types are verified before native emission. Input is verified before
  * any output is published. On success, the executable prints its numeric result
  * as a C hexadecimal floating literal and exits 0. Runtime errors exit 70,
  * instruction-budget exhaustion exits 71, and stdout failure exits 74. The

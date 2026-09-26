@@ -22,7 +22,7 @@ static int encode(const MilenaBytecodeInstruction *instructions, size_t count,
                   uint16_t registers, uint8_t **bytes_out, size_t *length_out) {
     MilenaBytecodeProgram program = {
         MILENA_BYTECODE_VERSION_MAJOR, MILENA_BYTECODE_VERSION_MINOR,
-        registers, count, instructions
+        registers, count, instructions, NULL, 0, NULL, 0
     };
     size_t length = 0;
     MilenaBytecodeDiagnostic diagnostic;
@@ -195,6 +195,53 @@ int main(void) {
     (void)rmdir(odd_directory);
     free(bytes);
 
-    puts("bytecode native AOT tests: verified input, direct native control flow, runtime errors, budget, and safe argv OK");
+    /* The native backend consumes the same verified v1.2 boolean contract. */
+    const MilenaBytecodeInstruction typed_code[] = {
+        {MILENA_BC_FUNCTION, 0, 0, 0, 0.0},
+        {MILENA_BC_CONST_BOOL, 0, 0, 0, 1.0},
+        {MILENA_BC_JUMP_IF_FALSE, 0, 4, 0, 0.0},
+        {MILENA_BC_CONST_F64, 1, 0, 0, 42.0},
+        {MILENA_BC_RETURN, 1, 0, 0, 0.0},
+        {MILENA_BC_CONST_F64, 1, 0, 0, 0.0},
+        {MILENA_BC_RETURN, 1, 0, 0, 0.0}
+    };
+    const uint8_t typed_registers[] = {
+        MILENA_BC_TYPE_BOOLEAN, MILENA_BC_TYPE_NUMBER
+    };
+    const uint8_t typed_returns[] = {MILENA_BC_TYPE_NUMBER};
+    MilenaBytecodeProgram typed_program = {
+        MILENA_BYTECODE_VERSION_MAJOR, MILENA_BYTECODE_VERSION_TYPED_MINOR,
+        2, 7, typed_code, typed_registers, 2, typed_returns, 1
+    };
+    CHECK(milena_bytecode_typed_encoded_size(7, 2, 1, &length),
+          "could not size typed AOT bytecode");
+    bytes = malloc(length);
+    CHECK(bytes != NULL, "could not allocate typed AOT bytecode");
+    size_t typed_written = 0;
+    MilenaBytecodeDiagnostic typed_diagnostic;
+    CHECK(milena_bytecode_encode(&typed_program, bytes, length, &typed_written,
+                                 NULL, &typed_diagnostic) == MILENA_BC_OK &&
+          typed_written == length, "could not encode typed AOT bytecode");
+    double typed_result = 0.0;
+    CHECK(milena_bytecode_run(bytes, length, NULL, &typed_result,
+                              &typed_diagnostic) == MILENA_BC_OK &&
+          fabs(typed_result - 42.0) < 1e-12, "typed VM result differed");
+    char typed_directory[] = "/tmp/milena-bytecode-typed-aot-XXXXXX";
+    CHECK(mkdtemp(typed_directory) != NULL,
+          "could not create typed AOT test directory");
+    (void)snprintf(path, sizeof(path), "%s/native", typed_directory);
+    CHECK(milena_bytecode_compile_native(bytes, length, path, &error) == MILENA_OK,
+          "native backend rejected valid typed bytecode");
+    CHECK(execute(path, &exit_code, output, sizeof(output)) == 0 && exit_code == 0,
+          "typed native executable did not succeed");
+    native_result = strtod(output, &end);
+    CHECK(end != output && strcmp(end, "\n") == 0 &&
+          fabs(native_result - typed_result) < 1e-12,
+          "typed native executable differed from VM");
+    (void)unlink(path);
+    (void)rmdir(typed_directory);
+    free(bytes);
+
+    puts("bytecode native AOT tests: verified input, v1.2 types, direct native control flow, runtime errors, budget, and safe argv OK");
     return 0;
 }

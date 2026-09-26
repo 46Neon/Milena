@@ -696,7 +696,8 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
         MILENA_BYTECODE_VERSION_CALL_MINOR,
         lowering.register_count,
         lowering.instruction_count,
-        lowering.instructions
+        lowering.instructions,
+        NULL, 0, NULL, 0
     };
     size_t required = 0;
     MilenaBytecodeDiagnostic diagnostic;

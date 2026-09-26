@@ -2,10 +2,11 @@
 #define MILENA_BYTECODE_H
 
 /*
- * Portable Milena bytecode v1.0/v1.1.
+ * Portable Milena bytecode v1.0/v1.1/v1.2.
  *
  * This is a versioned, little-endian bytecode format, not native machine code.
- * v1.0 is single-function; v1.1 adds bounded non-recursive scalar calls.
+ * v1.0 is single-function; v1.1 adds bounded non-recursive scalar calls;
+ * v1.2 adds explicit static numeric/boolean register and function-return types.
  */
 #include <stdbool.h>
 #include <stddef.h>
@@ -16,11 +17,12 @@ extern "C" {
 #endif
 
 #define MILENA_BYTECODE_VERSION_MAJOR 1u
-/* v1.0 is the original single-function wire format; v1.1 adds FUNC/CALL. */
+/* v1.0 legacy; v1.1 adds FUNC/CALL; v1.2 adds typed metadata. */
 #define MILENA_BYTECODE_VERSION_MINOR 0u
 #define MILENA_BYTECODE_V1_MINOR 0u
 #define MILENA_BYTECODE_VERSION_CALL_MINOR 1u
-#define MILENA_BYTECODE_MAX_MINOR MILENA_BYTECODE_VERSION_CALL_MINOR
+#define MILENA_BYTECODE_VERSION_TYPED_MINOR 2u
+#define MILENA_BYTECODE_MAX_MINOR MILENA_BYTECODE_VERSION_TYPED_MINOR
 #define MILENA_BYTECODE_HEADER_SIZE 16u
 #define MILENA_BYTECODE_INSTRUCTION_SIZE 24u
 #define MILENA_BYTECODE_MAX_INSTRUCTIONS 65536u
@@ -50,15 +52,22 @@ typedef enum {
     /* v1.1: a=function id, b=parameter base, c=arity; entry marker. */
     MILENA_BC_FUNCTION = 17,
     /* v1.1: a=destination, b=function id, c=argument base, immediate=arity. */
-    MILENA_BC_CALL = 18
+    MILENA_BC_CALL = 18,
+    /* v1.2: a=destination, immediate is exactly 0.0 or 1.0. */
+    MILENA_BC_CONST_BOOL = 19
 } MilenaBytecodeOpcode;
+
+typedef enum {
+    MILENA_BC_TYPE_NUMBER = 1,
+    MILENA_BC_TYPE_BOOLEAN = 2
+} MilenaBytecodeType;
 
 typedef struct {
     uint8_t opcode;
     uint32_t a;
     uint32_t b;
     uint32_t c;
-    /* CONST_F64 carries a finite number; v1.1 CALL carries an exact arity. */
+    /* CONST_F64/CONST_BOOL carry a value; v1.1+ CALL carries exact arity. */
     double immediate;
 } MilenaBytecodeInstruction;
 
@@ -68,6 +77,11 @@ typedef struct {
     uint16_t register_count;
     size_t instruction_count;
     const MilenaBytecodeInstruction *instructions;
+    /* v1.2 only: one type per register and one return type per function. */
+    const uint8_t *register_types;
+    size_t register_type_count;
+    const uint8_t *function_return_types;
+    size_t function_return_type_count;
 } MilenaBytecodeProgram;
 
 typedef struct {
@@ -76,7 +90,7 @@ typedef struct {
     uint16_t max_registers;
     size_t max_bytecode_bytes;
     uint64_t max_steps;
-    /* Zero selects the 64-frame hard default; applies to v1.1 calls. */
+    /* Zero selects the 64-frame hard default; applies to v1.1+ calls. */
     uint16_t max_call_depth;
 } MilenaBytecodeLimits;
 
@@ -93,7 +107,8 @@ typedef enum {
     MILENA_BC_BAD_CONTROL_FLOW,
     MILENA_BC_OUT_OF_MEMORY,
     MILENA_BC_RUNTIME_ERROR,
-    MILENA_BC_STEP_LIMIT
+    MILENA_BC_STEP_LIMIT,
+    MILENA_BC_BAD_TYPE
 } MilenaBytecodeStatus;
 
 typedef struct {
@@ -102,13 +117,18 @@ typedef struct {
     char message[128];
 } MilenaBytecodeDiagnostic;
 
-/* Return the canonical encoded size, or false if count overflows/is over cap. */
+/* Return header + fixed-width record bytes (v1.0/v1.1 base), or false on overflow/cap. */
 bool milena_bytecode_encoded_size(size_t instruction_count, size_t *size_out);
+/* Return full v1.2 size including its register-type and function-return tables. */
+bool milena_bytecode_typed_encoded_size(size_t instruction_count,
+                                        uint16_t register_count,
+                                        uint16_t function_count,
+                                        size_t *size_out);
 
 /*
  * Encode into caller-owned storage. Set out=NULL/capacity=0 to query the
- * required size; BUFFER_TOO_SMALL is returned and *written receives the size.
- * Invalid programs do not modify the output buffer.
+ * required version-specific size; BUFFER_TOO_SMALL is returned and *written
+ * receives the size. Invalid programs do not modify the output buffer.
  */
 MilenaBytecodeStatus milena_bytecode_encode(
     const MilenaBytecodeProgram *program,
@@ -118,14 +138,14 @@ MilenaBytecodeStatus milena_bytecode_encode(
     const MilenaBytecodeLimits *limits,
     MilenaBytecodeDiagnostic *diagnostic);
 
-/* Validate the complete wire representation, operands, per-function CFG and call graph. */
+/* Validate complete wire representation, operands, types, per-function CFG and call graph. */
 MilenaBytecodeStatus milena_bytecode_verify(
     const uint8_t *bytes,
     size_t length,
     const MilenaBytecodeLimits *limits,
     MilenaBytecodeDiagnostic *diagnostic);
 
-/* Execute the verified numeric entry function with bounded fuel and call frames. */
+/* Execute verified bytecode entry function with bounded fuel and call frames. */
 MilenaBytecodeStatus milena_bytecode_run(
     const uint8_t *bytes,
     size_t length,
