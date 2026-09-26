@@ -52,6 +52,9 @@ static const char *const experimental_sources[] = {
 };
 static const char *const reference_sources[] = {"vm.c"};
 
+static bool file_exists(const char *path);
+static char *optional_read_file(const char *path);
+
 static void list_init(StringList *list)
 {
     list->items = NULL;
