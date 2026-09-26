@@ -1,0 +1,49 @@
+name: Experimental MLBC scalar compatibility, v1.3 data-plan wire verification, and native AOT
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bytecode-v1:
+    name: Scalar v1.0-v1.2, v1.3 wire and source lowering, and Linux x86-64 AOT (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and execute scalar bytecode, v1.3 wire plus canonical data-source lowering, source-to-HIR-to-AOT, and native-runtime tests (Linux x86-64)
+        run: |
+          set -euxo pipefail
+          make clean
+          make CC=${{ matrix.compiler }} test-bytecode
+      - name: Exercise the official VM and native-build CLI paths
+        run: |
+          set -euxo pipefail
+          make CC=${{ matrix.compiler }} test-bytecode-cli
+
+  bytecode-v1-sanitizers:
+    name: Bytecode and native AOT API ASan/UBSan regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and execute bytecode, canonical scalar and v1.3 data-plan lowering, and AOT tests under sanitizers
+        run: |
+          set -euxo pipefail
+          make clean
+          make CC=clang \
+            CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
+            LDFLAGS='-fsanitize=address,undefined -lm -pthread' \
+            test-bytecode

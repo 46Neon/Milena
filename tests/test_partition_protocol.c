@@ -23,6 +23,16 @@ int main(void) {
     assert(decoded.valid == original.valid);
     assert(decoded.value == original.value);
 
+    original.status = MILENA_ERR_LIMIT;
+    assert(milena_partition_result_encode(&original, buffer, sizeof(buffer),
+                                          &written, &error) == MILENA_OK);
+    assert(milena_partition_result_decode(buffer, written, &decoded,
+                                          &error) == MILENA_OK);
+    assert(decoded.status == MILENA_ERR_LIMIT);
+    original.status = MILENA_OK;
+    assert(milena_partition_result_encode(&original, buffer, sizeof(buffer),
+                                          &written, &error) == MILENA_OK);
+
     buffer[12] ^= 1u;
     assert(milena_partition_result_decode(buffer, written, &decoded,
                                           &error) == MILENA_ERR_DATA);

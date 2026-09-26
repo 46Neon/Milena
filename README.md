@@ -190,10 +190,17 @@ Uso directo:
 
 ```bash
 ./milena run examples/estadistica.milena
+./milena vm programa_escalar.milena
+./milena build programa_escalar.milena -o programa
+./programa
 ./milena inspect datos.csv
 ./milena analizar datos.csv reporte.json
 ./milena perfil datos.csv perfil.json
 ```
+
+`run` conserva la ruta existente del intérprete. `vm` compila a MLBC v1.2 desde la HIR escalar tipada canónica, verifica el bytecode y ejecuta esa entrada en la VM; muestra el resultado numérico en hexadecimal. `build <archivo.milena> -o <programa>` usa los mismos bytes verificados y emite un ejecutable nativo autónomo (no requiere después el fuente `.milena`) únicamente en Linux x86-64. En Windows, Termux/Android y otros destinos, `build` informa explícitamente que AOT no está soportado; la VM portable sigue disponible.
+
+Estos dos comandos nuevos son una ruta experimental explícita, no compatibilidad completa con el lenguaje. El subconjunto exacto es una función `principal` sin parámetros, ayudantes escalares numéricos no recursivos, variables numéricas/booleanas locales, asignación, aritmética numérica, comparaciones admitidas, llamadas resueltas y control `si`/`sino` con condición booleana; todas las rutas deben retornar un número. Globales, HIR de datos/tablas, parámetros de `principal`, recursión y demás construcciones no representadas se rechazan sin redirigir al intérprete. Para esas fuentes, usa la ruta normal `run` cuando la gramática existente lo admita. Los detalles, compatibilidad v1.0/v1.1 y límites pendientes están en [BYTECODE v1](docs/BYTECODE_V1.md). La integración CLI no completa la fase 2 ni la fase 3 completa del plan.
 
 También existe un constructor local de paquete Debian:
 
@@ -230,6 +237,10 @@ Ejecuta un ejemplo:
 ```powershell
 .\dist\windows\milena.exe run .\examples\estadistica.milena
 ```
+
+En Windows también está disponible el modo experimental `vm` para el subconjunto
+escalar documentado; `build` falla explícitamente porque el backend nativo está
+limitado a Linux x86-64.
 
 ### Termux
 

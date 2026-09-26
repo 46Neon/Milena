@@ -54,7 +54,7 @@ MilenaStatus milena_partition_result_encode(
     const MilenaPartitionResult *result, unsigned char *buffer,
     size_t capacity, size_t *written, MilenaError *error) {
     if (!result || !buffer || !written || capacity < MILENA_PARTITION_RESULT_WIRE_SIZE ||
-        result->status < MILENA_OK || result->status > MILENA_ERR_INTERNAL ||
+        result->status < MILENA_OK || result->status > MILENA_ERR_LIMIT ||
         (result->valid && !isfinite(result->value))) {
         protocol_error(error, MILENA_ERR_ARGUMENT,
                        "El resultado de partición no se puede serializar");
@@ -99,7 +99,7 @@ MilenaStatus milena_partition_result_decode(
     }
     uint64_t flags = get_u64(buffer + 20);
     uint64_t raw_status = flags & UINT64_C(0xffffffff);
-    if (raw_status > MILENA_ERR_INTERNAL) {
+    if (raw_status > MILENA_ERR_LIMIT) {
         protocol_error(error, MILENA_ERR_DATA,
                        "El estado del resultado de partición es inválido");
         return MILENA_ERR_DATA;

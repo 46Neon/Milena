@@ -25,6 +25,13 @@ void dataset_destroy(Dataset *dataset);
 MilenaStatus dataset_load_csv_with_limits(Dataset *dataset, const char *filename,
                                         char delimiter, const DatasetLimits *limits,
                                         MilenaError *error);
+/* The byte budget counts physical input bytes from the first header byte through
+ * every record terminator. A zero budget accepts only an empty file (which still
+ * returns the existing empty-CSV data error). Limit failures return LIMIT and
+ * leave the destination Dataset unchanged. */
+MilenaStatus dataset_load_csv_with_limits_and_byte_budget(
+    Dataset *dataset, const char *filename, char delimiter,
+    const DatasetLimits *limits, size_t max_file_bytes, MilenaError *error);
 MilenaStatus dataset_load_csv(Dataset *dataset, const char *filename,
                             char delimiter, MilenaError *error);
 MilenaStatus dataset_save_json(const Dataset *dataset, const char *filename,

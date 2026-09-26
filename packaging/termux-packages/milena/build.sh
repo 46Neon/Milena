@@ -17,8 +17,9 @@ TERMUX_PKG_BUILD_IN_SRC=true
 termux_step_make() {
     # build-package.sh supplies the Termux Clang/Bionic flags.  Keep the
     # canonical lexer -> parser -> AST -> semantic -> runtime -> MilenaTable
-    # source list from Makefile; tests and experimental compiler/IR/VM sources
-    # are not part of this package build.
+    # source list from Makefile; tests, unfinished compiler/IR/VM modules, and the
+    # Linux-only native AOT object are not part of this package build. The
+    # bounded MLBC verifier/VM CLI slice itself is portable and is included.
     make TERMUX=1 \
         CC="${CC:-clang}" \
         CFLAGS="${CFLAGS:--std=c17 -Oz -ffunction-sections -fdata-sections -Iinclude}" \

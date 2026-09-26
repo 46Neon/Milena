@@ -3,7 +3,7 @@
 static MilenaErrorCategory error_category(MilenaStatus code) {
     if (code == MILENA_ERR_PARSE) return MILENA_ERROR_SINTAXIS;
     if (code == MILENA_ERR_TYPE) return MILENA_ERROR_TIPO;
-    if (code == MILENA_ERR_DATA) return MILENA_ERROR_DATOS;
+    if (code == MILENA_ERR_DATA || code == MILENA_ERR_LIMIT) return MILENA_ERROR_DATOS;
     if (code == MILENA_ERR_MEMORY) return MILENA_ERROR_MEMORIA;
     if (code == MILENA_ERR_ARGUMENT || code == MILENA_ERR_INTERNAL) return MILENA_ERROR_EJECUCION;
     return MILENA_ERROR_NINGUNO;
@@ -55,6 +55,7 @@ const char *milena_status_name(MilenaStatus status) {
         case MILENA_ERR_OVERFLOW: return "OVERFLOW";
         case MILENA_ERR_UNSUPPORTED: return "UNSUPPORTED";
         case MILENA_ERR_INTERNAL: return "INTERNAL";
+        case MILENA_ERR_LIMIT: return "LIMIT";
         default: return "UNKNOWN";
     }
 }

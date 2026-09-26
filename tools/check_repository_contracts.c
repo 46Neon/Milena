@@ -28,7 +28,7 @@ typedef struct {
 } StringList;
 
 static const char *const product_sources[] = {
-    "analysis.c", "array.c", "arrow_ipc.c", "canonical_compiler.c", "common.c",
+    "analysis.c", "array.c", "arrow_ipc.c", "bytecode.c", "bytecode_compiler.c", "bytecode_data.c", "canonical_compiler.c", "common.c",
     "dataset.c", "entrypoints.c", "external_merge.c", "external_sort.c",
     "finance.c", "group_key_codec.c", "grouped_aggregate.c", "interpreter.c",
     "language_grouped_spill.c", "language_runtime.c", "logger.c", "main.c",
@@ -48,7 +48,7 @@ static const char *const function_sources[] = {
 };
 static const char *const experimental_sources[] = {
     "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c", "instructions.c",
-    "ir.c", "module.c", "semantic.c", "temp_scope.c", "vm.c"
+    "ir.c", "module.c", "semantic.c", "temp_scope.c", "vm.c", "bytecode_native.c"
 };
 
 static void list_init(StringList *list)
@@ -591,7 +591,7 @@ static void check_compiler_boundary(int argc, char **argv)
         free(makefile);
         exit(EXIT_FAILURE);
     }
-    (void)printf("Compiler/IR/VM boundary: OK (experimental modules excluded from official SOURCES)\n");
+    (void)printf("Compiler/IR/VM boundary: OK (unfinished stack excluded; explicit typed-bytecode CLI remains bounded)\n");
     list_free(&errors);
     free(makefile);
 }
@@ -898,7 +898,7 @@ static void check_stream_architecture(void)
     need(manifest_make != NULL, "Makefile no contiene el final de SOURCES reconocible");
     {
         Span product_span = {make_sources, manifest_make};
-        static const char *const forbidden_tokens[] = {"compiler.c", "ir.c", "vm.c", "gc.c", "arena.c"};
+        static const char *const forbidden_tokens[] = {"compiler.c", "ir.c", "vm.c", "gc.c", "arena.c", "bytecode_native.c"};
         for (index = 0U; index < ARRAY_COUNT(forbidden_tokens); ++index) {
             if (token_boundary_match(product_span, forbidden_tokens[index])) {
                 (void)fprintf(stderr, "experimental module leaked into product build: %s\n", forbidden_tokens[index]);
@@ -1970,7 +1970,7 @@ static void check_termux_packaging(void)
         "upload-artifact@v4", "if-no-files-found: error"
     };
     static const char *const builder_required[] = {"tools/validate_termux_elf", "README.md", "SOURCE_DATE_EPOCH", ".provenance.json", "TERMUX=1"};
-    static const char *const builder_forbidden[] = {"cp -R examples", "tests/", "include/", "src/compiler.c", "src/ir.c", "src/vm.c"};
+    static const char *const builder_forbidden[] = {"cp -R examples", "tests/", "include/", "src/compiler.c", "src/ir.c", "src/vm.c", "src/bytecode_native.c"};
     static const char *const readmes[] = {"README.md", "packaging/README.md", "packaging/termux/README.md"};
     StringList errors;
     size_t index;
@@ -2010,11 +2010,12 @@ static void check_termux_packaging(void)
         list_add(&errors, "Makefile lacks explicit Termux build/install variables");
     }
     if (makefile != NULL) {
-        static const char *const experimental[] = {"src/compiler.c", "src/ir.c", "src/vm.c"};
+        static const char *const experimental[] = {"compiler.c", "ir.c", "vm.c", "bytecode_native.c"};
         static const char *const forbidden_make[] = {"/usr/bin", "/usr/local", "apt-get", "__GLIBC__"};
+        Span product_source_span = find_make_sources(makefile);
         for (index = 0U; index < ARRAY_COUNT(experimental); ++index) {
-            if (contains(makefile, experimental[index])) {
-                list_addf(&errors, "experimental source enters canonical Makefile: %s", experimental[index]);
+            if (make_has_source_token(product_source_span, experimental[index], true)) {
+                list_addf(&errors, "experimental source enters canonical Makefile SOURCES: %s", experimental[index]);
             }
         }
         for (index = 0U; index < ARRAY_COUNT(forbidden_make); ++index) {

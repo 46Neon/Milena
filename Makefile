@@ -23,6 +23,51 @@ SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/da
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
           src/sst_correlation.c src/sst_normality.c src/logger.c src/metrics.c src/stream.c src/source_reader.c src/group_key_codec.c src/partition_plan.c src/partition_executor.c src/partition_reduce.c src/process_executor.c src/partition_protocol.c src/partition_protocol_reduce.c src/spill_store.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/mergeable_aggregate.c src/grouped_aggregate.c src/external_merge.c src/external_sort.c src/query_plan.c src/entrypoints.c src/sqlite_backend.c third_party/sqlite/sqlite3.c
+# The typed bytecode verifier, VM, and canonical-HIR lowerer back the explicit
+# `vm` CLI command on every supported product target.
+SOURCES += src/bytecode.c src/bytecode_data.c src/bytecode_compiler.c
+# Native AOT is linked only for a native Linux x86-64 build, never for Termux,
+# Windows, Android, or a cross/other-architecture product. CLI tests also link
+# an alternate entrypoint without the native capability to exercise rejection.
+BYTECODE_NATIVE ?= auto
+BYTECODE_HOST := $(shell uname -s 2>/dev/null)-$(shell uname -m 2>/dev/null)
+BYTECODE_CC_TARGET := $(shell $(CC) -dumpmachine 2>/dev/null)
+ifeq ($(BYTECODE_NATIVE),auto)
+ifneq ($(TERMUX),1)
+ifeq ($(BYTECODE_HOST),Linux-x86_64)
+ifeq ($(findstring android,$(BYTECODE_CC_TARGET)),)
+ifneq ($(filter x86_64%-linux%,$(BYTECODE_CC_TARGET)),)
+BYTECODE_NATIVE := 1
+else
+BYTECODE_NATIVE := 0
+endif
+else
+BYTECODE_NATIVE := 0
+endif
+else
+BYTECODE_NATIVE := 0
+endif
+else
+BYTECODE_NATIVE := 0
+endif
+endif
+BYTECODE_NATIVE_OBJECTS =
+ifeq ($(BYTECODE_NATIVE),1)
+ifneq ($(BYTECODE_HOST),Linux-x86_64)
+$(error Native bytecode AOT requires a native Linux x86-64 host)
+endif
+ifeq ($(filter x86_64%-linux%,$(BYTECODE_CC_TARGET)),)
+$(error Native bytecode AOT requires an x86-64 Linux compiler target)
+endif
+ifneq ($(findstring android,$(BYTECODE_CC_TARGET)),)
+$(error Native bytecode AOT is not supported on Android/Termux)
+endif
+ifeq ($(TERMUX),1)
+$(error Native bytecode AOT must not be enabled in a Termux build)
+endif
+BYTECODE_NATIVE_OBJECTS = src/bytecode_native.o
+CPPFLAGS += -DMILENA_BYTECODE_NATIVE_AVAILABLE=1
+endif
 OBJECTS = $(SOURCES:.c=.o)
 SOURCES_NO_MAIN = $(filter-out src/main.c,$(SOURCES))
 TEST_SOURCES_NO_MAIN = $(filter-out third_party/sqlite/sqlite3.c,$(SOURCES_NO_MAIN))
@@ -30,8 +75,9 @@ TEST_SQLITE_OBJECT = third_party/sqlite/sqlite3.o
 FUNCTION_OBJECTS = src/function_parser.o src/user_functions.o
 TARGET = milena
 
-.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-markdown-links check-compiler-boundary test-termux-packaging test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer test-ast-validation check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-hir-ast-coverage debug
+.PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-markdown-links check-compiler-boundary test-termux-packaging test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-dataset-byte-budget test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer test-ast-validation check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-hir-ast-coverage debug
 
+.PHONY: test-bytecode test-bytecode-data test-bytecode-data-compiler test-bytecode-compiler test-bytecode-native test-bytecode-cli
 .PHONY: test-common-tokenizer
 test-common-tokenizer: tests/test_common_tokenizer
 	./tests/test_common_tokenizer
@@ -80,6 +126,12 @@ test-table-worker4: tests/test_table_worker4
 
 tests/test_table_worker4: tests/test_table_worker4.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_table_worker4.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c $(LDFLAGS) -o $@
+
+test-dataset-byte-budget: tests/test_dataset_byte_budget
+	./tests/test_dataset_byte_budget
+
+tests/test_dataset_byte_budget: tests/test_dataset_byte_budget.c src/dataset.c src/common.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 test-pr21-regressions: tests/test_pr21_regressions
 	./tests/test_pr21_regressions
@@ -340,6 +392,68 @@ check-hir-ast-coverage:
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
+# Regression suite for scalar compatibility, the v1.3 data-plan wire codec,
+# canonical source/HIR lowering, and the explicitly experimental scalar AOT slice.
+test-bytecode: tests/test_bytecode tests/test_bytecode_data tests/test_bytecode_data_compiler tests/test_bytecode_compiler tests/test_bytecode_native
+	./tests/test_bytecode
+	./tests/test_bytecode_data
+	$(MAKE) --no-print-directory test-bytecode-data-compiler
+	./tests/test_bytecode_compiler
+	./tests/test_bytecode_native
+
+test-bytecode-data: tests/test_bytecode_data tests/test_bytecode_data_compiler
+	./tests/test_bytecode_data
+	$(MAKE) --no-print-directory test-bytecode-data-compiler
+
+test-bytecode-data-compiler: tests/test_bytecode_data_compiler
+	./tests/test_bytecode_data_compiler
+
+test-bytecode-compiler: tests/test_bytecode_compiler
+	./tests/test_bytecode_compiler
+
+test-bytecode-native: tests/test_bytecode_native
+	./tests/test_bytecode_native
+
+ifeq ($(BYTECODE_NATIVE),1)
+BYTECODE_CLI_TEST_ARGS = ./$(TARGET) ./tests/milena-no-native
+test-bytecode-cli: $(TARGET) tests/milena-no-native
+else
+BYTECODE_CLI_TEST_ARGS = ./$(TARGET)
+test-bytecode-cli: $(TARGET)
+endif
+	sh tests/test_bytecode_cli.sh $(BYTECODE_CLI_TEST_ARGS)
+
+# A second CLI executable without the platform-specific AOT compile define lets
+# the Linux integration test verify the explicit unsupported-target behavior.
+tests/bytecode-cli-main-no-native.o: src/main.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -UMILENA_BYTECODE_NATIVE_AVAILABLE -c $< -o $@
+
+tests/milena-no-native: $(filter-out src/main.o,$(OBJECTS)) $(FUNCTION_OBJECTS) tests/bytecode-cli-main-no-native.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
+
+tests/test_bytecode: tests/test_bytecode.c src/bytecode.c include/bytecode.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< src/bytecode.c $(LDFLAGS) -o $@
+
+tests/test_bytecode_data: tests/test_bytecode_data.c src/bytecode_data.c src/bytecode.c include/bytecode.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_bytecode_data.c src/bytecode_data.c src/bytecode.c $(LDFLAGS) -o $@
+
+BYTECODE_COMPILER_TEST_SOURCES = src/bytecode_compiler.c src/bytecode_native.c src/bytecode.c \
+	src/bytecode_data.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c \
+	src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c \
+	src/schema.c src/common.c src/interpreter.c src/symbol.c
+
+tests/test_bytecode_compiler: tests/test_bytecode_compiler.c $(BYTECODE_COMPILER_TEST_SOURCES) \
+	include/bytecode_compiler.h include/canonical_compiler.h include/bytecode.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
+
+tests/test_bytecode_data_compiler: tests/test_bytecode_data_compiler.c $(BYTECODE_COMPILER_TEST_SOURCES) \
+	include/bytecode_compiler.h include/canonical_compiler.h include/bytecode.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
+
+tests/test_bytecode_native: tests/test_bytecode_native.c src/bytecode_native.c src/bytecode.c src/common.c \
+	include/bytecode_compiler.h include/bytecode.h include/common.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
+
 tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
@@ -377,7 +491,8 @@ benchmark-stream-grouped-spill: $(TARGET)
 	python3 benchmarks/grouped_spill_benchmark.py --repetitions 1
 
 # Build targets consumed by the Termux recipe. They never build tests or the
-# experimental compiler/IR/VM sources and never assume a Debian filesystem.
+# unfinished compiler/IR/VM stack and never assume a Debian filesystem. The
+# explicit portable MLBC v1.2 VM CLI is part of SOURCES; Linux-only AOT is not.
 termux-build:
 	$(MAKE) clean
 	$(MAKE) TERMUX=1 CC="$${CC:-clang}" CFLAGS="$${CFLAGS:-$(TERMUX_CFLAGS)}" LDFLAGS="$${LDFLAGS:-$(TERMUX_LDFLAGS)}" all tools/validate_termux_elf
@@ -397,8 +512,8 @@ termux-install: termux-build
 termux-contract:
 	bash scripts/termux-native-contract.sh
 
-$(TARGET): $(OBJECTS) $(FUNCTION_OBJECTS)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJECTS) $(FUNCTION_OBJECTS) $(LDFLAGS) -o $@
+$(TARGET): $(OBJECTS) $(FUNCTION_OBJECTS) $(BYTECODE_NATIVE_OBJECTS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(OBJECTS) $(FUNCTION_OBJECTS) $(BYTECODE_NATIVE_OBJECTS) $(LDFLAGS) -o $@
 
 third_party/sqlite/%.o: third_party/sqlite/%.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -w $(SQLITE_CFLAGS) -c $< -o $@
@@ -416,15 +531,16 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
+test: test-bytecode test-bytecode-cli check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-dataset-byte-budget test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
 	./tests/run_tests.sh
 	./tests/run_tests.sh
 	./benchmarks/benchmark --help && rm -f benchmarks/benchmark
 
 clean:
+	rm -f src/bytecode_native.o tests/test_bytecode tests/test_bytecode_data tests/test_bytecode_compiler tests/test_bytecode_native tests/milena-no-native tests/bytecode-cli-main-no-native.o
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tools/check_architecture tools/check_repository_contracts tools/validate_termux_elf tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
-		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/check_arrow_ipc_fixtures tests/test_common_tokenizer tests/test_canonical_compiler tests/test_termux_packaging benchmarks/grouped_stream_benchmark tests/test_sqlite_backend tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
+		tests/test_dataset_byte_budget tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/check_arrow_ipc_fixtures tests/test_common_tokenizer tests/test_canonical_compiler tests/test_termux_packaging benchmarks/grouped_stream_benchmark tests/test_sqlite_backend tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
 
 # Opt-in end-to-end million-row validation; it remains outside ordinary make test.
 .PHONY: scale-million-row

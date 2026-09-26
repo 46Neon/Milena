@@ -99,10 +99,14 @@ typedef struct {
     struct {
         char *name;
         size_t resolved_symbol_id;
+        MilenaHIRValueType value_type;
     } *parameters;
     size_t parameter_count;
     MilenaHIRStatement **body;
     size_t body_count;
+    /* Resolved from the typed RETURN statements in this function's HIR body. */
+    MilenaHIRValueType return_type;
+    bool return_type_resolved;
 } MilenaHIRFunction;
 
 typedef struct {
