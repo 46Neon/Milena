@@ -174,7 +174,7 @@ test-grouped-stream-spill-runtime: $(TARGET)
 test-data-engine-parity: $(TARGET)
 	sh tests/test_data_engine_parity.sh
 
-tests/test_query_plan: tests/test_query_plan.c src/query_plan.c src/ast.c src/common.c
+tests/test_query_plan: tests/test_query_plan.c src/query_plan.c src/ast.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
 test-grouped-aggregate: tests/test_grouped_aggregate
