@@ -1061,6 +1061,87 @@ static ASTNode *parse_human_stream_export(Parser *parser) {
     return export_node;
 }
 
+/* Materialized dataset loads reuse the source-limit vocabulary already used by
+ * datos desde, but keep these fields separate so the streaming route is inert. */
+static bool parse_materialized_source_limits(Parser *parser, ASTNode *load) {
+    if (!parser || !load) return false;
+    while (parser_is_identifier(parser) &&
+           strcmp(parser->current.lexeme, "con") == 0) {
+        parser_advance(parser);
+        if (parser_match(parser, TOKEN_KW_FILAS)) {
+            parser_advance(parser);
+            if (load->source_max_rows != 0) {
+                parser_error(parser, "El límite materializado de filas no se puede repetir");
+                return false;
+            }
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de filas") ||
+                !parser_expect(parser, TOKEN_NUMERO, "El límite de filas debe ser numérico")) return false;
+            double value = parser->previous.number_value;
+            if (!isfinite(value) || value < 1.0 || value > 1000000000.0 || floor(value) != value) {
+                parser_error(parser, "El límite de filas debe ser un entero entre 1 y 1000000000");
+                return false;
+            }
+            load->source_max_rows = (size_t)value;
+        } else if (parser_is_identifier(parser) &&
+                   strcmp(parser->current.lexeme, "columnas") == 0) {
+            parser_advance(parser);
+            if (load->source_max_columns != 0) {
+                parser_error(parser, "El límite materializado de columnas no se puede repetir");
+                return false;
+            }
+            if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de columnas") ||
+                !parser_expect(parser, TOKEN_NUMERO, "El límite de columnas debe ser numérico")) return false;
+            double value = parser->previous.number_value;
+            if (!isfinite(value) || value < 1.0 || value > 4096.0 || floor(value) != value) {
+                parser_error(parser, "El límite de columnas debe ser un entero entre 1 y 4096");
+                return false;
+            }
+            load->source_max_columns = (size_t)value;
+        } else if (parser_match(parser, TOKEN_KW_REGISTROS)) {
+            parser_advance(parser);
+            if (load->source_max_record_bytes != 0) {
+                parser_error(parser, "El límite materializado de registro no se puede repetir");
+                return false;
+            }
+            if (!parser_expect_word(parser, "de", "Se esperaba 'de' después de registros") ||
+                !parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de registros") ||
+                !parser_expect(parser, TOKEN_NUMERO, "El límite de registro debe ser numérico")) return false;
+            double value = parser->previous.number_value;
+            if (!isfinite(value) || value < 0.004 || value > 64.0 ||
+                floor(value * 1024.0) != value * 1024.0) {
+                parser_error(parser, "El límite debe estar entre 0.004 y 64 MiB");
+                return false;
+            }
+            if (!parser_match(parser, TOKEN_KW_MIB)) {
+                parser_error(parser, "Se esperaba la unidad 'MiB'");
+                return false;
+            }
+            parser_advance(parser);
+            load->source_max_record_bytes = (size_t)(value * 1024.0 * 1024.0);
+        } else if (parser_is_identifier(parser) &&
+                   strcmp(parser->current.lexeme, "tiempo") == 0) {
+            parser_advance(parser);
+            if (load->source_max_elapsed_milliseconds != 0.0) {
+                parser_error(parser, "El límite materializado de tiempo no se puede repetir");
+                return false;
+            }
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de tiempo") ||
+                !parser_expect(parser, TOKEN_NUMERO, "El presupuesto de tiempo debe ser numérico")) return false;
+            double value = parser->previous.number_value;
+            if (!isfinite(value) || value < 1.0 || value > 3600000.0 || floor(value) != value) {
+                parser_error(parser, "El límite de tiempo debe ser un entero de 1 a 3600000 ms");
+                return false;
+            }
+            if (!parser_expect_word(parser, "ms", "Se esperaba la unidad 'ms'")) return false;
+            load->source_max_elapsed_milliseconds = value;
+        } else {
+            parser_error(parser, "Se esperaba 'filas', 'columnas', 'registros' o 'tiempo' después de 'con'");
+            return false;
+        }
+    }
+    return !parser->has_error;
+}
+
 static ASTNode* parse_bloque_analisis(Parser *parser) {
     Token block_start = parser->current;
     if (!parser_expect(parser, TOKEN_PUNTO, "Se esperaba '.'")) return NULL;
@@ -1254,6 +1335,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         if (cargar && !parser_add_child(parser, node, cargar,
                                                         "Sin memoria para cargar")) break;
                         parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
+                        if (cargar && !streaming &&
+                            !parse_materialized_source_limits(parser, cargar)) break;
                     }
                 }
             }

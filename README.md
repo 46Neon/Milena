@@ -133,6 +133,26 @@ Ejecútalo con:
 ./milena run ventas.milena
 ```
 
+#### Límites de carga materializada
+
+La sintaxis heredada `dataset cargar datos("...")` conserva sus defaults si no
+se añaden cláusulas: 5.000 filas, 70 columnas, y el límite de registro histórico
+derivado de 1 MiB por campo y el número físico de columnas. Puede configurarse
+por fuente, sin cambiar a streaming:
+
+```milena
+dataset cargar datos("datos/ventas.csv") con filas hasta 100000 con columnas de 64 con registros de hasta 8 MiB con tiempo hasta 30000 ms
+```
+
+Los límites explícitos de filas (1–1.000.000.000), columnas (1–4096), registro
+(5 KiB–64 MiB, pasos de 1 KiB) y tiempo (1–3.600.000 ms) se validan antes de
+cargar; una cláusula no se puede repetir ni ser cero. Al superar un límite falla
+la carga antes de publicar y el archivo de reporte previo permanece intacto.
+No se declara un presupuesto de memoria/RSS: la carga sigue materializando las
+cadenas, punteros y tabla completa, y parser/allocator y estructuras derivadas
+no se contabilizan en una cuota de bytes. Usa la ruta `datos desde` descrita a
+continuación cuando el plan admita CSV en streaming; no hay fallback automático.
+
 ### Modo flujo para grandes CSV
 
 Para resúmenes numéricos que no necesitan conservar toda la tabla, Milena ofrece

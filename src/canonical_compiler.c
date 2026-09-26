@@ -791,6 +791,11 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             hir->source.resolved_dataset_id = 1;
             hir->source.streaming = false;
             hir->source.chunk_rows = 0;
+            hir->source.max_rows = node->source_max_rows;
+            hir->source.max_columns = node->source_max_columns;
+            hir->source.max_record_bytes = node->source_max_record_bytes;
+            hir->source.max_elapsed_milliseconds =
+                node->source_max_elapsed_milliseconds;
             if (node->has_source_span) hir_source_span(&hir->source.span, node);
             if (!hir->source.path) { data_hir_release(hir); return HIR_BUILD_MEMORY; }
             continue;

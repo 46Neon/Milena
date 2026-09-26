@@ -2011,7 +2011,31 @@ MilenaStatus milena_run_dataset_program(const char *source,
 
     MilenaDatasetRuntime runtime = {0};
     dataset_init(&runtime.dataset);
-    status = dataset_load_csv(&runtime.dataset, input, ',', error);
+    DatasetLoadLimits source_limits = dataset_default_load_limits();
+    if (load->source_max_rows) source_limits.max_rows = load->source_max_rows;
+    if (load->source_max_columns)
+        source_limits.max_columns = load->source_max_columns;
+    if (load->source_max_record_bytes) {
+        source_limits.max_record_bytes = load->source_max_record_bytes;
+        source_limits.max_field_bytes = 0;
+    }
+    if (load->source_max_elapsed_milliseconds != 0.0)
+        source_limits.max_elapsed_milliseconds =
+            load->source_max_elapsed_milliseconds;
+    if (source_program.data_hir &&
+        (source_program.data_hir->source.max_rows != load->source_max_rows ||
+         source_program.data_hir->source.max_columns != load->source_max_columns ||
+         source_program.data_hir->source.max_record_bytes !=
+             load->source_max_record_bytes ||
+         source_program.data_hir->source.max_elapsed_milliseconds !=
+             load->source_max_elapsed_milliseconds)) {
+        runtime_error(error, MILENA_ERR_DATA,
+                      "Los límites CSV del AST no coinciden con la fuente HIR");
+        status = MILENA_ERR_DATA;
+    } else {
+        status = dataset_load_csv_with_resource_limits(&runtime.dataset, input,
+            ',', &source_limits, error);
+    }
     if (status == MILENA_OK) runtime.loaded = true;
     if (status == MILENA_OK) {
         for (size_t i = 0; i < analysis->child_count; i++) {

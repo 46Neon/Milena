@@ -44,3 +44,41 @@ el código de salida y la razón del límite.
 La sintaxis del lenguaje sigue pasando por lexer → parser → AST → semántica →
 runtime. Estos campos son parte del contrato de recursos del backend y no una
 segunda ruta de ejecución.
+
+## Carga CSV materializada
+
+La fuente materializada heredada `dataset cargar datos("entrada.csv")` puede
+fijar límites opcionales en esa misma declaración:
+
+```milena
+dataset cargar datos("entrada.csv") con filas hasta 100000 con columnas de 64 con registros de hasta 8 MiB con tiempo hasta 30000 ms
+```
+
+`filas` acepta 1–1.000.000.000; `columnas`, 1–4096; `registros`, 5 KiB–64 MiB
+en pasos de 1 KiB; y `tiempo`, 1–3.600.000 ms. Cada cláusula se admite una sola
+vez; los valores cero y las repeticiones se rechazan. Si una cláusula se omite,
+se conserva el default materializado previo: máximo de 5.000 filas, 70 columnas
+y el límite legado de registro derivado de 1 MiB por campo y el número físico de
+columnas; no se activa timeout. La ruta `datos desde`/`dataset cargar flujo`
+permanece separada y no se cambia ni se selecciona automáticamente como
+fallback.
+
+Los límites de filas, columnas y bytes de registro se aplican en el cargador:
+los registros están acotados antes de crecer su búfer, y el número de campos del
+encabezado se cuenta antes de construir sus strings. El registro incluye bytes
+CSV lógicos y saltos internos normalizados, pero excluye el NUL y el separador de
+registro. El límite de tiempo se consulta durante la lectura y entre fases de
+parseo de registros; no interrumpe de forma preemptiva una llamada de I/O o una
+operación individual de parseo ya iniciada. Si cualquier límite vence, el
+cargador destruye su `Dataset` temporal, devuelve error y no sustituye el
+`Dataset` previo; el runtime tampoco inicia publicación del reporte, por lo que
+un destino ya existente permanece intacto.
+
+No hay un presupuesto materializado de bytes de memoria ni un límite de RSS.
+Filas, columnas y bytes de registro acotan dimensiones del input, no el costo
+completo del heap: el arreglo de punteros a filas, copias de strings, cabeceras,
+capacidad sobrante, parser y metadatos del allocator, la conversión a
+`MilenaTable` y las operaciones posteriores no están contabilizados como una
+cuota de memoria. Un fallo de asignación es error, pero los límites del cargador
+no garantizan un techo de memoria de proceso ni protegen contra las políticas de
+overcommit del sistema.

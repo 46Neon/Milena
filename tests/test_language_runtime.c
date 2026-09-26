@@ -1,4 +1,5 @@
 #include "language_runtime.h"
+#include "canonical_compiler.h"
 #include "language_grouped_spill.h"
 #include "language_semantic.h"
 #include "query_plan.h"
@@ -34,6 +35,121 @@ static bool write_file(const char *path, const char *content) {
     bool ok = fwrite(content, 1, length, file) == length && fclose(file) == 0;
     if (!ok) fclose(file);
     return ok;
+}
+
+static int expect_materialized_limit_failure(const char *csv_path,
+    const char *csv_content, const char *source_options,
+    const char *output_path, const char *program_path,
+    const char *expected_error_fragment) {
+    CHECK(write_file(csv_path, csv_content), "límites materializados: no se pudo crear el CSV");
+    CHECK(write_file(output_path, "keep-prior-destination\n"),
+          "límites materializados: no se pudo preparar el destino previo");
+    char source[2048];
+    int length = snprintf(source, sizeof(source),
+        ".analisis limites_materializados {\n"
+        "  variable importe numerica\n"
+        "  dataset cargar datos(\"%s\") %s\n"
+        "  resumir { suma de \"importe\"; }\n"
+        "  guardar resultado en \"%s\"\n"
+        "}\n", csv_path, source_options, output_path);
+    CHECK(length > 0 && (size_t)length < sizeof(source),
+          "límites materializados: la fuente del programa se truncó");
+    MilenaError error;
+    milena_error_clear(&error);
+    MilenaStatus status = milena_run_dataset_program(source, program_path, NULL, &error);
+    CHECK(status == MILENA_ERR_DATA,
+          error.message[0] ? error.message : "límites materializados: el límite debía fallar");
+    CHECK(expected_error_fragment == NULL ||
+          strstr(error.message, expected_error_fragment) != NULL,
+          "límites materializados: falló un límite distinto del esperado");
+    char previous[128];
+    CHECK(read_file(output_path, previous, sizeof(previous)) &&
+          strcmp(previous, "keep-prior-destination\n") == 0,
+          "límites materializados: un fallo alteró el destino previo");
+    remove(csv_path);
+    remove(output_path);
+    return 0;
+}
+
+static int run_materialized_source_limits(void) {
+    MilenaError error;
+    const char *typed_source =
+        ".analisis limites_hir {\n"
+        "  variable importe numerica\n"
+        "  dataset cargar datos(\"missing-materialized-limits.csv\") con filas hasta 1 con columnas de 2 con registros de hasta 0.0048828125 MiB con tiempo hasta 30000 ms\n"
+        "  resumir { suma de \"importe\"; }\n"
+        "  guardar resultado en \"unused-limits.json\"\n"
+        "}\n";
+    MilenaCanonicalProgram canonical;
+    milena_canonical_program_init(&canonical);
+    milena_error_clear(&error);
+    CHECK(milena_canonical_program_parse(&canonical, typed_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(canonical.data_hir != NULL &&
+          canonical.data_hir->source.max_rows == 1u &&
+          canonical.data_hir->source.max_columns == 2u &&
+          canonical.data_hir->source.max_record_bytes == 5120u &&
+          canonical.data_hir->source.max_elapsed_milliseconds == 30000.0,
+          "límites materializados: AST/HIR no conservó las cuatro políticas de fuente");
+    milena_canonical_program_release(&canonical);
+
+    CHECK(expect_materialized_limit_failure(
+        "test-materialized-row-limit.csv", "importe\n1\n2\n",
+        "con filas hasta 1", "test-materialized-row-limit.json",
+        "test-materialized-row-limit.milena", "filas") == 0,
+        "límite de filas materializado no se aplicó antes de publicar");
+    CHECK(expect_materialized_limit_failure(
+        "test-materialized-column-limit.csv", "\"clave,extendida\",importe\nA,1\n",
+        "con columnas de 1", "test-materialized-column-limit.json",
+        "test-materialized-column-limit.milena", "columnas") == 0,
+        "límite de columnas materializado no se aplicó al encabezado CSV");
+
+    size_t record_length = 6000u;
+    char *record_content = (char *)malloc(record_length + 16u);
+    CHECK(record_content != NULL, "límite de registro: sin memoria para la prueba");
+    memcpy(record_content, "importe\n", 8u);
+    memset(record_content + 8u, 'x', record_length);
+    record_content[8u + record_length] = '\n';
+    record_content[9u + record_length] = '\0';
+    CHECK(expect_materialized_limit_failure(
+        "test-materialized-record-limit.csv", record_content,
+        "con registros de hasta 0.0048828125 MiB",
+        "test-materialized-record-limit.json",
+        "test-materialized-record-limit.milena", "registro") == 0,
+        "límite de registro materializado no se aplicó durante la lectura");
+    free(record_content);
+
+    size_t slow_record_length = 8u * 1024u * 1024u;
+    char *slow_content = (char *)malloc(slow_record_length + 16u);
+    CHECK(slow_content != NULL, "límite de tiempo: sin memoria para la prueba");
+    memcpy(slow_content, "importe\n", 8u);
+    memset(slow_content + 8u, 'x', slow_record_length);
+    slow_content[8u + slow_record_length] = '\n';
+    slow_content[9u + slow_record_length] = '\0';
+    CHECK(expect_materialized_limit_failure(
+        "test-materialized-time-limit.csv", slow_content,
+        "con tiempo hasta 1 ms", "test-materialized-time-limit.json",
+        "test-materialized-time-limit.milena", "tiempo") == 0,
+        "límite de tiempo materializado no se aplicó durante la lectura");
+    free(slow_content);
+
+    const char *invalid_source =
+        ".analisis limite_cero {\n"
+        "  dataset cargar datos(\"test-materialized-row-limit.csv\") con filas hasta 0\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(invalid_source,
+        "test-materialized-invalid-limit.milena", NULL, &error) == MILENA_ERR_PARSE,
+        "límites materializados: el valor cero debió rechazarse por el parser");
+    const char *duplicate_source =
+        ".analisis limite_repetido {\n"
+        "  dataset cargar datos(\"missing-materialized-limits.csv\") con filas hasta 2 con filas hasta 3\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(duplicate_source,
+        "test-materialized-duplicate-limit.milena", NULL, &error) == MILENA_ERR_PARSE,
+        "límites materializados: las declaraciones repetidas debieron rechazarse");
+    return 0;
 }
 
 static int run_arrays(void) {
@@ -875,6 +991,8 @@ int main(void) {
     CHECK(run_typed_sql_semantics() == 0,
           "falló la fase de AST y semántica SQL tipados");
     CHECK(run_arrays() == 0, "falló la fase de arrays");
+    CHECK(run_materialized_source_limits() == 0,
+          "falló la fase de límites materializados");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
     CHECK(run_typed_data_hir_runtime() == 0, "falló la fase de HIR de datos");
     CHECK(run_inference_pipeline() == 0, "falló la fase de inferencia");

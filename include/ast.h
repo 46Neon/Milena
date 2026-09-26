@@ -213,6 +213,12 @@ typedef struct ASTNode {
     size_t stream_input_limit_bytes;
     size_t stream_output_limit_bytes;
     double stream_time_limit_ms;
+    /* Optional resource policy for materialized CSV sources; zero selects the
+     * established loader default. These stay separate from streaming limits. */
+    size_t source_max_rows;
+    size_t source_max_columns;
+    size_t source_max_record_bytes;
+    double source_max_elapsed_milliseconds;
     /* Explicit resource policy for canonical #agrupar spill-to-disk. */
     size_t group_memory_budget_bytes;
     size_t group_spill_quota_bytes;
