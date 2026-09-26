@@ -32,11 +32,12 @@ El entorno Termux es Linux incompleto respecto a Debian: no presupone `sudo`,
 Desde la raíz de Milena se valida la receta y luego se copia al checkout oficial:
 
 ```bash
-python3 scripts/validate_termux_recipe.py \
+make tools/check_repository_contracts CC=clang
+./tools/check_repository_contracts termux-recipe \
   packaging/termux-packages/milena/build.sh --fetch
 mkdir -p "$TERMUX_PACKAGES_DIR/packages/milena"
 cp packaging/termux-packages/milena/build.sh "$TERMUX_PACKAGES_DIR/packages/milena/"
-python3 scripts/validate_termux_recipe.py \
+./tools/check_repository_contracts termux-recipe \
   "$TERMUX_PACKAGES_DIR/packages/milena/build.sh" \
   --official-dir "$TERMUX_PACKAGES_DIR"
 cd "$TERMUX_PACKAGES_DIR"
@@ -60,18 +61,21 @@ interpretarse como una construcción Debian.
 
 ## Ciclo de vida en Android
 
-En el runner dedicado, el smoke test ejecuta realmente:
+En el runner dedicado, el smoke test instala, ejecuta y elimina únicamente
+Milena:
 
 ```bash
 pkg install -y dist/termux/milena_..._aarch64.deb
-pkg upgrade -y
+milena --self-check
 pkg remove -y milena
 ```
 
-La prueba se niega a continuar si `milena` ya estaba instalado. Una URL HTTPS
-opcional permite probar además un repositorio APT previamente configurado; PR23
-no inventa host, source-list, clave ni secreto. Sin URL, ese tramo queda marcado
-como `apt_smoke=not-run (fail-closed)`.
+El gate nunca ejecuta `pkg upgrade`, porque eso puede actualizar paquetes ajenos
+a la prueba en el dispositivo. La prueba se niega a continuar si `milena` ya
+estaba instalado. Una URL HTTPS opcional permite probar además un repositorio
+APT previamente configurado con `pkg update`, instalación y eliminación de
+Milena; PR23 no inventa host, source-list, clave ni secreto. Sin URL, ese tramo
+queda marcado como `apt_smoke=not-run (fail-closed)`.
 
 ## Runner y pruebas virtuales
 
@@ -83,7 +87,7 @@ entre ejecuciones. El workflow manual exige `confirm_device=true`.
 
 Un contenedor Debian, WSL, Ubuntu hosted runner o emulador no demuestra Termux,
 Bionic ni aarch64: solo puede ejecutar las pruebas estáticas y la fixture de
-metadatos (`python3 scripts/test_termux_packaging.py`). Si no existe hardware
+metadatos (`make test-termux-packaging`). Si no existe hardware
 registrado, esa limitación debe permanecer visible y no se genera una falsa
 marca de compilación/instalación.
 
@@ -109,8 +113,9 @@ el artefacto de Actions cuando la prueba se ejecuta realmente.
 1. Ejecutar lint y `build-package.sh -I -f milena` en el checkout oficial.
 2. Registrar modelo Android, versión de Termux, commit, `PREFIX`, arquitectura,
    versión de Clang, checksum y logs sin secretos.
-3. Completar `pkg install`, `pkg upgrade`, ejecución y `pkg remove` en una sesión
-   limpia; verificar también el caso de actualización desde la versión previa.
+3. Completar `pkg install`, ejecución y `pkg remove` en un runner aislado;
+   verificar también el caso de actualización desde la versión previa sin
+   actualizar los demás paquetes del dispositivo.
 4. Revisar licencia, dependencias vacías, rutas `$TERMUX_PREFIX` y el contenido
    mínimo del paquete.
 5. Preparar el cambio para `termux/termux-packages` siguiendo su revisión; no

@@ -10,11 +10,10 @@ mkdir -p "$(dirname "$REPORT")"
     printf 'uname_m=%s\n' "$(uname -m)"
     printf 'dpkg_architecture=%s\n' "$(dpkg --print-architecture)"
     printf 'prefix=%s\n' "${PREFIX:-}"
-    printf 'lifecycle=official-termux-pkg\n'
+    printf 'lifecycle=official-termux-pkg-install-remove\n'
 } > "$REPORT"
 
-# This executes pkg install/upgrade/remove on the real device. It refuses an
-# already-installed package and cleans up on failure.
+# This tests only Milena's package lifecycle; it never upgrades unrelated device packages.
 ./scripts/termux-install-smoke.sh "$PACKAGE" >> "$REPORT" 2>&1
 printf 'local_pkg_lifecycle=passed\n' >> "$REPORT"
 
@@ -32,7 +31,6 @@ pkg update -y >> "$REPORT" 2>&1
 pkg install -y milena >> "$REPORT" 2>&1
 command -v milena >> "$REPORT"
 milena --help >> "$REPORT" 2>&1 || true
-pkg upgrade -y >> "$REPORT" 2>&1
 pkg remove -y milena >> "$REPORT" 2>&1
-printf 'apt_smoke=passed\napt_repository=%s\n' "$APT_REPOSITORY" >> "$REPORT"
-echo 'Local and configured APT Termux package smoke passed.'
+printf 'apt_smoke=passed (install/remove only)\napt_repository=%s\n' "$APT_REPOSITORY" >> "$REPORT"
+echo 'Local and configured APT Termux package smoke passed (install/remove only).'

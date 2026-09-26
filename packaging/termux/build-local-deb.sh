@@ -34,7 +34,7 @@ make clean
 # source list contains lexer -> parser -> AST -> semantic -> runtime ->
 # MilenaTable and excludes tests and experimental compiler/IR/VM sources.
 CC="${CC:-clang}" CFLAGS="$TERMUX_CFLAGS" LDFLAGS="$TERMUX_LDFLAGS" \
-    make TERMUX=1 all
+    make TERMUX=1 all tools/validate_termux_elf
 ARCH="$(dpkg --print-architecture)"
 [[ "$ARCH" == 'aarch64' ]] || { echo "Termux package target must be aarch64 (got $ARCH)" >&2; exit 1; }
 DIST_DIR="$ROOT_DIR/dist/termux"
@@ -51,7 +51,7 @@ install -m 0644 third_party/nanoarrow/NOTICE.txt "$STAGE/${PREFIX_DIR#/}/share/l
 install -m 0644 third_party/nanoarrow/FLATCC-LICENSE.txt "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/flatcc-LICENSE.txt"
 install -m 0644 third_party/sqlite/README.md "$STAGE/${PREFIX_DIR#/}/share/licenses/milena/sqlite-PROVENANCE-LICENSE.md"
 # Deliberately ship no examples, tests, headers, source, objects or build logs.
-python3 "$ROOT_DIR/scripts/validate_termux_elf.py" milena
+./tools/validate_termux_elf milena
 cat > "$STAGE/DEBIAN/control" <<EOF_CONTROL
 Package: milena
 Version: $VERSION

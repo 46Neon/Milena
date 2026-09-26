@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-python3 "$ROOT/tests/check_arrow_ipc_fixtures.py"
+"$ROOT/tests/check_arrow_ipc_fixtures" "$ROOT/tests/fixtures/arrow_ipc"
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/milena-arrow-ipc.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 cp "$ROOT/tests/fixtures/arrow_ipc/generated_primitive_cpp21.stream" "$TMP_DIR/primitive.stream"

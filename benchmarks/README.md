@@ -9,7 +9,7 @@ Estos benchmarks miden, sin prometer un umbral, dos operaciones observables:
    el programa de arreglos; no sustituye una medición de tablas o datasets.
 
 La fixture de arrays es deliberadamente pequeña. Para CSV, PR25 ofrece
-`stream_benchmark.py` (resumen global), `grouped_stream_benchmark.py`
+`stream_benchmark.py` (resumen global), `grouped_stream_benchmark.c`
 (agrupación acotada en memoria) y `grouped_spill_benchmark.py` (spill opt-in),
 con cargas deterministas. La agrupación habitual mantiene su mapa en memoria;
 la ruta spill es opt-in y se evalúa por separado. La carga `large` se habilita explícitamente con
@@ -27,27 +27,27 @@ memoria RSS global.
 Desde la raíz del repositorio:
 
 ```bash
-python3 benchmarks/benchmark.py
+make benchmark
 # Más muestras y un archivo JSON reproducible para adjuntar al informe:
-python3 benchmarks/benchmark.py --compile-repetitions 3 --run-repetitions 10 \
-  --output benchmark-results.json
+make benchmark BENCHMARK_ARGS="--compile-repetitions 3 --run-repetitions 10 --output benchmark-results.json"
 # Resumen global CSV (small + medium; CI usa este camino):
 make benchmark-stream
 # Agrupación streaming, memoria acotada (small + medium; CI la valida):
 make benchmark-stream-grouped
 # Cargas grandes explícitas y opt-in:
 python3 benchmarks/stream_benchmark.py --large-rows 1000000 --output stream-results.json
-python3 benchmarks/grouped_stream_benchmark.py --large-rows 1000000 --output grouped-results.json
+make benchmark-stream-grouped BENCHMARK_STREAM_GROUPED_ARGS="--large-rows 1000000 --output grouped-results.json"
 # Spill explícito, comparado contra agrupación en memoria:
 python3 benchmarks/grouped_spill_benchmark.py --large-rows 1000000 --output grouped-spill-results.json
 ```
 
-El resultado JSON incluye muestras, mínimo, mediana, media, máximo, fixture,
-comandos, plataforma, arquitectura y commit si `GITHUB_SHA` está disponible.
-El reloj es `time.perf_counter()` y mide tiempo de pared del proceso completo;
-se deben conservar los resultados junto con el compilador, flags, carga del
-sistema y commit. Los benchmarks no forman parte del binario ni del paquete
-Termux.
+El resultado JSON conserva el esquema `milena-benchmark-v1`: incluye muestras,
+mínimo, mediana, media, máximo, fixture, comandos, plataforma, arquitectura y
+commit si `GITHUB_SHA` está disponible. Para compatibilidad, el campo `python`
+se emite como `null` y se agrega `harness: C17`. El reloj usa el contador
+monotónico del sistema y mide el proceso completo; conserva los resultados junto
+con compilador, flags, carga y commit. El ejecutable auxiliar no forma parte del
+binario ni del paquete Termux.
 
 ## Hito de un millón de filas (opt-in)
 

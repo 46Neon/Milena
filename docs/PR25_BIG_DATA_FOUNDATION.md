@@ -30,7 +30,7 @@ Sintaxis humana y canónica:
 
 Las métricas numéricas ignoran solo el valor no numérico de su columna, incrementan su propio contador de `valores_invalidos` y marcan la fila como malformada; otros valores válidos de esa misma fila todavía se agregan. `contar de` cuenta campos no vacíos, por lo que también admite columnas textuales. Una fila con cantidad de columnas incorrecta, CSV inválido, cabecera duplicada o columna solicitada inexistente rechaza toda la operación. No se crean grupos sin filas; un campo de clave vacío sí es una clave válida. La salida está ordenada por clave y la acumulación conserva el orden de lectura para una ejecución reproducible sobre la misma entrada.
 
-`python3 benchmarks/grouped_stream_benchmark.py` genera casos deterministas de 100 filas/4 grupos y 10.000 filas/32 grupos, valida recuentos y métricas inválidas y mide la ejecución completa con `milena run`. Los casos grandes requieren `--large-rows N` explícito y tienen un máximo de 1.000.000 filas. `make benchmark-stream-grouped` ejecuta únicamente los casos acotados y forma parte de la ruta de pruebas Linux.
+`benchmarks/grouped_stream_benchmark.c` genera casos deterministas de 100 filas/4 grupos y 10.000 filas/32 grupos, valida recuentos y métricas inválidas y mide la ejecución completa con `milena run`. Los casos grandes requieren `--large-rows N` explícito y tienen un máximo de 1.000.000 filas. `make benchmark-stream-grouped` ejecuta únicamente los casos acotados y forma parte de la ruta de pruebas Linux.
 
 ## Qué todavía no hace esta fase
 
@@ -42,4 +42,4 @@ El estado y los límites del corte están en [`GROUPED_SPILL_CONTRACT.md`](GROUP
 
 ## Benchmarks y afirmaciones
 
-`python3 benchmarks/stream_benchmark.py` y `python3 benchmarks/grouped_stream_benchmark.py` generan CSV deterministas y ejecutan programas `.milena` por la ruta canónica. `--large-rows` es opt-in. Las métricas de tiempo y throughput son observaciones del equipo/compilador/entorno y no fijan latencia, rendimiento industrial ni escalabilidad. Para Termux/Android/aarch64 hacen falta validaciones y mediciones reales en esos dispositivos.
+`python3 benchmarks/stream_benchmark.py` y `benchmarks/grouped_stream_benchmark.c` generan CSV deterministas y ejecutan programas `.milena` por la ruta canónica. `--large-rows` es opt-in. Las métricas de tiempo y throughput son observaciones del equipo/compilador/entorno y no fijan latencia, rendimiento industrial ni escalabilidad. Para Termux/Android/aarch64 hacen falta validaciones y mediciones reales en esos dispositivos.
