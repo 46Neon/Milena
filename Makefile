@@ -77,7 +77,7 @@ TARGET = milena
 
 .PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-markdown-links check-compiler-boundary test-termux-packaging test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-dataset-byte-budget test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer test-ast-validation check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-hir-ast-coverage debug
 
-.PHONY: test-bytecode test-bytecode-data test-bytecode-data-compiler test-bytecode-data-runtime test-bytecode-compiler test-bytecode-native test-bytecode-cli
+.PHONY: test-bytecode test-bytecode-data test-bytecode-data-compiler test-bytecode-data-runtime test-bytecode-compiler test-bytecode-native test-bytecode-cli test-bytecode-data-cli
 .PHONY: test-common-tokenizer
 test-common-tokenizer: tests/test_common_tokenizer
 	./tests/test_common_tokenizer
@@ -428,6 +428,13 @@ test-bytecode-cli: $(TARGET)
 endif
 	sh tests/test_bytecode_cli.sh $(BYTECODE_CLI_TEST_ARGS)
 
+ifeq ($(BYTECODE_NATIVE),1)
+test-bytecode-data-cli: $(TARGET) tests/milena-no-native
+else
+test-bytecode-data-cli: $(TARGET)
+endif
+	sh tests/test_bytecode_data_cli.sh $(BYTECODE_CLI_TEST_ARGS)
+
 # A second CLI executable without the platform-specific AOT compile define lets
 # the Linux integration test verify the explicit unsupported-target behavior.
 tests/bytecode-cli-main-no-native.o: src/main.c
@@ -545,7 +552,7 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: test-bytecode test-bytecode-cli check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-dataset-byte-budget test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
+test: test-bytecode test-bytecode-cli test-bytecode-data-cli check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-dataset-byte-budget test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
 	./tests/run_tests.sh
 	./tests/run_tests.sh
 	./benchmarks/benchmark --help && rm -f benchmarks/benchmark

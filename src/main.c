@@ -91,16 +91,26 @@ static MilenaStatus cli_compile_source(const char *path, uint8_t **bytes_out,
         free(source);
         return status;
     }
-    MilenaCanonicalCompilerInput input = {0};
-    status = milena_canonical_compiler_input(&canonical, &input, error);
-    if (status == MILENA_OK && (!input.hir || input.data_hir)) {
+    bool data_module = canonical.data_hir != NULL;
+    if (status == MILENA_OK && data_module && canonical.hir) {
         cli_set_error(error, MILENA_ERR_UNSUPPORTED,
-                      "La CLI bytecode solo admite programas de HIR escalar tipada; la HIR de datos aún no está soportada");
+                      "La CLI bytecode rechaza programas que mezclan HIR escalar y HIR de datos");
         status = MILENA_ERR_UNSUPPORTED;
-    }
-    if (status == MILENA_OK) {
-        status = milena_bytecode_compile_hir(input.hir, bytes_out,
-                                             length_out, error);
+    } else if (status == MILENA_OK && data_module) {
+        status = milena_bytecode_compile_data_hir(canonical.data_hir,
+                                                   bytes_out, length_out, error);
+    } else if (status == MILENA_OK) {
+        MilenaCanonicalCompilerInput input = {0};
+        status = milena_canonical_compiler_input(&canonical, &input, error);
+        if (status == MILENA_OK && (!input.hir || input.data_hir)) {
+            cli_set_error(error, MILENA_ERR_UNSUPPORTED,
+                          "La CLI bytecode requiere un programa con HIR canónica escalar o el subconjunto admitido de HIR de datos");
+            status = MILENA_ERR_UNSUPPORTED;
+        }
+        if (status == MILENA_OK) {
+            status = milena_bytecode_compile_hir(input.hir, bytes_out,
+                                                 length_out, error);
+        }
     }
     milena_canonical_program_release(&canonical);
     free(source);
@@ -109,23 +119,27 @@ static MilenaStatus cli_compile_source(const char *path, uint8_t **bytes_out,
     MilenaBytecodeDiagnostic diagnostic;
     if (*length_out < MILENA_BYTECODE_HEADER_SIZE ||
         (*bytes_out)[4] != MILENA_BYTECODE_VERSION_MAJOR ||
-        (*bytes_out)[5] != 0u ||
-        (*bytes_out)[6] != MILENA_BYTECODE_VERSION_TYPED_MINOR ||
-        (*bytes_out)[7] != 0u) {
+        (*bytes_out)[5] != 0u || (*bytes_out)[7] != 0u ||
+        (*bytes_out)[6] != (data_module ? MILENA_BYTECODE_VERSION_DATA_MINOR
+                                        : MILENA_BYTECODE_VERSION_TYPED_MINOR)) {
         free(*bytes_out);
         *bytes_out = NULL;
         *length_out = 0;
         cli_set_error(error, MILENA_ERR_INTERNAL,
-                      "El compilador HIR no produjo bytecode tipado MLBC v1.2");
+                      data_module
+                          ? "El lowerer de HIR de datos no produjo MLBC v1.3"
+                          : "El compilador HIR no produjo bytecode tipado MLBC v1.2");
         return MILENA_ERR_INTERNAL;
     }
-    MilenaBytecodeStatus bytecode_status = milena_bytecode_verify(
-        *bytes_out, *length_out, NULL, &diagnostic);
+    MilenaBytecodeStatus bytecode_status = data_module
+        ? milena_bytecode_verify_data(*bytes_out, *length_out, NULL, &diagnostic)
+        : milena_bytecode_verify(*bytes_out, *length_out, NULL, &diagnostic);
     if (bytecode_status != MILENA_BC_OK) {
         char message[MILENA_ERROR_TEXT];
         (void)snprintf(message, sizeof(message),
-                       "El bytecode MLBC v1.2 no pasó verificación en offset %zu: %s",
-                       diagnostic.byte_offset, diagnostic.message);
+                       "El bytecode MLBC v1.%u no pasó verificación en offset %zu: %s",
+                       (unsigned)(*bytes_out)[6], diagnostic.byte_offset,
+                       diagnostic.message);
         free(*bytes_out);
         *bytes_out = NULL;
         *length_out = 0;
@@ -140,6 +154,12 @@ static MilenaStatus cli_run_vm(const char *path, MilenaError *error) {
     size_t length = 0;
     MilenaStatus status = cli_compile_source(path, &bytes, &length, error);
     if (status != MILENA_OK) return status;
+
+    if (bytes[6] == MILENA_BYTECODE_VERSION_DATA_MINOR) {
+        status = milena_bytecode_run_data(bytes, length, path, NULL, error);
+        free(bytes);
+        return status;
+    }
 
     double result = 0.0;
     MilenaBytecodeDiagnostic diagnostic;
@@ -174,6 +194,13 @@ static MilenaStatus cli_build_native(const char *source_path,
     uint8_t *bytes = NULL;
     size_t length = 0;
     MilenaStatus status = cli_compile_source(source_path, &bytes, &length, error);
+    if (status == MILENA_OK &&
+        length >= MILENA_BYTECODE_HEADER_SIZE &&
+        bytes[6] == MILENA_BYTECODE_VERSION_DATA_MINOR) {
+        cli_set_error(error, MILENA_ERR_UNSUPPORTED,
+                      "milena build no admite módulos MLBC v1.3 de solo datos; AOT sigue limitado al bytecode escalar v1.0-v1.2");
+        status = MILENA_ERR_UNSUPPORTED;
+    }
     if (status == MILENA_OK)
         status = milena_bytecode_compile_native(bytes, length, output_path, error);
     free(bytes);

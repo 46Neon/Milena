@@ -25,10 +25,10 @@ jobs:
           set -euxo pipefail
           make clean
           make CC=${{ matrix.compiler }} test-bytecode
-      - name: Exercise the official VM and native-build CLI paths
+      - name: Exercise scalar CLI and v1.3 data VM differential, path, fail-closed, and AOT gates
         run: |
           set -euxo pipefail
-          make CC=${{ matrix.compiler }} test-bytecode-cli
+          make CC=${{ matrix.compiler }} test-bytecode-cli test-bytecode-data-cli
 
   bytecode-v1-sanitizers:
     name: Bytecode data runtime and scalar/native AOT API ASan/UBSan regressions
