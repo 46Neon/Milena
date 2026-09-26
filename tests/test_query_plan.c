@@ -423,9 +423,11 @@ static void test_common_data_operator_overlap(void) {
     declared_columns[0].name = "valor";
     declared_columns[0].type = MILENA_HIR_COLUMN_NUMERIC;
     declared_columns[0].declared_type = MILENA_HIR_COLUMN_NUMERIC;
+    declared_columns[0].rank = 1u;
     declared_columns[1].name = "grupo";
     declared_columns[1].type = MILENA_HIR_COLUMN_TEXT;
     declared_columns[1].declared_type = MILENA_HIR_COLUMN_TEXT;
+    declared_columns[1].rank = 1u;
     hir.declared_schema = declared_columns;
     hir.declared_column_count = 2u;
     hir.operation_count = 2u;
