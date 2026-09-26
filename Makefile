@@ -252,7 +252,7 @@ test-sqlite-cli: $(TARGET)
 test-sqlite-typed-sql: tests/test_sqlite_typed_sql
 	./tests/test_sqlite_typed_sql
 
-tests/test_sqlite_typed_sql: tests/test_sqlite_typed_sql.c src/parser.c src/lexer.c src/ast.c src/query_plan.c src/common.c src/symbol_table.c
+tests/test_sqlite_typed_sql: tests/test_sqlite_typed_sql.c src/parser.c src/lexer.c src/ast.c src/query_plan.c src/table.c src/array.c src/schema.c src/dataset.c src/common.c src/symbol_table.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
 
 .PHONY: test-parser-array
