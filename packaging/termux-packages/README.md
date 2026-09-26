@@ -14,7 +14,8 @@ La receta declara `TERMUX_PKG_HOMEPAGE`, `DESCRIPTION`, `LICENSE`, `MAINTAINER`,
 regenerar y comprobar sin confiar en una copia local:
 
 ```bash
-python3 scripts/validate_termux_recipe.py \
+make tools/check_repository_contracts CC=clang
+./tools/check_repository_contracts termux-recipe \
   packaging/termux-packages/milena/build.sh --fetch
 ```
 
@@ -35,7 +36,7 @@ git clone --filter=blob:none --no-checkout \
 cd "$HOME/termux-packages"
 git sparse-checkout set build-package.sh scripts packages
 cd -
-python3 scripts/validate_termux_recipe.py \
+./tools/check_repository_contracts termux-recipe \
   packaging/termux-packages/milena/build.sh \
   --official-dir "$HOME/termux-packages"
 ```
@@ -56,10 +57,13 @@ preflight de PR23 exige `aarch64`.
 
 Antes de proponer el cambio a `termux/termux-packages` se deben adjuntar el
 commit de Milena, el resultado del lint/build oficial, el SHA del `SRCURL`, el
-ELF Bionic/aarch64 y evidencia de `pkg install`, `pkg upgrade` y `pkg remove`.
-La revisión de nombres, dependencias, licencia y disponibilidad queda a cargo
-de Termux. No se debe anunciar `pkg install milena` para terceros hasta que el
-cambio sea aceptado y publicado.
+ELF Bionic/aarch64 y evidencia de instalación, ejecución y eliminación del
+paquete `milena` con `pkg install`/`pkg remove`. No ejecutar `pkg upgrade` en el
+runner: puede actualizar paquetes ajenos a la prueba. Cualquier prueba de
+actualización desde una versión anterior debe aislarse y no actualizar otros
+paquetes del dispositivo. La revisión de nombres, dependencias, licencia y
+disponibilidad queda a cargo de Termux. No se debe anunciar
+`pkg install milena` para terceros hasta que el cambio sea aceptado y publicado.
 
 La receta instala `milena`, `README.md` y los avisos/licencias de Milena,
 nanoarrow/flatcc y SQLite bajo `$TERMUX_PREFIX`; no incorpora tests, headers,

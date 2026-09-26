@@ -51,7 +51,7 @@ Version: $VERSION
 Section: science
 Priority: optional
 Architecture: $ARCH
-Maintainer: Milena SST <maintainers@milena.invalid>
+Maintainer: Milena SST <j7942281@gmail.com>
 Description: Milena SST data analysis language
  Milena detects statistical patterns in existing occupational safety and health data.
 EOF

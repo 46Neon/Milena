@@ -26,7 +26,7 @@ para este entregable: registran commit, toolchain, arquitectura, `$PREFIX` y
 hashes sin incluir secretos. No sustituyen una auditoría de dependencias del
 ecosistema Termux.
 
-`python3 scripts/test_termux_packaging.py` usa un paquete sintético para probar
+`make test-termux-packaging` usa un paquete sintético para probar
 los rechazos de metadatos, rutas y arquitectura. No es un binario Termux y no
 sustituye una prueba en Android.
 
@@ -72,7 +72,7 @@ oficial indicado por `TERMUX_PACKAGES_DIR`. La rama del fork no equivale a una
 aceptación de Termux ni abre una PR adicional en Milena.
 
 La validación de receta puede ejecutarse sin clonar más de lo necesario con
-`python3 scripts/validate_termux_recipe.py ... --official-dir "$TERMUX_PACKAGES_DIR"`;
+`./tools/check_repository_contracts termux-recipe ... --official-dir "$TERMUX_PACKAGES_DIR"`;
 el build real requiere el `build-package.sh` oficial y solo se habilita en el
 runner self-hosted Android/aarch64.
 
@@ -86,8 +86,8 @@ lexer -> parser -> AST -> language_semantic -> language_runtime -> MilenaTable
 
 `Dataset` es una entrada de compatibilidad: el runtime materializa el dataset en
 `MilenaTable` y las transformaciones, agrupaciones, resúmenes, joins y análisis
-operan sobre la tabla canónica. `scripts/check_compiler_boundary.py` y el
-objetivo `make test` comprueban que `compiler.c`, `ir.c`, `vm.c`, `gc.c` y los
+operan sobre la tabla canónica. Los objetivos C17 `make check-compiler-boundary`
+y `make test` comprueban que `compiler.c`, `ir.c`, `vm.c`, `gc.c` y los
 demás módulos experimentales no entren en `Makefile:SOURCES` ni sean incluidos
 por una fuente oficial.
 

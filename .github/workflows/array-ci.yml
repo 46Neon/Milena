@@ -68,3 +68,7 @@ jobs:
             & "./tests/$test.exe"
             if ($LASTEXITCODE -ne 0) { throw "Test failed: $test" }
           }
+          & clang -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 -Iinclude benchmarks/grouped_stream_benchmark.c -o benchmarks/grouped_stream_benchmark.exe
+          if ($LASTEXITCODE -ne 0) { throw "Compilation failed: grouped stream benchmark" }
+          & "./benchmarks/grouped_stream_benchmark.exe" --help
+          if ($LASTEXITCODE -ne 0) { throw "Help smoke test failed: grouped stream benchmark" }
