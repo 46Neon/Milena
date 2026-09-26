@@ -68,14 +68,42 @@ success and failure. This first slice does not do definite-assignment/type
 analysis; zero-initialized registers are part of its current execution
 contract.
 
-## Scope and gates still open
+## Experimental source-to-bytecode path
 
-This is an isolated, tested foundation rather than compiler integration. It has
-no function-call ABI, no lowering from `MilenaScalarHIR`/`MilenaDataHIR`, no
-shared physical IR with the existing AOT path, and no strings/datasets/typed
-data runtime. It does not replace the experimental legacy `src/vm.c`, whose
-ownership and error-handling issues remain. It does not establish parity for
-any `.milena` construction, nor does it mark compiler-plan phase 2 complete.
+`include/bytecode_compiler.h` exposes `milena_bytecode_compile_source`. It
+passes source through the official `milena_canonical_program_parse` route
+(lexer, parser, AST validation, semantic/name resolution, and owned scalar
+HIR), obtains the fail-closed canonical compiler input, and lowers only that
+validated `MilenaScalarHIR`; it does not inspect or lower the AST directly.
+Success returns a caller-owned encoded byte array. Failure clears both output
+fields and reports `MilenaError` with the original line/column when available.
+The normal bytecode encoder validates the resulting program before it is
+published, and `milena_bytecode_run` verifies it again before execution.
 
-Run the focused regression suite with `make test-bytecode`; the suite is also a
-dependency of `make test` and is wired to GCC, Clang, ASan, and UBSan CI jobs.
+The intentionally closed source subset is one function named `principal`,
+with zero parameters and no top-level statements or additional functions. Its
+body supports initialized numeric or boolean locals, assignment to those
+bindings, finite numeric/boolean literals, numeric `+ - * /`, same-type numeric
+comparisons, boolean `==`/`!=`, nested `si`/`sino` branches, and numeric
+`retornar`. Conditions accept the canonical scalar number/boolean forms and
+follow the existing VM contract (zero is false, nonzero is true). Every path
+must return a number. Calls (including their arguments), mixed-type comparisons,
+boolean relational comparisons, unsupported HIR variants, missing bindings,
+unreachable statements after a guaranteed return, and resource-cap overflow
+are rejected with a source diagnostic; no statement is silently discarded and
+no implicit coercion or fallback is performed. Lowering uses resolved HIR
+binding IDs, a bounded register mapping, and absolute instruction-index branch
+patching. The entry function's result is not whole-program equivalence: tests
+compare it with the legacy interpreter executing the corresponding function
+plus a top-level `variable salida = principal();` wrapper.
+
+This remains an isolated experimental foundation rather than production
+compiler integration. It has no function-call ABI, data HIR lowering, shared
+physical IR with the existing AOT path, or strings/datasets/typed data runtime.
+It does not replace the experimental legacy `src/vm.c`, and the source compiler
+module remains outside production `SOURCES`; this slice does not establish
+parity for all `.milena` constructions or mark compiler-plan phase 2, Phase 3,
+or Phase 4 complete. `make test-bytecode` runs both hand-authored verifier/VM
+regressions and the canonical source-to-HIR-to-bytecode encode/verify/run suite;
+it is a dependency of `make test` and the dedicated GCC/Clang and ASan/UBSan CI
+jobs.

@@ -48,7 +48,8 @@ static const char *const function_sources[] = {
 };
 static const char *const experimental_sources[] = {
     "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c", "instructions.c",
-    "ir.c", "module.c", "semantic.c", "temp_scope.c", "vm.c", "bytecode.c"
+    "ir.c", "module.c", "semantic.c", "temp_scope.c", "vm.c", "bytecode.c",
+    "bytecode_compiler.c"
 };
 
 static void list_init(StringList *list)
@@ -606,7 +607,8 @@ static void check_experimental_isolation(int argc, char **argv)
     int argument;
     static const char *const forbidden_headers[] = {
         "arena.h", "assembler.h", "compiler.h", "forest.h", "gc.h", "instructions.h",
-        "ir.h", "module.h", "semantic.h", "temp_scope.h", "vm.h"
+        "ir.h", "module.h", "semantic.h", "temp_scope.h", "vm.h",
+        "bytecode.h", "bytecode_compiler.h"
     };
 
     list_init(&leaked);
@@ -898,7 +900,7 @@ static void check_stream_architecture(void)
     need(manifest_make != NULL, "Makefile no contiene el final de SOURCES reconocible");
     {
         Span product_span = {make_sources, manifest_make};
-        static const char *const forbidden_tokens[] = {"compiler.c", "ir.c", "vm.c", "gc.c", "arena.c", "bytecode.c"};
+        static const char *const forbidden_tokens[] = {"compiler.c", "ir.c", "vm.c", "gc.c", "arena.c", "bytecode.c", "bytecode_compiler.c"};
         for (index = 0U; index < ARRAY_COUNT(forbidden_tokens); ++index) {
             if (token_boundary_match(product_span, forbidden_tokens[index])) {
                 (void)fprintf(stderr, "experimental module leaked into product build: %s\n", forbidden_tokens[index]);
@@ -1970,7 +1972,7 @@ static void check_termux_packaging(void)
         "upload-artifact@v4", "if-no-files-found: error"
     };
     static const char *const builder_required[] = {"tools/validate_termux_elf", "README.md", "SOURCE_DATE_EPOCH", ".provenance.json", "TERMUX=1"};
-    static const char *const builder_forbidden[] = {"cp -R examples", "tests/", "include/", "src/compiler.c", "src/ir.c", "src/vm.c", "src/bytecode.c"};
+    static const char *const builder_forbidden[] = {"cp -R examples", "tests/", "include/", "src/compiler.c", "src/ir.c", "src/vm.c", "src/bytecode.c", "src/bytecode_compiler.c"};
     static const char *const readmes[] = {"README.md", "packaging/README.md", "packaging/termux/README.md"};
     StringList errors;
     size_t index;
@@ -2010,7 +2012,7 @@ static void check_termux_packaging(void)
         list_add(&errors, "Makefile lacks explicit Termux build/install variables");
     }
     if (makefile != NULL) {
-        static const char *const experimental[] = {"compiler.c", "ir.c", "vm.c", "bytecode.c"};
+        static const char *const experimental[] = {"compiler.c", "ir.c", "vm.c", "bytecode.c", "bytecode_compiler.c"};
         static const char *const forbidden_make[] = {"/usr/bin", "/usr/local", "apt-get", "__GLIBC__"};
         Span product_source_span = find_make_sources(makefile);
         for (index = 0U; index < ARRAY_COUNT(experimental); ++index) {

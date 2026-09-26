@@ -20,7 +20,7 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
-      - name: Build and execute verifier/VM tests
+      - name: Build and execute bytecode verifier/VM and canonical HIR-lowering tests
         run: |
           set -euxo pipefail
           make clean
@@ -35,7 +35,7 @@ jobs:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - uses: actions/checkout@v4
-      - name: Build and execute bytecode tests under sanitizers
+      - name: Build and execute bytecode and canonical HIR-lowering tests under sanitizers
         run: |
           set -euxo pipefail
           make clean
