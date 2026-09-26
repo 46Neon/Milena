@@ -46,7 +46,116 @@ static bool target_supported(void) {
 #endif
 }
 
+typedef struct {
+    uint32_t body, end, parameter_base, arity;
+} NativeFunction;
+
+static bool emit_call_program(FILE *out, const uint8_t *bytes) {
+    const uint16_t registers = read_le16(bytes + 8);
+    const uint32_t instructions = read_le32(bytes + 12);
+    NativeFunction functions[MILENA_BYTECODE_MAX_FUNCTIONS] = {{0}};
+    uint32_t count = 0;
+    for (uint32_t pc = 0; pc < instructions; ++pc) {
+        const uint8_t *ins = bytes + MILENA_BYTECODE_HEADER_SIZE +
+                             (size_t)pc * MILENA_BYTECODE_INSTRUCTION_SIZE;
+        if (ins[0] != MILENA_BC_FUNCTION) continue;
+        uint32_t id = read_le32(ins + 4);
+        if (id >= MILENA_BYTECODE_MAX_FUNCTIONS) return false;
+        if (count) functions[count - 1u].end = pc;
+        functions[id] = (NativeFunction){pc + 1u, instructions,
+                                          read_le32(ins + 8), read_le32(ins + 12)};
+        if (count <= id) count = id + 1u;
+    }
+    if (!count || functions[0].body >= functions[0].end) return false;
+    if (fprintf(out,
+                "#include <math.h>\n#include <stdint.h>\n#include <stdio.h>\n"
+                "#include <string.h>\n"
+                "static double fn_f64(uint64_t bits) { double v; memcpy(&v,&bits,sizeof v); return v; }\n") < 0)
+        return false;
+    for (uint32_t f = 0; f < count; ++f)
+        if (fprintf(out, "static double fn_%" PRIu32 "(double*,uint64_t*,int*,uint32_t);\n", f) < 0)
+            return false;
+    for (uint32_t f = 0; f < count; ++f) {
+        NativeFunction *function = &functions[f];
+        if (fprintf(out,
+                    "static double fn_%" PRIu32 "(double *r,uint64_t *steps,int *status,uint32_t argbase) {\n"
+                    "  double args[%u] = {0.0}; double v;\n"
+                    "  for (uint32_t j=0;j<%" PRIu32 ";++j) args[j]=r[argbase+j];\n",
+                    f, function->arity ? function->arity : 1u, function->arity) < 0)
+            return false;
+        for (uint32_t i = 0; i < function->arity; ++i)
+            if (fprintf(out, "  r[%" PRIu32 "+%" PRIu32 "]=args[%" PRIu32 "];\n",
+                        function->parameter_base, i, i) < 0) return false;
+        for (uint32_t pc = function->body; pc < function->end; ++pc) {
+            const uint8_t *ins = bytes + MILENA_BYTECODE_HEADER_SIZE +
+                                 (size_t)pc * MILENA_BYTECODE_INSTRUCTION_SIZE;
+            uint8_t op = ins[0];
+            uint32_t a = read_le32(ins + 4), b = read_le32(ins + 8), c = read_le32(ins + 12);
+            uint64_t immediate = read_le64(ins + 16);
+            if (fprintf(out,
+                        "bc_%" PRIu32 ":\n"
+                        "  if (*steps >= UINT64_C(1000000)) { *status=71; return 0.0; } ++*steps;\n",
+                        pc) < 0) return false;
+            switch (op) {
+                case MILENA_BC_CONST_F64:
+                    if (fprintf(out, "  r[%" PRIu32 "]=fn_f64(UINT64_C(0x%016" PRIx64 "));\n", a, immediate) < 0) return false;
+                    break;
+                case MILENA_BC_MOVE:
+                    if (fprintf(out, "  r[%" PRIu32 "]=r[%" PRIu32 "];\n", a, b) < 0) return false;
+                    break;
+                case MILENA_BC_NEG:
+                    if (fprintf(out, "  v=-r[%" PRIu32 "]; if(!isfinite(v)){*status=70;return 0.0;} r[%" PRIu32 "]=v;\n", b, a) < 0) return false;
+                    break;
+                case MILENA_BC_ADD: case MILENA_BC_SUB: case MILENA_BC_MUL: case MILENA_BC_DIV:
+                case MILENA_BC_EQ: case MILENA_BC_NE: case MILENA_BC_LT: case MILENA_BC_LE:
+                case MILENA_BC_GT: case MILENA_BC_GE: {
+                    const char *operator = op == MILENA_BC_ADD ? "+" : op == MILENA_BC_SUB ? "-" :
+                        op == MILENA_BC_MUL ? "*" : op == MILENA_BC_DIV ? "/" :
+                        op == MILENA_BC_EQ ? "==" : op == MILENA_BC_NE ? "!=" :
+                        op == MILENA_BC_LT ? "<" : op == MILENA_BC_LE ? "<=" :
+                        op == MILENA_BC_GT ? ">" : ">=";
+                    if (op == MILENA_BC_DIV && fprintf(out, "  if(r[%" PRIu32 "]==0.0){*status=70;return 0.0;}\n", c) < 0) return false;
+                    if (op >= MILENA_BC_EQ) {
+                        if (fprintf(out, "  r[%" PRIu32 "]=r[%" PRIu32 "] %s r[%" PRIu32 "] ? 1.0 : 0.0;\n", a, b, operator, c) < 0) return false;
+                    } else if (fprintf(out, "  v=r[%" PRIu32 "] %s r[%" PRIu32 "]; if(!isfinite(v)){*status=70;return 0.0;} r[%" PRIu32 "]=v;\n", b, operator, c, a) < 0) return false;
+                    break;
+                }
+                case MILENA_BC_JUMP:
+                    if (fprintf(out, "  goto bc_%" PRIu32 ";\n", a) < 0) return false;
+                    continue;
+                case MILENA_BC_JUMP_IF_FALSE:
+                    if (fprintf(out, "  if(r[%" PRIu32 "]==0.0) goto bc_%" PRIu32 "; ", a, b) < 0) return false;
+                    if (pc + 1u < function->end) {
+                        if (fprintf(out, "goto bc_%" PRIu32 ";\n", pc + 1u) < 0) return false;
+                    } else if (fprintf(out, "*status=70; return 0.0;\n") < 0) return false;
+                    continue;
+                case MILENA_BC_RETURN:
+                    if (fprintf(out, "  return r[%" PRIu32 "];\n", a) < 0) return false;
+                    continue;
+                case MILENA_BC_CALL:
+                    if (b >= count || fprintf(out,
+                        "  r[%" PRIu32 "]=fn_%" PRIu32 "(r,steps,status,%" PRIu32 "); if(*status) return 0.0;\n",
+                        a, b, c) < 0) return false;
+                    break;
+                default: return false;
+            }
+            if (pc + 1u < function->end) {
+                if (fprintf(out, "  goto bc_%" PRIu32 ";\n", pc + 1u) < 0) return false;
+            } else if (fprintf(out, "  *status=70; return 0.0;\n") < 0) return false;
+        }
+        if (fprintf(out, "  *status=70; return 0.0;\n}\n") < 0) return false;
+    }
+    if (fprintf(out,
+                "int main(void){double r[%u]={0.0};uint64_t steps=0;int status=0;"
+                "double value=fn_0(r,&steps,&status,0);if(status)return status;"
+                "if(printf(\"%%a\\n\",value)<0||fflush(stdout)!=0)return 74;return 0;}\n",
+                (unsigned)registers) < 0) return false;
+    return !ferror(out);
+}
+
 static bool emit_program(FILE *out, const uint8_t *bytes) {
+    if (read_le16(bytes + 6) == MILENA_BYTECODE_VERSION_CALL_MINOR)
+        return emit_call_program(out, bytes);
     const uint16_t registers = read_le16(bytes + 8);
     const uint32_t instructions = read_le32(bytes + 12);
     if (fprintf(out,

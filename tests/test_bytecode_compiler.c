@@ -190,6 +190,50 @@ static int check_end_to_end(const char *function_source,
     return 0;
 }
 
+static int check_call_limits(const char *source) {
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    MilenaError error;
+    MilenaBytecodeDiagnostic diagnostic;
+    CHECK(milena_bytecode_compile_source(source, &bytes, &length, &error) == MILENA_OK,
+          error.message);
+    double value = -1.0;
+    MilenaBytecodeLimits shallow = {.max_call_depth = 1};
+    CHECK(milena_bytecode_run(bytes, length, &shallow, &value, &diagnostic) ==
+              MILENA_BC_LIMIT_EXCEEDED && value == 0.0,
+          "bounded VM call frames must fail with a zero result at the configured depth");
+    CHECK(milena_bytecode_run(bytes, length, NULL, &value, &diagnostic) == MILENA_BC_OK &&
+              near(value, 7.0),
+          "a subsequent run must succeed after call-frame failure cleanup");
+    MilenaBytecodeLimits low_fuel = {.max_steps = 2};
+    CHECK(milena_bytecode_run(bytes, length, &low_fuel, &value, &diagnostic) ==
+              MILENA_BC_STEP_LIMIT && value == 0.0,
+          "nested calls must consume the shared bounded instruction budget");
+    CHECK(milena_bytecode_run(bytes, length, NULL, &value, &diagnostic) == MILENA_BC_OK &&
+              near(value, 7.0),
+          "a subsequent run must succeed after fuel exhaustion cleanup");
+    uint8_t *mutated = malloc(length);
+    CHECK(mutated != NULL, "could not allocate malformed-call test buffer");
+    memcpy(mutated, bytes, length);
+    bool changed = false;
+    for (size_t pc = 0; pc < (length - MILENA_BYTECODE_HEADER_SIZE) /
+                              MILENA_BYTECODE_INSTRUCTION_SIZE; ++pc) {
+        uint8_t *record = mutated + MILENA_BYTECODE_HEADER_SIZE +
+                          pc * MILENA_BYTECODE_INSTRUCTION_SIZE;
+        if (record[0] == MILENA_BC_CALL) {
+            record[8] = 63; /* nonexistent function id */
+            changed = true;
+            break;
+        }
+    }
+    CHECK(changed && milena_bytecode_verify(mutated, length, NULL, &diagnostic) ==
+                         MILENA_BC_BAD_OPERAND,
+          "verifier must reject malformed function ids before VM execution");
+    free(mutated);
+    free(bytes);
+    return 0;
+}
+
 static int check_rejected(const char *source, const char *message_fragment) {
     uint8_t *bytes = (uint8_t *)(uintptr_t)1;
     size_t length = 99;
@@ -208,6 +252,9 @@ static int check_rejected(const char *source, const char *message_fragment) {
 }
 
 int main(void) {
+    uint8_t *bytes = NULL;
+    size_t length = 0;
+    MilenaError compile_error;
     const char *arithmetic =
         "funcion principal() { variable base = 3; "
         "variable total = base * 4 + 2; total = total - 1; retornar total; }";
@@ -229,8 +276,29 @@ int main(void) {
         "funcion principal() { variable x = 0; "
         "si (falso) { x = 10; } sino { x = 20; } retornar x; } "
         "variable salida = principal();";
-    const char *call =
-        "funcion principal() { retornar principal(); }";
+    const char *recursive =
+        "funcion principal() { retornar ida(1); } "
+        "funcion ida(x) { retornar vuelta(x); } "
+        "funcion vuelta(y) { retornar ida(y); }";
+    const char *forward_calls =
+        "funcion principal() { retornar suma(doble(5), 3); } "
+        "funcion doble(x) { retornar x * 2; } "
+        "funcion suma(a, b) { retornar a + b; }";
+    const char *forward_calls_reference =
+        "funcion principal() { retornar suma(doble(5), 3); } "
+        "funcion doble(x) { retornar x * 2; } "
+        "funcion suma(a, b) { retornar a + b; } "
+        "variable salida = principal();";
+    const char *nested_calls =
+        "funcion principal() { retornar uno(7); } "
+        "funcion uno(x) { retornar dos(x); } "
+        "funcion dos(y) { retornar y; }";
+    const char *call_runtime_error =
+        "funcion principal() { retornar dividir(1, 0); } "
+        "funcion dividir(a, b) { retornar a / b; }";
+    const char *bad_call_arity =
+        "funcion principal() { retornar doble(); } "
+        "funcion doble(x) { retornar x; }";
     const char *parameter =
         "funcion principal(x) { retornar x; }";
     const char *global =
@@ -250,14 +318,30 @@ int main(void) {
           "true-branch source-to-bytecode end-to-end test failed");
     CHECK(check_end_to_end(branch_false, branch_false_reference, 20.0) == 0,
           "false-branch source-to-bytecode end-to-end test failed");
-    CHECK(check_rejected(call, "llamadas de función") == 0,
-          "calls should be explicitly rejected");
+    CHECK(check_end_to_end(forward_calls, forward_calls_reference, 13.0) == 0,
+          "forward helper calls must agree across interpreter, bytecode VM, and native AOT");
+    CHECK(check_call_limits(nested_calls) == 0,
+          "call frame, fuel, malformed-target, and cleanup tests failed");
+    CHECK(milena_bytecode_compile_source(call_runtime_error, &bytes, &length,
+                                         &compile_error) == MILENA_OK,
+          compile_error.message);
+    CHECK(check_native_error_status(bytes, length, MILENA_BC_RUNTIME_ERROR, 70) == 0,
+          "runtime errors inside a direct call must match VM and native AOT status");
+    free(bytes); bytes = NULL; length = 0;
+    CHECK(milena_bytecode_compile_source(bad_call_arity, &bytes, &length,
+                                         &compile_error) == MILENA_ERR_TYPE &&
+              bytes == NULL && length == 0 && compile_error.line > 0,
+          "canonical semantic resolution must reject wrong call arity before lowering");
+    CHECK(check_rejected(recursive, "recursión") == 0,
+          "recursive and mutually recursive graphs must be explicitly rejected");
     CHECK(check_rejected(parameter, "cero parámetros") == 0,
           "parameters should be explicitly rejected");
     CHECK(check_rejected(global, "sentencias globales") == 0,
           "global statements should be explicitly rejected");
-    CHECK(check_rejected(multiple_functions, "una función") == 0,
-          "multiple functions should be explicitly rejected");
+    CHECK(milena_bytecode_compile_source(multiple_functions, &bytes, &length,
+                                         &compile_error) == MILENA_OK,
+          "an unused non-recursive helper function should be accepted");
+    free(bytes); bytes = NULL; length = 0;
     CHECK(check_rejected(unreachable, "inalcanzable") == 0,
           "unreachable statements should be explicitly rejected");
     CHECK(check_rejected(fallthrough, "Todos los caminos") == 0,

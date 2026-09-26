@@ -96,7 +96,7 @@ int main(void) {
     };
     Encoded encoded;
     MilenaBytecodeDiagnostic diagnostic;
-    MilenaBytecodeLimits limits = {0, 0, 0, 0};
+    MilenaBytecodeLimits limits = {0, 0, 0, 0, 0};
     double value = -123.0;
     size_t required = 0;
 
@@ -157,7 +157,7 @@ int main(void) {
     }
     {
         uint8_t mutated[BC_BUFFER_SIZE];
-        MilenaBytecodeLimits bounded = {0, 0, 0, 16};
+        MilenaBytecodeLimits bounded = {0, 0, 0, 16, 0};
         for (size_t i = 0; i < encoded.length; ++i) {
             for (unsigned bit = 0; bit < 8u; ++bit) {
                 memcpy(mutated, encoded.bytes, encoded.length);
@@ -243,6 +243,60 @@ int main(void) {
     limits.max_steps = MILENA_BYTECODE_MAX_STEP_LIMIT + 1u;
     CHECK(milena_bytecode_verify(encoded.bytes, encoded.length, &limits, NULL) ==
           MILENA_BC_LIMIT_EXCEEDED);
+
+    /* v1.1 extends the old fixed-width record with a validated function table
+       and bounded direct-call ABI; the old v1.0 fixtures above remain bytewise. */
+    {
+        const MilenaBytecodeInstruction calls[] = {
+            {MILENA_BC_FUNCTION, 0, 0, 0, 0.0},
+            {MILENA_BC_CONST_F64, 0, 0, 0, 4.0},
+            {MILENA_BC_MOVE, 1, 0, 0, 0.0},
+            {MILENA_BC_CALL, 2, 1, 1, 1.0},
+            {MILENA_BC_RETURN, 2, 0, 0, 0.0},
+            {MILENA_BC_FUNCTION, 1, 3, 1, 0.0},
+            {MILENA_BC_CONST_F64, 4, 0, 0, 2.0},
+            {MILENA_BC_MUL, 5, 3, 4, 0.0},
+            {MILENA_BC_RETURN, 5, 0, 0, 0.0}
+        };
+        MilenaBytecodeProgram v11 = {MILENA_BYTECODE_VERSION_MAJOR,
+            MILENA_BYTECODE_VERSION_CALL_MINOR, 6, 9, calls};
+        size_t call_length = 0;
+        uint8_t call_bytes[BC_BUFFER_SIZE];
+        CHECK(milena_bytecode_encode(&v11, call_bytes, sizeof(call_bytes),
+                    &call_length, NULL, &diagnostic) == MILENA_BC_OK);
+        CHECK(milena_bytecode_run(call_bytes, call_length, NULL, &value,
+                                  &diagnostic) == MILENA_BC_OK && near(value, 8.0));
+        uint8_t malformed[BC_BUFFER_SIZE];
+        memcpy(malformed, call_bytes, call_length);
+        malformed[MILENA_BYTECODE_HEADER_SIZE + 3u * MILENA_BYTECODE_INSTRUCTION_SIZE + 8u] = 9;
+        CHECK(milena_bytecode_verify(malformed, call_length, NULL, &diagnostic) ==
+              MILENA_BC_BAD_OPERAND);
+        memcpy(malformed, call_bytes, call_length);
+        malformed[MILENA_BYTECODE_HEADER_SIZE + 3u * MILENA_BYTECODE_INSTRUCTION_SIZE + 23u] = 0x40;
+        CHECK(milena_bytecode_verify(malformed, call_length, NULL, &diagnostic) ==
+              MILENA_BC_BAD_OPERAND);
+        memcpy(malformed, call_bytes, call_length);
+        malformed[MILENA_BYTECODE_HEADER_SIZE + 5u * MILENA_BYTECODE_INSTRUCTION_SIZE + 8u] = 6;
+        CHECK(milena_bytecode_verify(malformed, call_length, NULL, &diagnostic) ==
+              MILENA_BC_BAD_OPERAND);
+        memcpy(malformed, call_bytes, call_length);
+        malformed[MILENA_BYTECODE_HEADER_SIZE + 3u * MILENA_BYTECODE_INSTRUCTION_SIZE + 12u] = 6;
+        CHECK(milena_bytecode_verify(malformed, call_length, NULL, &diagnostic) ==
+              MILENA_BC_BAD_OPERAND);
+        memcpy(malformed, call_bytes, call_length);
+        malformed[MILENA_BYTECODE_HEADER_SIZE + 3u * MILENA_BYTECODE_INSTRUCTION_SIZE + 4u] = 6;
+        CHECK(milena_bytecode_verify(malformed, call_length, NULL, &diagnostic) ==
+              MILENA_BC_BAD_OPERAND);
+        MilenaBytecodeLimits excess_frames = {0, 0, 0, 0,
+            MILENA_BYTECODE_MAX_CALL_DEPTH + 1u};
+        CHECK(milena_bytecode_verify(call_bytes, call_length, &excess_frames,
+                                     &diagnostic) == MILENA_BC_LIMIT_EXCEEDED);
+        /* A v1.0 header cannot smuggle v1.1 call opcodes into an old stream. */
+        memcpy(malformed, call_bytes, call_length);
+        malformed[6] = MILENA_BYTECODE_V1_MINOR;
+        CHECK(milena_bytecode_verify(malformed, call_length, NULL, &diagnostic) ==
+              MILENA_BC_BAD_OPERAND);
+    }
 
     printf("bytecode tests: ok\n");
     return 0;

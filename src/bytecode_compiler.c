@@ -21,6 +21,8 @@ typedef struct {
     size_t local_count;
     size_t local_capacity;
     uint16_t register_count;
+    const MilenaHIRFunction *const *ordered_functions;
+    size_t function_count;
     MilenaError *error;
 } Lowering;
 
@@ -162,6 +164,13 @@ static bool scalar_type(MilenaHIRValueType type) {
     return type == MILENA_HIR_NUMBER || type == MILENA_HIR_BOOLEAN;
 }
 
+static size_t function_index_by_symbol(const Lowering *lowering, size_t symbol_id) {
+    if (!lowering || !symbol_id) return SIZE_MAX;
+    for (size_t i = 0; i < lowering->function_count; ++i)
+        if (lowering->ordered_functions[i]->resolved_symbol_id == symbol_id) return i;
+    return SIZE_MAX;
+}
+
 static bool lower_expression(Lowering *lowering,
                              const MilenaHIRExpression *expression,
                              unsigned depth, uint32_t *reg_out) {
@@ -251,9 +260,52 @@ static bool lower_expression(Lowering *lowering,
             return emit(lowering, opcode, *reg_out, left, right, 0.0,
                         &expression->span, NULL);
         }
-        case MILENA_HIR_EXPR_CALL:
-            return reject_at(lowering, &expression->span,
-                             "Las llamadas de función y sus argumentos no están admitidos en bytecode v1");
+        case MILENA_HIR_EXPR_CALL: {
+            size_t callee = function_index_by_symbol(
+                lowering, expression->resolved_symbol_id);
+            if (callee == SIZE_MAX || callee >= MILENA_BYTECODE_MAX_FUNCTIONS)
+                return reject_at(lowering, &expression->span,
+                                 "La llamada HIR no se enlaza a una función del programa");
+            const MilenaHIRFunction *function = lowering->ordered_functions[callee];
+            if (expression->value_type != MILENA_HIR_NUMBER ||
+                expression->as.call.argument_count != function->parameter_count ||
+                expression->as.call.argument_count > MILENA_BYTECODE_MAX_REGISTERS ||
+                (expression->as.call.argument_count && !expression->as.call.arguments))
+                return reject_at(lowering, &expression->span,
+                                 "La llamada requiere retorno numérico y aridad resuelta compatible");
+            uint32_t *arguments = NULL;
+            size_t argc = expression->as.call.argument_count;
+            if (argc) {
+                arguments = malloc(argc * sizeof(*arguments));
+                if (!arguments) return memory_error(lowering, &expression->span,
+                                                     "Sin memoria para argumentos de llamada");
+            }
+            for (size_t i = 0; i < argc; ++i) {
+                if (!expression->as.call.arguments[i] ||
+                    expression->as.call.arguments[i]->value_type != MILENA_HIR_NUMBER ||
+                    !lower_expression(lowering, expression->as.call.arguments[i],
+                                      depth + 1u, &arguments[i])) {
+                    free(arguments);
+                    return reject_at(lowering, &expression->span,
+                                     "El ABI bytecode v1.1 admite solo argumentos numéricos");
+                }
+            }
+            uint32_t argument_base = (uint32_t)lowering->register_count;
+            for (size_t i = 0; i < argc; ++i) {
+                uint32_t slot;
+                if (!allocate_register(lowering, &expression->span, &slot) ||
+                    slot != argument_base + (uint32_t)i ||
+                    !emit(lowering, MILENA_BC_MOVE, slot, arguments[i], 0, 0.0,
+                          &expression->span, NULL)) {
+                    free(arguments);
+                    return false;
+                }
+            }
+            free(arguments);
+            if (!allocate_register(lowering, &expression->span, reg_out)) return false;
+            return emit(lowering, MILENA_BC_CALL, *reg_out, (uint32_t)callee,
+                        argument_base, (double)argc, &expression->span, NULL);
+        }
         default:
             return reject_at(lowering, &expression->span,
                              "Variante de expresión HIR no admitida en bytecode v1");
@@ -397,41 +449,142 @@ static bool lower_statement_list(Lowering *lowering,
     return true;
 }
 
-static bool validate_entry_function(const MilenaScalarHIR *hir,
-                                    const MilenaHIRFunction **entry,
-                                    MilenaError *error) {
-    *entry = NULL;
-    if (!hir) {
+static bool ordered_functions(const MilenaScalarHIR *hir,
+                              const MilenaHIRFunction **ordered,
+                              size_t *count_out, MilenaError *error) {
+    if (count_out) *count_out = 0;
+    if (!hir || !ordered || !count_out) {
         (void)fail_at(error, MILENA_ERR_UNSUPPORTED, NULL,
-                      "No existe HIR escalar canónica para lowering bytecode v1");
+                      "No existe HIR escalar canónica para bytecode v1.1");
         return false;
     }
     if (hir->statement_count != 0) {
         (void)fail_at(error, MILENA_ERR_UNSUPPORTED,
-                      hir->statement_count && hir->statements ?
-                          &hir->statements[0]->span : NULL,
-                      "El bytecode v1 solo admite una función principal, sin sentencias globales");
+                      hir->statements && hir->statement_count ? &hir->statements[0]->span : NULL,
+                      "Bytecode v1.1 no admite sentencias globales");
         return false;
     }
-    if (hir->function_count != 1 || !hir->functions) {
+    if (!hir->functions || hir->function_count == 0 ||
+        hir->function_count > MILENA_BYTECODE_MAX_FUNCTIONS) {
         (void)fail_at(error, MILENA_ERR_UNSUPPORTED,
-                      hir->function_count && hir->functions ?
-                          &hir->functions[0].span : NULL,
-                      "El bytecode v1 solo admite una función: principal");
+                      hir->functions && hir->function_count ? &hir->functions[0].span : NULL,
+                      "Bytecode v1.1 requiere de 1 a 64 funciones escalares");
         return false;
     }
-    const MilenaHIRFunction *function = &hir->functions[0];
-    if (!function->name || strcmp(function->name, "principal") != 0) {
-        (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
-                      "La única función bytecode v1 debe llamarse principal");
+    size_t principal = SIZE_MAX;
+    for (size_t i = 0; i < hir->function_count; ++i) {
+        const MilenaHIRFunction *function = &hir->functions[i];
+        if (!function->name || !function->resolved_symbol_id) {
+            (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
+                          "Función HIR sin nombre o binding semántico");
+            return false;
+        }
+        if (strcmp(function->name, "principal") == 0) {
+            if (principal != SIZE_MAX) {
+                (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
+                              "El programa bytecode requiere un único principal");
+                return false;
+            }
+            principal = i;
+        }
+        for (size_t j = 0; j < i; ++j) {
+            if (hir->functions[j].resolved_symbol_id == function->resolved_symbol_id) {
+                (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
+                              "Bindings de función duplicados en HIR");
+                return false;
+            }
+        }
+    }
+    if (principal == SIZE_MAX) {
+        (void)fail_at(error, MILENA_ERR_UNSUPPORTED, NULL,
+                      "Bytecode v1.1 requiere una función de entrada principal");
         return false;
     }
-    if (function->parameter_count != 0) {
-        (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
-                      "principal debe tener cero parámetros en bytecode v1");
+    if (hir->functions[principal].parameter_count != 0) {
+        (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &hir->functions[principal].span,
+                      "principal debe tener cero parámetros en bytecode v1.1");
         return false;
     }
-    *entry = function;
+    ordered[0] = &hir->functions[principal];
+    size_t n = 1;
+    for (size_t i = 0; i < hir->function_count; ++i)
+        if (i != principal) ordered[n++] = &hir->functions[i];
+    *count_out = n;
+    return true;
+}
+
+typedef struct {
+    const MilenaHIRFunction **functions;
+    size_t count;
+    uint8_t edges[MILENA_BYTECODE_MAX_FUNCTIONS][MILENA_BYTECODE_MAX_FUNCTIONS];
+    uint8_t color[MILENA_BYTECODE_MAX_FUNCTIONS];
+    MilenaError *error;
+} CallGraph;
+
+static bool graph_expression(CallGraph *graph, size_t caller,
+                             const MilenaHIRExpression *expression, unsigned depth) {
+    if (!expression || depth > LOWERING_MAX_DEPTH) return false;
+    if (expression->kind == MILENA_HIR_EXPR_CALL) {
+        size_t target = SIZE_MAX;
+        for (size_t i = 0; i < graph->count; ++i)
+            if (graph->functions[i]->resolved_symbol_id == expression->resolved_symbol_id)
+                target = i;
+        if (target == SIZE_MAX) {
+            (void)fail_at(graph->error, MILENA_ERR_UNSUPPORTED, &expression->span,
+                          "Llamada HIR sin destino de función semánticamente resuelto");
+            return false;
+        }
+        graph->edges[caller][target] = 1;
+        for (size_t i = 0; i < expression->as.call.argument_count; ++i)
+            if (!graph_expression(graph, caller, expression->as.call.arguments[i], depth + 1u)) return false;
+    } else if (expression->kind == MILENA_HIR_EXPR_BINARY) {
+        return graph_expression(graph, caller, expression->as.binary.left, depth + 1u) &&
+               graph_expression(graph, caller, expression->as.binary.right, depth + 1u);
+    }
+    return true;
+}
+
+static bool graph_statement_list(CallGraph *graph, size_t caller,
+                                 MilenaHIRStatement *const *statements,
+                                 size_t count, unsigned depth) {
+    if (depth > LOWERING_MAX_DEPTH || (count && !statements)) return false;
+    for (size_t i = 0; i < count; ++i) {
+        const MilenaHIRStatement *st = statements[i];
+        if (!st) return false;
+        switch (st->kind) {
+            case MILENA_HIR_STMT_DECLARE:
+            case MILENA_HIR_STMT_ASSIGN:
+            case MILENA_HIR_STMT_RETURN:
+                if (!graph_expression(graph, caller, st->as.expression, depth + 1u)) return false;
+                break;
+            case MILENA_HIR_STMT_IF:
+                if (!graph_expression(graph, caller, st->as.conditional.condition, depth + 1u) ||
+                    !graph_statement_list(graph, caller, st->as.conditional.then_body,
+                                          st->as.conditional.then_count, depth + 1u) ||
+                    !graph_statement_list(graph, caller, st->as.conditional.else_body,
+                                          st->as.conditional.else_count, depth + 1u)) return false;
+                break;
+            default:
+                return false;
+        }
+    }
+    return true;
+}
+
+static bool graph_visit(CallGraph *graph, size_t function, unsigned depth) {
+    if (depth > MILENA_BYTECODE_MAX_CALL_DEPTH) return false;
+    graph->color[function] = 1;
+    for (size_t target = 0; target < graph->count; ++target) {
+        if (!graph->edges[function][target]) continue;
+        if (graph->color[target] == 1) {
+            (void)fail_at(graph->error, MILENA_ERR_UNSUPPORTED,
+                          &graph->functions[function]->span,
+                          "La recursión y los ciclos de llamada se rechazan explícitamente en bytecode v1.1");
+            return false;
+        }
+        if (!graph->color[target] && !graph_visit(graph, target, depth + 1u)) return false;
+    }
+    graph->color[function] = 2;
     return true;
 }
 
@@ -465,45 +618,82 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
         return status;
     }
 
-    const MilenaHIRFunction *entry = NULL;
-    if (!validate_entry_function(canonical_input.hir, &entry, error)) {
+    const MilenaScalarHIR *hir = canonical_input.hir;
+    const MilenaHIRFunction *ordered[MILENA_BYTECODE_MAX_FUNCTIONS] = {0};
+    size_t function_count = 0;
+    if (!ordered_functions(hir, ordered, &function_count, error)) {
         status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
         milena_canonical_program_release(&canonical);
         return status;
     }
-    MilenaHIRSourceSpan entry_span = entry->span;
+    MilenaHIRSourceSpan entry_span = ordered[0]->span;
+    CallGraph graph = {0};
+    graph.functions = ordered; graph.count = function_count; graph.error = error;
+    for (size_t i = 0; i < function_count; ++i) {
+        if (!graph_statement_list(&graph, i, ordered[i]->body,
+                                  ordered[i]->body_count, 0)) {
+            status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
+            milena_canonical_program_release(&canonical);
+            return status;
+        }
+    }
+    for (size_t i = 0; i < function_count; ++i) {
+        if (!graph.color[i] && !graph_visit(&graph, i, 1u)) {
+            status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
+            milena_canonical_program_release(&canonical);
+            return status;
+        }
+    }
 
     Lowering lowering = {0};
     lowering.error = error;
-    bool terminates = false;
-    if (!lower_statement_list(&lowering, entry->body, entry->body_count, 0,
-                              &terminates)) {
-        status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
-        free(lowering.instructions);
-        free(lowering.locals);
-        milena_canonical_program_release(&canonical);
-        return status;
-    }
-    if (!terminates) {
-        status = fail_at(error, MILENA_ERR_UNSUPPORTED, &entry_span,
-                         "Todos los caminos de principal deben terminar en retorno numérico");
-        free(lowering.instructions);
-        free(lowering.locals);
-        milena_canonical_program_release(&canonical);
-        return status;
+    lowering.ordered_functions = ordered;
+    lowering.function_count = function_count;
+    for (size_t f = 0; f < function_count; ++f) {
+        const MilenaHIRFunction *function = ordered[f];
+        uint32_t parameter_base = lowering.register_count;
+        if (function->parameter_count > MILENA_BYTECODE_MAX_REGISTERS) {
+            status = fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
+                             "La función excede el límite de parámetros bytecode v1.1");
+            goto lower_fail;
+        }
+        if (!emit(&lowering, MILENA_BC_FUNCTION, (uint32_t)f, parameter_base,
+                  (uint32_t)function->parameter_count, 0.0, &function->span, NULL)) {
+            status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
+            goto lower_fail;
+        }
+        lowering.local_count = 0;
+        for (size_t p = 0; p < function->parameter_count; ++p) {
+            uint32_t reg;
+            if (!allocate_register(&lowering, &function->span, &reg) ||
+                reg != parameter_base + p ||
+                !bind_local(&lowering, function->parameters[p].resolved_symbol_id,
+                            reg, MILENA_HIR_NUMBER, &function->span)) {
+                status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
+                goto lower_fail;
+            }
+        }
+        bool terminates = false;
+        if (!lower_statement_list(&lowering, function->body, function->body_count,
+                                  0, &terminates)) {
+            status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
+            goto lower_fail;
+        }
+        if (!terminates) {
+            status = fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
+                             "Todos los caminos de cada función deben retornar un número");
+            goto lower_fail;
+        }
     }
     if (lowering.instruction_count == 0 || lowering.register_count == 0) {
         status = fail_at(error, MILENA_ERR_UNSUPPORTED, &entry_span,
                          "principal no produjo una función bytecode ejecutable");
-        free(lowering.instructions);
-        free(lowering.locals);
-        milena_canonical_program_release(&canonical);
-        return status;
+        goto lower_fail;
     }
 
     MilenaBytecodeProgram program = {
         MILENA_BYTECODE_VERSION_MAJOR,
-        MILENA_BYTECODE_VERSION_MINOR,
+        MILENA_BYTECODE_VERSION_CALL_MINOR,
         lowering.register_count,
         lowering.instruction_count,
         lowering.instructions
@@ -550,4 +740,10 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
     *length_out = required;
     if (error) milena_error_clear(error);
     return MILENA_OK;
+
+lower_fail:
+    free(lowering.instructions);
+    free(lowering.locals);
+    milena_canonical_program_release(&canonical);
+    return status;
 }

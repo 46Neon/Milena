@@ -195,6 +195,15 @@ Uso directo:
 ./milena perfil datos.csv perfil.json
 ```
 
+El prototipo AOT nativo compila el subconjunto escalar documentado a un ejecutable del host mediante un compilador C POSIX:
+
+```bash
+./milena build programa.milena -o ./programa
+./programa
+```
+
+Su alcance cerrado, restricciones por plataforma y pruebas están en [Native AOT — Phase 1](docs/NATIVE_AOT_PHASE1.md); no compila datasets ni es una VM de bytecode. Hay además un subconjunto experimental aislado de bytecode MLBC v1.0/v1.1 con llamadas numéricas no recursivas y AOT Linux x86-64 de llamadas directas; consulta [BYTECODE v1](docs/BYTECODE_V1.md). Ambos fundamentos siguen parciales y no completan la fase 2 ni la fase 3 del plan.
+
 También existe un constructor local de paquete Debian:
 
 ```bash

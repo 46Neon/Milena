@@ -9,13 +9,13 @@ extern "C" {
 #endif
 
 /*
- * Experimental source-to-bytecode v1 boundary. The source is parsed and
- * semantically validated by milena_canonical_program_parse; lowering consumes
- * only the resulting canonical MilenaScalarHIR. On success, *bytes_out owns a
- * malloc-allocated encoded program which the caller must free. Outputs are
- * cleared on every failure. This API intentionally supports only one
- * zero-parameter numeric entry function named `principal` and the closed subset
- * documented in docs/BYTECODE_V1.md.
+ * Experimental source-to-bytecode v1.1 boundary (while retaining v1.0 wire
+ * decoding). Source is parsed and semantically validated by
+ * milena_canonical_program_parse; lowering consumes only canonical
+ * MilenaScalarHIR. On success, *bytes_out owns a malloc-allocated encoded
+ * program which the caller must free. Outputs are cleared on every failure.
+ * The bounded source subset supports a zero-parameter numeric `principal`,
+ * non-recursive numeric helpers, and the operations documented in BYTECODE_V1.md.
  */
 MilenaStatus milena_bytecode_compile_source(const char *source,
                                              uint8_t **bytes_out,
@@ -23,9 +23,10 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
                                              MilenaError *error);
 
 /*
- * Experimental Linux x86-64 AOT backend for verified MLBC v1 bytes. The
- * generated artifact is a native executable built from straight-line C with
- * direct labels/gotos (not a bytecode-dispatch loop). Input is verified before
+ * Experimental Linux x86-64 AOT backend for verified MLBC v1.0/v1.1 bytes.
+ * The generated artifact is native code built from source-specific C; v1.1
+ * function calls become direct C/native calls, not a bytecode-dispatch loop.
+ * Input is verified before
  * any output is published. On success, the executable prints its numeric result
  * as a C hexadecimal floating literal and exits 0. Runtime errors exit 70,
  * instruction-budget exhaustion exits 71, and stdout failure exits 74. The

@@ -1,4 +1,4 @@
-name: Experimental bytecode v1 and native AOT
+name: Experimental MLBC v1.0/v1.1 calls and native AOT
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   bytecode-v1:
-    name: Bytecode, canonical lowering, and Linux x86-64 AOT (${{ matrix.compiler }})
+    name: v1.0 compatibility plus v1.1 calls, canonical lowering, and Linux x86-64 direct-call AOT (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:

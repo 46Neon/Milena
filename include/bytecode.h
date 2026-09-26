@@ -2,10 +2,10 @@
 #define MILENA_BYTECODE_H
 
 /*
- * Portable Milena bytecode v1.
+ * Portable Milena bytecode v1.0/v1.1.
  *
- * This is a versioned, little-endian bytecode format. It is not native machine
- * code and does not yet define the compiler's canonical HIR lowering.
+ * This is a versioned, little-endian bytecode format, not native machine code.
+ * v1.0 is single-function; v1.1 adds bounded non-recursive scalar calls.
  */
 #include <stdbool.h>
 #include <stddef.h>
@@ -16,11 +16,17 @@ extern "C" {
 #endif
 
 #define MILENA_BYTECODE_VERSION_MAJOR 1u
+/* v1.0 is the original single-function wire format; v1.1 adds FUNC/CALL. */
 #define MILENA_BYTECODE_VERSION_MINOR 0u
+#define MILENA_BYTECODE_V1_MINOR 0u
+#define MILENA_BYTECODE_VERSION_CALL_MINOR 1u
+#define MILENA_BYTECODE_MAX_MINOR MILENA_BYTECODE_VERSION_CALL_MINOR
 #define MILENA_BYTECODE_HEADER_SIZE 16u
 #define MILENA_BYTECODE_INSTRUCTION_SIZE 24u
 #define MILENA_BYTECODE_MAX_INSTRUCTIONS 65536u
 #define MILENA_BYTECODE_MAX_REGISTERS 256u
+#define MILENA_BYTECODE_MAX_FUNCTIONS 64u
+#define MILENA_BYTECODE_MAX_CALL_DEPTH 64u
 #define MILENA_BYTECODE_DEFAULT_STEP_LIMIT 1000000u
 #define MILENA_BYTECODE_MAX_STEP_LIMIT UINT64_C(10000000)
 
@@ -40,7 +46,11 @@ typedef enum {
     MILENA_BC_GE = 13,
     MILENA_BC_JUMP = 14,
     MILENA_BC_JUMP_IF_FALSE = 15,
-    MILENA_BC_RETURN = 16
+    MILENA_BC_RETURN = 16,
+    /* v1.1: a=function id, b=parameter base, c=arity; entry marker. */
+    MILENA_BC_FUNCTION = 17,
+    /* v1.1: a=destination, b=function id, c=argument base, immediate=arity. */
+    MILENA_BC_CALL = 18
 } MilenaBytecodeOpcode;
 
 typedef struct {
@@ -48,7 +58,7 @@ typedef struct {
     uint32_t a;
     uint32_t b;
     uint32_t c;
-    /* Used only by CONST_F64; all other opcodes require 0.0. */
+    /* CONST_F64 carries a finite number; v1.1 CALL carries an exact arity. */
     double immediate;
 } MilenaBytecodeInstruction;
 
@@ -66,6 +76,8 @@ typedef struct {
     uint16_t max_registers;
     size_t max_bytecode_bytes;
     uint64_t max_steps;
+    /* Zero selects the 64-frame hard default; applies to v1.1 calls. */
+    uint16_t max_call_depth;
 } MilenaBytecodeLimits;
 
 typedef enum {
@@ -106,14 +118,14 @@ MilenaBytecodeStatus milena_bytecode_encode(
     const MilenaBytecodeLimits *limits,
     MilenaBytecodeDiagnostic *diagnostic);
 
-/* Validate the complete wire representation, instruction operands and CFG. */
+/* Validate the complete wire representation, operands, per-function CFG and call graph. */
 MilenaBytecodeStatus milena_bytecode_verify(
     const uint8_t *bytes,
     size_t length,
     const MilenaBytecodeLimits *limits,
     MilenaBytecodeDiagnostic *diagnostic);
 
-/* Execute one verified, single-entry numeric function with bounded fuel. */
+/* Execute the verified numeric entry function with bounded fuel and call frames. */
 MilenaBytecodeStatus milena_bytecode_run(
     const uint8_t *bytes,
     size_t length,
