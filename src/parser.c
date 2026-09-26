@@ -1127,6 +1127,24 @@ static bool parse_materialized_source_limits(Parser *parser, ASTNode *load) {
             }
             parser_advance(parser);
             load->source_max_record_bytes = (size_t)(value * 1024.0 * 1024.0);
+        } else if (parser_match_word(parser, "memoria")) {
+            parser_advance(parser);
+            if (load->source_max_memory_bytes != 0) {
+                parser_error(parser, "El límite materializado de memoria no se puede repetir");
+                return false;
+            }
+            if (!parser_expect(parser, TOKEN_KW_HASTA, "Se esperaba 'hasta' después de memoria") ||
+                !parser_expect(parser, TOKEN_NUMERO, "El presupuesto de memoria debe ser numérico")) return false;
+            double value = parser->previous.number_value;
+            double bytes = value * 1024.0 * 1024.0;
+            if (!isfinite(value) || value <= 0.0 || !isfinite(bytes) ||
+                bytes > (double)SIZE_MAX || floor(bytes) != bytes ||
+                value > 1024.0) {
+                parser_error(parser, "El límite de memoria debe ser un número entero de bytes entre 1 byte y 1024 MiB");
+                return false;
+            }
+            if (!parser_expect(parser, TOKEN_KW_MIB, "Se esperaba la unidad 'MiB'")) return false;
+            load->source_max_memory_bytes = (size_t)bytes;
         } else if (parser_match_word(parser, "tiempo")) {
             parser_advance(parser);
             if (load->source_max_elapsed_milliseconds != 0.0) {
@@ -1143,7 +1161,7 @@ static bool parse_materialized_source_limits(Parser *parser, ASTNode *load) {
             if (!parser_expect_word(parser, "ms", "Se esperaba la unidad 'ms'")) return false;
             load->source_max_elapsed_milliseconds = value;
         } else {
-            parser_error(parser, "Se esperaba 'filas', 'columnas', 'registros' o 'tiempo' después de 'con'");
+            parser_error(parser, "Se esperaba 'filas', 'columnas', 'registros', 'memoria' o 'tiempo' después de 'con'");
             return false;
         }
     }

@@ -28,6 +28,15 @@ static bool read_file(const char *path, char *buffer, size_t size) {
     return ok;
 }
 
+static bool format_materialized_memory_option(size_t bytes, char *buffer,
+                                              size_t buffer_size) {
+    if (!buffer || buffer_size == 0 || bytes == 0) return false;
+    double mib = (double)bytes / (1024.0 * 1024.0);
+    int length = snprintf(buffer, buffer_size,
+                          "con memoria hasta %.20f MiB", mib);
+    return length > 0 && (size_t)length < buffer_size;
+}
+
 static bool write_file(const char *path, const char *content) {
     FILE *file = fopen(path, "wb");
     if (!file) return false;
@@ -76,7 +85,7 @@ static int run_materialized_source_limits(void) {
     const char *typed_source =
         ".analisis limites_hir {\n"
         "  variable importe numerica\n"
-        "  dataset cargar datos(\"missing-materialized-limits.csv\") con filas hasta 1 con columnas de 2 con registros de hasta 0.0048828125 MiB con tiempo hasta 30000 ms\n"
+        "  dataset cargar datos(\"missing-materialized-limits.csv\") con filas hasta 1 con columnas de 2 con registros de hasta 0.0048828125 MiB con tiempo hasta 30000 ms con memoria hasta 0.00000095367431640625 MiB\n"
         "  .resumir dataset { #suma(\"importe\"); }\n"
         "  .exportar { (\"unused-limits.json\") }\n"
         "}\n";
@@ -100,15 +109,18 @@ static int run_materialized_source_limits(void) {
     CHECK(ast_load != NULL && ast_load->source_max_rows == 1u &&
           ast_load->source_max_columns == 2u &&
           ast_load->source_max_record_bytes == 5120u &&
-          ast_load->source_max_elapsed_milliseconds == 30000.0,
-          "límites materializados: el parser no conservó las cuatro políticas en el AST");
+          ast_load->source_max_elapsed_milliseconds == 30000.0 &&
+          ast_load->source_max_memory_bytes == 1u,
+          "límites materializados: el parser no conservó las cinco políticas en el AST");
     CHECK(canonical.data_hir != NULL &&
           canonical.data_hir->source.max_rows == ast_load->source_max_rows &&
           canonical.data_hir->source.max_columns == ast_load->source_max_columns &&
           canonical.data_hir->source.max_record_bytes == ast_load->source_max_record_bytes &&
           canonical.data_hir->source.max_elapsed_milliseconds ==
-              ast_load->source_max_elapsed_milliseconds,
-          "límites materializados: HIR no propagó las cuatro políticas del AST");
+              ast_load->source_max_elapsed_milliseconds &&
+          canonical.data_hir->source.max_memory_bytes ==
+              ast_load->source_max_memory_bytes,
+          "límites materializados: HIR no propagó las cinco políticas del AST");
     milena_canonical_program_release(&canonical);
 
     CHECK(expect_materialized_limit_failure(
@@ -152,6 +164,61 @@ static int run_materialized_source_limits(void) {
         "límite de tiempo materializado no se aplicó durante la lectura");
     free(slow_content);
 
+    const char *memory_csv_path = "test-materialized-memory.csv";
+    const char *memory_csv_content = "importe\n1\n";
+    const char *memory_output_path = "test-materialized-memory.json";
+    const char *memory_program_path = "test-materialized-memory.milena";
+    /* Exact requested capacities on both 32- and 64-bit targets: filename,
+     * 8-slot header/cell vectors, 64-row vector, and two 32-byte strings. */
+    size_t exact_memory_bytes = strlen(memory_csv_path) + 1u +
+        80u * sizeof(char *) + 64u;
+    char memory_option[128];
+    CHECK(format_materialized_memory_option(exact_memory_bytes,
+          memory_option, sizeof(memory_option)),
+          "límite de memoria: no se pudo formatear el presupuesto exacto");
+    CHECK(write_file(memory_csv_path, memory_csv_content),
+          "límite de memoria: no se pudo crear el CSV de frontera");
+    char memory_source[2048];
+    int memory_source_length = snprintf(memory_source, sizeof(memory_source),
+        ".analisis limite_memoria {\n"
+        "  variable importe numerica\n"
+        "  dataset cargar datos(\"%s\") %s\n"
+        "  .resumir dataset { #suma(\"importe\"); }\n"
+        "  .exportar { (\"%s\") }\n"
+        "}\n", memory_csv_path, memory_option, memory_output_path);
+    CHECK(memory_source_length > 0 &&
+          (size_t)memory_source_length < sizeof(memory_source),
+          "límite de memoria: la fuente de frontera se truncó");
+    remove(memory_output_path);
+    MilenaError memory_error;
+    milena_error_clear(&memory_error);
+    CHECK(milena_run_dataset_program(memory_source, memory_program_path,
+          NULL, &memory_error) == MILENA_OK,
+          memory_error.message[0] ? memory_error.message :
+          "límite de memoria: el presupuesto exacto debía permitir la carga");
+    char memory_report[2048];
+    CHECK(read_file(memory_output_path, memory_report, sizeof(memory_report)) &&
+          memory_report[0] != '\0',
+          "límite de memoria: no se publicó el reporte en la frontera exacta");
+    remove(memory_csv_path);
+    remove(memory_output_path);
+
+    CHECK(format_materialized_memory_option(exact_memory_bytes - 1u,
+          memory_option, sizeof(memory_option)),
+          "límite de memoria: no se pudo formatear el caso un byte menor");
+    CHECK(expect_materialized_limit_failure(memory_csv_path, memory_csv_content,
+        memory_option, memory_output_path, memory_program_path,
+        "memoria retenida") == 0,
+        "límite de memoria: el caso un byte menor no rechazó la asignación");
+
+    CHECK(format_materialized_memory_option(strlen(memory_csv_path) + 1u,
+          memory_option, sizeof(memory_option)),
+          "límite de memoria: no se pudo preparar el rechazo previo a asignar");
+    CHECK(expect_materialized_limit_failure(memory_csv_path, memory_csv_content,
+        memory_option, memory_output_path, memory_program_path,
+        "memoria retenida") == 0,
+        "límite de memoria: una asignación que excedía el cap no se rechazó");
+
     const char *invalid_source =
         ".analisis limite_cero {\n"
         "  dataset cargar datos(\"test-materialized-row-limit.csv\") con filas hasta 0\n"
@@ -168,6 +235,30 @@ static int run_materialized_source_limits(void) {
     CHECK(milena_run_dataset_program(duplicate_source,
         "test-materialized-duplicate-limit.milena", NULL, &error) == MILENA_ERR_PARSE,
         "límites materializados: las declaraciones repetidas debieron rechazarse");
+    const char *zero_memory_source =
+        ".analisis memoria_cero {\n"
+        "  dataset cargar datos(\"missing-materialized-limits.csv\") con memoria hasta 0 MiB\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(zero_memory_source,
+        "test-materialized-zero-memory.milena", NULL, &error) == MILENA_ERR_PARSE,
+        "límite de memoria materializado: el cero debió rechazarse");
+    const char *duplicate_memory_source =
+        ".analisis memoria_repetida {\n"
+        "  dataset cargar datos(\"missing-materialized-limits.csv\") con memoria hasta 1 MiB con memoria hasta 2 MiB\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(duplicate_memory_source,
+        "test-materialized-duplicate-memory.milena", NULL, &error) == MILENA_ERR_PARSE,
+        "límite de memoria materializado: la repetición debió rechazarse");
+    const char *overflow_memory_source =
+        ".analisis memoria_fuera_de_rango {\n"
+        "  dataset cargar datos(\"missing-materialized-limits.csv\") con memoria hasta 18446744073709551616 MiB\n"
+        "}\n";
+    milena_error_clear(&error);
+    CHECK(milena_run_dataset_program(overflow_memory_source,
+        "test-materialized-memory-overflow.milena", NULL, &error) == MILENA_ERR_PARSE,
+        "límite de memoria materializado: el desbordamiento MiB-a-bytes debía rechazarse antes del cast");
     return 0;
 }
 

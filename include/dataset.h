@@ -13,13 +13,18 @@ typedef struct {
  * CSV-record bytes (excluding the terminating NUL and record separator).
  * max_record_bytes > 0 applies a fixed cap; max_field_bytes > 0 also applies
  * the established cap (max_field_bytes * actual_columns + actual_columns).
- * At least one record cap must be nonzero. max_elapsed_milliseconds == 0
- * disables the elapsed-time limit. */
+ * At least one record cap must be nonzero. max_memory_bytes > 0 caps the sum
+ * of current requested capacities for loader-retained Dataset allocations:
+ * filename/header/cell strings, header/row field vectors, and the row vector.
+ * It is not RSS: allocator overhead, the raw CSV-record input scratch buffer,
+ * realloc transient peaks, and later MilenaTable/operator copies are excluded.
+ * max_elapsed_milliseconds == 0 disables the elapsed-time limit. */
 typedef struct {
     size_t max_rows;
     size_t max_columns;
     /* Zero selects the legacy per-field-derived record cap below. */
     size_t max_record_bytes;
+    size_t max_memory_bytes;
     size_t max_field_bytes;
     double max_elapsed_milliseconds;
 } DatasetLoadLimits;

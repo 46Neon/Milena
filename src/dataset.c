@@ -27,7 +27,7 @@ static bool dataset_record_limit_from_legacy(const DatasetLimits *limits,
 DatasetLoadLimits dataset_default_load_limits(void) {
     DatasetLimits legacy = dataset_default_limits();
     DatasetLoadLimits limits = {
-        legacy.max_rows, legacy.max_columns, 0, legacy.max_field_bytes, 0.0
+        legacy.max_rows, legacy.max_columns, 0, 0, legacy.max_field_bytes, 0.0
     };
     return limits;
 }
@@ -98,6 +98,36 @@ static MilenaStatus dataset_limit_error(MilenaError *error, size_t line,
                                         const char *message) {
     milena_error_set(error, MILENA_ERR_DATA, line, 1, 0, message);
     return MILENA_ERR_DATA;
+}
+
+/* Tracks requested sizes of loader-retained Dataset allocations, not allocator
+ * metadata, raw-record scratch, or temporary realloc peaks. */
+typedef struct {
+    size_t retained_bytes;
+    size_t maximum_bytes;
+} DatasetMemoryBudget;
+
+static MilenaStatus dataset_memory_resize(DatasetMemoryBudget *budget,
+                                           size_t old_bytes, size_t new_bytes,
+                                           size_t line, MilenaError *error) {
+    if (!budget) return MILENA_OK;
+    if (old_bytes > budget->retained_bytes) {
+        milena_error_set(error, MILENA_ERR_OVERFLOW, line, 1, 0,
+                         "Desbordamiento en la contabilidad de memoria CSV");
+        return MILENA_ERR_OVERFLOW;
+    }
+    size_t next_bytes = 0;
+    if (!milena_size_add(budget->retained_bytes - old_bytes, new_bytes,
+                         &next_bytes)) {
+        milena_error_set(error, MILENA_ERR_OVERFLOW, line, 1, 0,
+                         "Desbordamiento calculando las asignaciones retenidas del CSV");
+        return MILENA_ERR_OVERFLOW;
+    }
+    if (budget->maximum_bytes != 0 && next_bytes > budget->maximum_bytes)
+        return dataset_limit_error(error, line,
+            "El CSV supera el presupuesto de memoria retenida configurado");
+    budget->retained_bytes = next_bytes;
+    return MILENA_OK;
 }
 
 /* Reads one CSV record with a strict logical-byte cap before growing the buffer. */
@@ -212,12 +242,27 @@ static bool csv_field_count(const char *record, char delimiter, size_t *count) {
 }
 
 static MilenaStatus append_field(char ***fields, size_t *count, size_t *capacity,
-                               char *field) {
+                                 char *field, DatasetMemoryBudget *budget,
+                                 size_t line, MilenaError *error) {
     if (*count == *capacity) {
-        size_t next = *capacity ? *capacity * 2 : 8;
-        if (next < *capacity) return MILENA_ERR_OVERFLOW;
-        char **tmp = (char **)realloc(*fields, next * sizeof(*tmp));
-        if (!tmp) return MILENA_ERR_MEMORY;
+        size_t next = *capacity ? *capacity * 2u : 8u;
+        size_t old_bytes = 0, new_bytes = 0;
+        if (next < *capacity ||
+            !milena_size_mul(*capacity, sizeof(**fields), &old_bytes) ||
+            !milena_size_mul(next, sizeof(**fields), &new_bytes)) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, line, 1, 0,
+                             "Desbordamiento del vector de campos CSV");
+            return MILENA_ERR_OVERFLOW;
+        }
+        size_t old_accounted = budget ? budget->retained_bytes : 0;
+        MilenaStatus status = dataset_memory_resize(budget, old_bytes,
+                                                     new_bytes, line, error);
+        if (status != MILENA_OK) return status;
+        char **tmp = (char **)realloc(*fields, new_bytes);
+        if (!tmp) {
+            if (budget) budget->retained_bytes = old_accounted;
+            return MILENA_ERR_MEMORY;
+        }
         *fields = tmp;
         *capacity = next;
     }
@@ -226,12 +271,24 @@ static MilenaStatus append_field(char ***fields, size_t *count, size_t *capacity
 }
 
 static MilenaStatus append_char(char **text, size_t *length, size_t *capacity,
-                              char ch) {
-    if (*length + 1 >= *capacity) {
-        size_t next = *capacity ? *capacity * 2 : 32;
-        if (next < *capacity) return MILENA_ERR_OVERFLOW;
+                                char ch, DatasetMemoryBudget *budget,
+                                size_t line, MilenaError *error) {
+    if (*length + 1u >= *capacity) {
+        size_t next = *capacity ? *capacity * 2u : 32u;
+        if (next < *capacity) {
+            milena_error_set(error, MILENA_ERR_OVERFLOW, line, 1, 0,
+                             "Desbordamiento de capacidad de campo CSV");
+            return MILENA_ERR_OVERFLOW;
+        }
+        size_t old_accounted = budget ? budget->retained_bytes : 0;
+        MilenaStatus status = dataset_memory_resize(budget, *capacity, next,
+                                                     line, error);
+        if (status != MILENA_OK) return status;
         char *tmp = (char *)realloc(*text, next);
-        if (!tmp) return MILENA_ERR_MEMORY;
+        if (!tmp) {
+            if (budget) budget->retained_bytes = old_accounted;
+            return MILENA_ERR_MEMORY;
+        }
         *text = tmp;
         *capacity = next;
     }
@@ -240,9 +297,11 @@ static MilenaStatus append_char(char **text, size_t *length, size_t *capacity,
 }
 
 static MilenaStatus parse_record(const char *record, char delimiter,
-                               char ***out_fields, size_t *out_count,
-                               MilenaError *error) {
+                                 char ***out_fields, size_t *out_count,
+                                 DatasetMemoryBudget *budget, size_t line,
+                                 MilenaError *error) {
     if (!record || !out_fields || !out_count) return MILENA_ERR_ARGUMENT;
+    size_t budget_checkpoint = budget ? budget->retained_bytes : 0;
     char **fields = NULL;
     size_t count = 0, field_capacity = 0;
     const char *p = record;
@@ -263,7 +322,7 @@ static MilenaStatus parse_record(const char *record, char delimiter,
             if (quoted) {
                 if (ch == '"') {
                     if (p[1] == '"') {
-                        MilenaStatus st = append_char(&field, &length, &capacity, '"');
+                        MilenaStatus st = append_char(&field, &length, &capacity, '"', budget, line, error);
                         if (st != MILENA_OK) goto fail;
                         p += 2;
                         continue;
@@ -273,7 +332,7 @@ static MilenaStatus parse_record(const char *record, char delimiter,
                     quoted = false;
                     continue;
                 }
-                MilenaStatus st = append_char(&field, &length, &capacity, ch);
+                MilenaStatus st = append_char(&field, &length, &capacity, ch, budget, line, error);
                 if (st != MILENA_OK) goto fail;
                 p++;
             } else {
@@ -289,24 +348,33 @@ static MilenaStatus parse_record(const char *record, char delimiter,
                     goto fail;
                 }
                 if (!closed_quote) {
-                    MilenaStatus st = append_char(&field, &length, &capacity, ch);
+                    MilenaStatus st = append_char(&field, &length, &capacity, ch, budget, line, error);
                     if (st != MILENA_OK) goto fail;
                 }
                 p++;
             }
         }
 
-        MilenaStatus st = append_char(&field, &length, &capacity, '\0');
+        MilenaStatus st = append_char(&field, &length, &capacity, '\0', budget, line, error);
         if (st != MILENA_OK) goto fail;
-        st = append_field(&fields, &count, &field_capacity, field);
+        st = append_field(&fields, &count, &field_capacity, field, budget, line, error);
         if (st != MILENA_OK) goto fail;
         field = NULL;
 
         if (*p == delimiter) {
             p++;
             if (*p == '\0') {
+                MilenaStatus reserve_status = dataset_memory_resize(
+                    budget, 0, 1u, line, error);
+                if (reserve_status != MILENA_OK) goto fail;
+                size_t empty_accounted = budget ? budget->retained_bytes : 0;
                 char *empty = milena_strdup("");
-                if (!empty || append_field(&fields, &count, &field_capacity, empty) != MILENA_OK) {
+                if (!empty) {
+                    if (budget) budget->retained_bytes = empty_accounted - 1u;
+                    goto fail;
+                }
+                if (append_field(&fields, &count, &field_capacity, empty,
+                                 budget, line, error) != MILENA_OK) {
                     free(empty);
                     goto fail;
                 }
@@ -324,10 +392,12 @@ static MilenaStatus parse_record(const char *record, char delimiter,
 fail:
     free(field);
     free_fields(fields, count);
+    if (budget) budget->retained_bytes = budget_checkpoint;
     return error && error->code != MILENA_OK ? error->code : MILENA_ERR_MEMORY;
 }
 
 static MilenaStatus add_row(Dataset *dataset, char **row, size_t max_rows,
+                            DatasetMemoryBudget *budget, size_t line,
                             MilenaError *error) {
     if (dataset->row_count == dataset->row_capacity) {
         size_t next = dataset->row_capacity ? dataset->row_capacity * 2u : 64u;
@@ -337,9 +407,17 @@ static MilenaStatus add_row(Dataset *dataset, char **row, size_t max_rows,
         if (next <= dataset->row_capacity ||
             !milena_size_mul(next, sizeof(*dataset->rows), &allocation_bytes))
             return MILENA_ERR_OVERFLOW;
+        size_t old_bytes = 0;
+        if (!milena_size_mul(dataset->row_capacity, sizeof(*dataset->rows),
+                             &old_bytes)) return MILENA_ERR_OVERFLOW;
+        size_t old_accounted = budget ? budget->retained_bytes : 0;
+        MilenaStatus budget_status = dataset_memory_resize(budget, old_bytes,
+            allocation_bytes, line, error);
+        if (budget_status != MILENA_OK) return budget_status;
         char ***tmp = (char ***)realloc(dataset->rows, allocation_bytes);
         if (!tmp) {
-            milena_error_set(error, MILENA_ERR_MEMORY, 0, 0, dataset->row_count,
+            if (budget) budget->retained_bytes = old_accounted;
+            milena_error_set(error, MILENA_ERR_MEMORY, line, 1, dataset->row_count,
                            "Memoria insuficiente agregando fila");
             return MILENA_ERR_MEMORY;
         }
@@ -414,6 +492,21 @@ MilenaStatus dataset_load_csv_with_resource_limits(
 
     Dataset tmp;
     dataset_init(&tmp);
+    MilenaStatus status = MILENA_OK;
+    DatasetMemoryBudget memory_budget = {0, limits->max_memory_bytes};
+    size_t filename_bytes = 0;
+    if (!milena_size_add(strlen(filename), 1u, &filename_bytes)) {
+        fclose(file);
+        milena_error_set(error, MILENA_ERR_OVERFLOW, 0, 0, 0,
+                         "Desbordamiento calculando el nombre de archivo CSV");
+        return MILENA_ERR_OVERFLOW;
+    }
+    status = dataset_memory_resize(&memory_budget, 0, filename_bytes, 0, error);
+    if (status != MILENA_OK) {
+        fclose(file);
+        dataset_destroy(&tmp);
+        return status;
+    }
     tmp.filename = milena_strdup(filename);
     if (!tmp.filename) {
         fclose(file);
@@ -423,7 +516,7 @@ MilenaStatus dataset_load_csv_with_resource_limits(
 
     size_t line = 1;
     char *record = NULL;
-    MilenaStatus status = read_record(file, &record, &line,
+    status = read_record(file, &record, &line,
         header_record_limit, started_ms,
         limits->max_elapsed_milliseconds, error);
     if (status != MILENA_OK) {
@@ -445,7 +538,8 @@ MilenaStatus dataset_load_csv_with_resource_limits(
                                      "El encabezado CSV supera el máximo de columnas permitido");
         goto fail;
     }
-    status = parse_record(record, delimiter, &tmp.headers, &tmp.column_count, error);
+    status = parse_record(record, delimiter, &tmp.headers, &tmp.column_count,
+                          &memory_budget, 1u, error);
     free(record);
     record = NULL;
     if (status != MILENA_OK || tmp.column_count == 0 ||
@@ -523,27 +617,33 @@ MilenaStatus dataset_load_csv_with_resource_limits(
 
         char **row = NULL;
         size_t fields = 0;
-        status = parse_record(record, delimiter, &row, &fields, error);
+        size_t row_budget_checkpoint = memory_budget.retained_bytes;
+        status = parse_record(record, delimiter, &row, &fields,
+                              &memory_budget, line, error);
         free(record);
         record = NULL;
-        if (status == MILENA_ERR_MEMORY || status == MILENA_ERR_OVERFLOW) {
+        if (status == MILENA_ERR_MEMORY || status == MILENA_ERR_OVERFLOW ||
+            status == MILENA_ERR_DATA) {
             free_fields(row, fields);
             goto fail;
         }
         if (status != MILENA_OK || fields != tmp.column_count) {
             tmp.invalid_rows++;
             free_fields(row, fields);
+            memory_budget.retained_bytes = row_budget_checkpoint;
             milena_error_clear(error);
             status = MILENA_OK;
             continue;
         }
         if (dataset_time_exceeded(started_ms, limits->max_elapsed_milliseconds)) {
             free_fields(row, fields);
+            memory_budget.retained_bytes = row_budget_checkpoint;
             status = dataset_limit_error(error, line,
                                          "El CSV superó el límite de tiempo de carga");
             goto fail;
         }
-        status = add_row(&tmp, row, limits->max_rows, error);
+        status = add_row(&tmp, row, limits->max_rows, &memory_budget,
+                          line, error);
         if (status != MILENA_OK) {
             free_fields(row, fields);
             goto fail;
@@ -598,7 +698,7 @@ MilenaStatus dataset_load_csv_with_limits(Dataset *dataset, const char *filename
         return MILENA_ERR_OVERFLOW;
     }
     DatasetLoadLimits resource_limits = {
-        limits->max_rows, limits->max_columns, 0,
+        limits->max_rows, limits->max_columns, 0, 0,
         limits->max_field_bytes, 0.0
     };
     return dataset_load_csv_with_resource_limits(dataset, filename, delimiter,

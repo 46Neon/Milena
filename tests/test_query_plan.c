@@ -415,9 +415,19 @@ static void test_common_data_operator_overlap(void) {
     MilenaHIRDataOperation hir_operations[2] = {{0}};
     MilenaHIRAggregate hir_aggregates[3] = {{0}};
     MilenaDataHIR hir = {0};
+    MilenaHIRColumnRef declared_columns[2] = {{0}};
     hir.source.path = "rows.csv";
+    hir.source.max_memory_bytes = 4096u;
     hir.export_path = "memory.json";
     hir.schema_bound = true;
+    declared_columns[0].name = "valor";
+    declared_columns[0].type = MILENA_HIR_COLUMN_NUMERIC;
+    declared_columns[0].declared_type = MILENA_HIR_COLUMN_NUMERIC;
+    declared_columns[1].name = "grupo";
+    declared_columns[1].type = MILENA_HIR_COLUMN_TEXT;
+    declared_columns[1].declared_type = MILENA_HIR_COLUMN_TEXT;
+    hir.declared_schema = declared_columns;
+    hir.declared_column_count = 2u;
     hir.operation_count = 2u;
     hir.operations = hir_operations;
     hir_operations[0].kind = MILENA_HIR_DATA_FILTER_NUMERIC;
@@ -447,6 +457,17 @@ static void test_common_data_operator_overlap(void) {
            MILENA_DATA_EXECUTION_MATERIALIZED_TABLE);
     assert(in_memory.operator_count == 4u && in_memory.has_numeric_greater_filter);
     test_materialized_executor_uses_common_plan(&in_memory, &error);
+
+    MilenaDataOperatorPlan preflight = {0};
+    assert(milena_data_operator_plan_preflight_from_hir(
+        &hir, &preflight, &error) == MILENA_OK);
+    assert(preflight.source_max_memory_bytes == hir.source.max_memory_bytes);
+    assert(milena_data_operator_plan_check_bound_hir(
+        &preflight, &hir, &error) == MILENA_OK);
+    MilenaDataHIR changed_source = hir;
+    changed_source.source.max_memory_bytes++;
+    assert(milena_data_operator_plan_check_bound_hir(
+        &preflight, &changed_source, &error) == MILENA_ERR_DATA);
 
     ASTNode *analysis = ast_create(AST_BLOQUE_ANALISIS);
     assert(analysis);

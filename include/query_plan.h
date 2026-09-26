@@ -61,6 +61,7 @@ typedef struct {
     size_t source_max_rows;
     size_t source_max_columns;
     size_t source_max_record_bytes;
+    size_t source_max_memory_bytes;
     double source_max_elapsed_milliseconds;
     size_t group_limit_input_rows;
     size_t group_limit_output_rows;

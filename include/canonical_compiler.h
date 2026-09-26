@@ -154,6 +154,7 @@ typedef struct {
     size_t max_rows;
     size_t max_columns;
     size_t max_record_bytes;
+    size_t max_memory_bytes;
     double max_elapsed_milliseconds;
     MilenaHIRSourceSpan span;
 } MilenaHIRDatasetSource;

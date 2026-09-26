@@ -2019,6 +2019,8 @@ MilenaStatus milena_run_dataset_program(const char *source,
         source_limits.max_record_bytes = load->source_max_record_bytes;
         source_limits.max_field_bytes = 0;
     }
+    if (load->source_max_memory_bytes)
+        source_limits.max_memory_bytes = load->source_max_memory_bytes;
     if (load->source_max_elapsed_milliseconds != 0.0)
         source_limits.max_elapsed_milliseconds =
             load->source_max_elapsed_milliseconds;
@@ -2027,6 +2029,8 @@ MilenaStatus milena_run_dataset_program(const char *source,
          source_program.data_hir->source.max_columns != load->source_max_columns ||
          source_program.data_hir->source.max_record_bytes !=
              load->source_max_record_bytes ||
+         source_program.data_hir->source.max_memory_bytes !=
+             load->source_max_memory_bytes ||
          source_program.data_hir->source.max_elapsed_milliseconds !=
              load->source_max_elapsed_milliseconds)) {
         runtime_error(error, MILENA_ERR_DATA,

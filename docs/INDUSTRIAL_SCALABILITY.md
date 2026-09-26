@@ -51,18 +51,21 @@ La fuente materializada heredada `dataset cargar datos("entrada.csv")` puede
 fijar límites opcionales en esa misma declaración:
 
 ```milena
-dataset cargar datos("entrada.csv") con filas hasta 100000 con columnas de 64 con registros de hasta 8 MiB con tiempo hasta 30000 ms
+dataset cargar datos("entrada.csv") con filas hasta 100000 con columnas de 64 con registros de hasta 8 MiB con tiempo hasta 30000 ms con memoria hasta 256 MiB
 ```
 
 `filas` acepta 1–1.000.000.000; `columnas`, 1–4096; `registros`, 5 KiB–64 MiB
-en pasos de 1 KiB; y `tiempo`, 1–3.600.000 ms. Cada cláusula se admite una sola
-vez; los valores cero y las repeticiones se rechazan. Si una cláusula se omite,
+en pasos de 1 KiB; `tiempo`, 1–3.600.000 ms; y `memoria`, de 1 byte a 1024 MiB,
+con conversión exacta a un número entero de bytes. Cada cláusula se admite una
+sola vez; los valores cero, fracciones menores que un byte y las repeticiones se
+rechazan. Si una cláusula se omite,
 se conserva el default materializado previo: máximo de 5.000 filas, 70 columnas
 y el límite de registro legado `max_field_bytes * columnas_físicas +
 columnas_físicas` (`max_field_bytes` inicia en 1 MiB); no se activa timeout. Este
-valor acota el registro completo y no es una validación independiente por campo. La ruta `datos desde`/`dataset cargar flujo`
-permanece separada y no se cambia ni se selecciona automáticamente como
-fallback.
+valor acota el registro completo y no es una validación independiente por campo.
+La memoria omitida conserva el comportamiento histórico sin presupuesto explícito.
+La ruta `datos desde`/`dataset cargar flujo` permanece separada y no se cambia ni
+se selecciona automáticamente como fallback.
 
 Los límites de filas, columnas y bytes de registro se aplican en el cargador:
 filas cuenta cada registro de datos leído tras el encabezado, incluso líneas
@@ -77,11 +80,17 @@ cargador destruye su `Dataset` temporal, devuelve error y no sustituye el
 `Dataset` previo; el runtime tampoco inicia publicación del reporte, por lo que
 un destino ya existente permanece intacto.
 
-No hay un presupuesto materializado de bytes de memoria ni un límite de RSS.
-Filas, columnas y bytes de registro acotan dimensiones del input, no el costo
-completo del heap: el arreglo de punteros a filas, copias de strings, cabeceras,
-capacidad sobrante, parser y metadatos del allocator, la conversión a
-`MilenaTable` y las operaciones posteriores no están contabilizados como una
-cuota de memoria. Un fallo de asignación es error, pero los límites del cargador
-no garantizan un techo de memoria de proceso ni protegen contra las políticas de
-overcommit del sistema.
+`con memoria hasta N MiB` establece un presupuesto por fuente sobre la suma de
+los tamaños solicitados actualmente para las asignaciones retenidas por el
+`Dataset` del cargador. Cuenta el string del nombre de archivo, las cadenas de
+encabezado/celdas (incluida su capacidad solicitada y el NUL), la capacidad de
+los vectores de campos del encabezado y de cada fila, y la capacidad del vector
+de punteros a filas. Antes de cada `malloc`/`realloc` contabilizado se comprueba,
+con aritmética de overflow, que la asignación reemplazada deje el total dentro
+del límite; una solicitud que lo exceda produce error y no tiene fallback. La
+unidad es un presupuesto de asignaciones retenidas solicitado, no RSS ni memoria
+residente: excluye bookkeeping/fragmentación del allocator, el buffer crudo del
+registro CSV y picos transitorios internos de `realloc`, además de cualquier
+copia posterior a `MilenaTable` y memoria de transformaciones/operadores. No es
+un cap del heap global ni evita el overcommit del sistema. El Dataset previo y
+el reporte/destino exportado se conservan ante cualquier fallo de carga.

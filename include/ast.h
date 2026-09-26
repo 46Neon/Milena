@@ -218,6 +218,7 @@ typedef struct ASTNode {
     size_t source_max_rows;
     size_t source_max_columns;
     size_t source_max_record_bytes;
+    size_t source_max_memory_bytes;
     double source_max_elapsed_milliseconds;
     /* Explicit resource policy for canonical #agrupar spill-to-disk. */
     size_t group_memory_budget_bytes;
