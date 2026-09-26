@@ -851,7 +851,8 @@ MilenaStatus milena_stream_csv_grouped_with_options(
             const char *field = fields[metric_indexes[i]];
             double value = 1.0;
             bool is_null = !stream_field_nonempty(field);
-            bool valid = metrics[i].operation == MILENA_STREAM_COUNT
+            bool valid = metrics[i].operation == MILENA_STREAM_COUNT &&
+                         !metrics[i].count_numeric_values
                 ? !is_null : stream_parse_number(field, &value);
             if (!valid) {
                 size_t *counter = is_null ? &group->null_values[i] :
@@ -1575,7 +1576,8 @@ MilenaStatus milena_stream_csv_grouped_spill_with_keys_and_options(
             bool is_null = !stream_field_nonempty(raw);
             bool valid = false;
             double value = 1.0;
-            if (metrics[i].operation == MILENA_STREAM_COUNT) {
+            if (metrics[i].operation == MILENA_STREAM_COUNT &&
+                !metrics[i].count_numeric_values) {
                 valid = !is_null;
             } else {
                 valid = stream_parse_number(raw, &value);

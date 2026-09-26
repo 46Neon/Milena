@@ -277,11 +277,11 @@ El proyecto se encuentra en una etapa de **consolidación avanzada del núcleo d
 
 ## Volumen de datos y alcance industrial
 
-Milena combina rutas distintas y acotadas: operaciones de tabla que materializan datasets CSV en memoria; agregación global y agrupada en streaming CSV, incluido un reducer con spill local explícito; un candidato de lectura/proyección/filtro Arrow IPC STREAM; y un baseline SQLite raw SQL con un slice tipado pequeño. Los nombres de operación que coinciden no implican que los backends compartan planner ni tengan la misma semántica o límites.
+Milena combina rutas distintas y acotadas: operaciones de tabla que materializan datasets CSV en memoria; agregación global y agrupada en streaming CSV, incluido un reducer con spill local explícito; un candidato de lectura/proyección/filtro Arrow IPC STREAM; y un baseline SQLite raw SQL con un slice tipado pequeño. Hay un grafo lógico tipado compartido únicamente para la intersección documentada de agrupación CSV local entre HIR de tabla y CSV streaming; no un planner/ejecutor físico común para todos los backends. Los nombres de operación coincidentes no implican la misma semántica, forma JSON ni límites de recursos.
 
 El modo streaming no convierte automáticamente cualquier operación en streaming. En particular, transformaciones tabulares y joins siguen materializando datos; no hay join externo/distribuido, y no se prometen límites de RSS global ni latencia fija. Arrow IPC STREAM continúa como trabajo en progreso no verificado ni publicado; SQLite tipado no es un ORM completo. Consulta la [matriz de operadores y límites](docs/BIG_DATA_OPERATOR_MATRIX.md) para el comportamiento exacto, los formatos admitidos y las exclusiones.
 
-La cobertura entre backends y el planner común siguen en desarrollo. Los benchmarks de un millón de filas y archivo grande son mediciones reproducibles de fixtures concretos, no una garantía universal ni evidencia de procesamiento distribuido.
+El grafo lógico común cubre solo un subconjunto estrecho; la cobertura entre formatos y la planificación física compartida siguen en desarrollo. Los benchmarks de un millón de filas y archivo grande son mediciones reproducibles de fixtures concretos, no una garantía universal ni evidencia de procesamiento distribuido.
 
 La descripción más honesta es:
 

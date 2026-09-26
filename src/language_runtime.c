@@ -1444,8 +1444,24 @@ static bool runtime_stream_operation(ASTStreamOperation ast_operation,
     }
 }
 
+static bool runtime_common_stream_operation(
+    MilenaDataAggregateKind source, MilenaStreamOperation *operation,
+    const char **name) {
+    if (source == MILENA_DATA_AGGREGATE_SUM) {
+        *operation = MILENA_STREAM_SUM; *name = "suma"; return true;
+    }
+    if (source == MILENA_DATA_AGGREGATE_MEAN) {
+        *operation = MILENA_STREAM_MEAN; *name = "media"; return true;
+    }
+    if (source == MILENA_DATA_AGGREGATE_COUNT) {
+        *operation = MILENA_STREAM_COUNT; *name = "conteo"; return true;
+    }
+    return false;
+}
+
 static MilenaStatus run_stream_dataset_with_options(
                                        const MilenaStreamExecutionPlan *plan,
+                                       const MilenaDataOperatorPlan *common_plan,
                                        const char *input_path,
                                        const char *output_path,
                                        const MilenaStreamOptions *options,
@@ -1471,6 +1487,23 @@ static MilenaStatus run_stream_dataset_with_options(
         : plan->logical_operator_count == 3 &&
           plan->logical_operators[1] == aggregate_operator &&
           plan->logical_operators[2] == MILENA_LOGICAL_JSON_REPORT;
+    if (common_plan &&
+        (milena_data_operator_plan_validate(common_plan, error) != MILENA_OK ||
+         common_plan->execution_mode != MILENA_DATA_EXECUTION_CSV_RECORD_STREAM ||
+         !grouped || !group_key || !group_key->value ||
+         strcmp(common_plan->group_key, group_key->value) != 0 ||
+         common_plan->metric_count != summary_block->child_count ||
+         common_plan->has_numeric_greater_filter != (plan->filter != NULL) ||
+         (plan->filter &&
+          (plan->filter->stream_filter_kind !=
+               AST_STREAM_FILTER_NUMERIC_GREATER ||
+           !plan->filter->value ||
+           strcmp(common_plan->filter_column, plan->filter->value) != 0 ||
+           common_plan->filter_threshold != plan->filter->number_value)))) {
+        runtime_error(error, MILENA_ERR_INTERNAL,
+                      "La normalización lógica no coincide con el plan CSV físico");
+        return MILENA_ERR_INTERNAL;
+    }
     if ((!grouped && plan->physical_operator != MILENA_PHYSICAL_CSV_STREAM_SUMMARY) ||
         grouped != (group_block != NULL) || (grouped && !group_key) ||
         (grouped && (plan->group_key_count == 0 || plan->group_key_count > 2)) ||
@@ -1499,7 +1532,31 @@ static MilenaStatus run_stream_dataset_with_options(
     char operations[MILENA_STREAM_MAX_METRICS][32];
     char metric_names[MILENA_STREAM_MAX_METRICS][160];
     size_t metric_count = 0;
-    for (size_t j = 0; j < summary_block->child_count; j++) {
+    if (common_plan) {
+        metric_count = common_plan->metric_count;
+        for (size_t j = 0; j < metric_count; ++j) {
+            const char *metric_name = NULL;
+            MilenaStreamOperation operation;
+            const char *column = common_plan->metrics[j].input_column;
+            if (!column || strlen(column) >= sizeof(columns[j]) ||
+                !runtime_common_stream_operation(
+                    common_plan->metrics[j].operation, &operation,
+                    &metric_name)) {
+                runtime_error(error, MILENA_ERR_UNSUPPORTED,
+                              "La métrica normalizada excede el adaptador CSV");
+                return MILENA_ERR_UNSUPPORTED;
+            }
+            strncpy(columns[j], column, sizeof(columns[j]) - 1u);
+            columns[j][sizeof(columns[j]) - 1u] = '\0';
+            (void)snprintf(metric_names[j], sizeof(metric_names[j]),
+                           "%s_%s", columns[j], metric_name);
+            metrics[j].column = columns[j];
+            metrics[j].name = metric_names[j];
+            metrics[j].operation = operation;
+            metrics[j].count_numeric_values =
+                operation == MILENA_STREAM_COUNT;
+        }
+    } else for (size_t j = 0; j < summary_block->child_count; j++) {
         const ASTNode *summary = summary_block->children[j];
         if (!summary || !summary->value || metric_count >= MILENA_STREAM_MAX_METRICS) {
             runtime_error(error, MILENA_ERR_PARSE,
@@ -1571,6 +1628,7 @@ static MilenaStatus run_stream_dataset_with_options(
         metrics[metric_count].column = columns[metric_count];
         metrics[metric_count].name = metric_names[metric_count];
         metrics[metric_count].operation = operation;
+        metrics[metric_count].count_numeric_values = false;
         metric_count++;
     }
     if (metric_count == 0) {
@@ -1599,15 +1657,18 @@ static MilenaStatus run_stream_dataset_with_options(
                               "El plan spill contiene una clave inválida");
                 return MILENA_ERR_PARSE;
             }
-            group_keys[key_index].name = key_node->value;
+            group_keys[key_index].name = common_plan && key_index == 0u
+                ? common_plan->group_key : key_node->value;
             group_keys[key_index].type = MILENA_STREAM_GROUP_KEY_TEXT;
         }
         status = milena_stream_csv_grouped_spill_with_keys_and_options(
             input_path, output_path, group_keys, plan->group_key_count,
             metrics, metric_count, options, &policy, &report, error);
     } else if (grouped) {
+        const char *logical_group_key = common_plan
+            ? common_plan->group_key : group_key->value;
         status = milena_stream_csv_grouped_with_options(input_path, output_path,
-            group_key->value, metrics, metric_count, options, &report, error);
+            logical_group_key, metrics, metric_count, options, &report, error);
     } else {
         status = milena_stream_csv_summary_with_options(input_path, output_path,
             metrics, metric_count, options, &report, error);
@@ -1691,12 +1752,28 @@ MilenaStatus milena_run_dataset_program(const char *source,
     }
 
     MilenaStreamExecutionPlan stream_plan = {0};
+    MilenaDataOperatorPlan common_stream_plan = {0};
+    bool has_common_stream_plan = false;
     bool arrow_stream = load->type_name &&
         strcmp(load->type_name, "arrow_ipc_stream") == 0;
     bool streaming = load->type_name && strcmp(load->type_name, "flujo") == 0;
     if (streaming) {
         MilenaStatus plan_status = milena_stream_execution_plan_build(
             analysis, &stream_plan, error);
+        if (plan_status == MILENA_OK) {
+            MilenaError common_error = {0};
+            plan_status = milena_data_operator_plan_from_stream(
+                analysis, &stream_plan, &common_stream_plan, &common_error);
+            if (plan_status == MILENA_OK) {
+                has_common_stream_plan = true;
+            } else if (plan_status == MILENA_ERR_UNSUPPORTED) {
+                /* Backend-specific stream plans remain valid outside the
+                 * documented table/CSV common logical overlap. */
+                plan_status = MILENA_OK;
+            } else if (error) {
+                *error = common_error;
+            }
+        }
         if (plan_status != MILENA_OK) {
             ast_destroy(program);
             parser_release(&parser);
@@ -1709,7 +1786,8 @@ MilenaStatus milena_run_dataset_program(const char *source,
     MilenaCanonicalProgram source_program;
     milena_canonical_program_init(&source_program);
     MilenaStatus status = milena_canonical_program_parse(&source_program, source, error);
-    const char *source_path = load->value;
+    const char *source_path = has_common_stream_plan
+        ? common_stream_plan.source_path : load->value;
     if (status == MILENA_OK && arrow_stream) {
         if (source_program.arrow_hir) {
             source_path = source_program.arrow_hir->source_path;
@@ -1817,8 +1895,10 @@ MilenaStatus milena_run_dataset_program(const char *source,
     if (streaming) {
         char output_path[2048];
         const ASTNode *export_node = stream_plan.sink;
-        const char *requested_output = export_node && export_node->value
-            ? export_node->value : "reporte_flujo.json";
+        const char *requested_output = has_common_stream_plan
+            ? common_stream_plan.sink_path
+            : (export_node && export_node->value
+                ? export_node->value : "reporte_flujo.json");
         status = dataset_runtime_path(requested_output, script_filename, true,
                                       output_path, sizeof(output_path), error);
         if (status == MILENA_OK) {
@@ -1839,7 +1919,13 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 options.max_rows = load->stream_row_limit;
             if (load->stream_time_limit_ms > 0.0)
                 options.max_elapsed_milliseconds = load->stream_time_limit_ms;
-            if (stream_plan.filter) {
+            if (has_common_stream_plan) {
+                if (common_stream_plan.has_numeric_greater_filter) {
+                    options.filter_column = common_stream_plan.filter_column;
+                    options.filter_kind = MILENA_STREAM_FILTER_NUMERIC_GREATER;
+                    options.filter_number = common_stream_plan.filter_threshold;
+                }
+            } else if (stream_plan.filter) {
                 options.filter_column = stream_plan.filter->value;
                 if (stream_plan.filter->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
                     options.filter_kind = MILENA_STREAM_FILTER_TEXT_EQUAL;
@@ -1850,8 +1936,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     options.filter_number = stream_plan.filter->number_value;
                 }
             }
-            status = run_stream_dataset_with_options(&stream_plan, input, output_path,
-                                                     &options, output, error);
+            status = run_stream_dataset_with_options(&stream_plan,
+                has_common_stream_plan ? &common_stream_plan : NULL,
+                input, output_path, &options, output, error);
         }
         milena_canonical_program_release(&source_program);
         ast_destroy(program);
@@ -2012,16 +2099,28 @@ MilenaStatus milena_run_dataset_program(const char *source,
                         canonical_program.data_hir->source.path, error);
                 }
             }
-            if (status == MILENA_OK && canonical_program.data_hir->export_path)
-                status = dataset_runtime_path(
-                    canonical_program.data_hir->export_path, script_filename, true,
-                    output_path, sizeof(output_path), error);
             if (status == MILENA_OK) {
                 status = join_operation
                     ? milena_canonical_program_bind_tables(&canonical_program,
                         &canonical_table, &right_table, error)
                     : milena_canonical_program_bind_table(&canonical_program,
                         &canonical_table, error);
+            }
+            if (status == MILENA_OK && canonical_program.data_hir->export_path) {
+                MilenaDataOperatorPlan common_hir_plan = {0};
+                MilenaError common_error = {0};
+                MilenaStatus common_status = milena_data_operator_plan_from_hir(
+                    canonical_program.data_hir, &common_hir_plan, &common_error);
+                const char *report_path = canonical_program.data_hir->export_path;
+                if (common_status == MILENA_OK)
+                    report_path = common_hir_plan.sink_path;
+                else if (common_status != MILENA_ERR_UNSUPPORTED) {
+                    if (error) *error = common_error;
+                    status = common_status;
+                }
+                if (status == MILENA_OK)
+                    status = dataset_runtime_path(report_path, script_filename,
+                        true, output_path, sizeof(output_path), error);
             }
             MilenaCanonicalCompilerInput compiler_input = {0};
             if (status == MILENA_OK)

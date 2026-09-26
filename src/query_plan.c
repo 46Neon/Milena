@@ -1,5 +1,6 @@
 #include "query_plan.h"
 #include "stream.h"
+#include "canonical_compiler.h"
 
 #include <string.h>
 #include <math.h>
@@ -10,6 +11,238 @@ static MilenaStatus plan_error(MilenaError *error, MilenaStatus code,
                                const char *message) {
     milena_error_set(error, code, 0, 0, 0, message);
     return code;
+}
+
+static MilenaStatus common_plan_unsupported(MilenaError *error,
+                                            const char *message) {
+    return plan_error(error, MILENA_ERR_UNSUPPORTED, message);
+}
+
+MilenaStatus milena_data_operator_plan_validate(
+    const MilenaDataOperatorPlan *plan, MilenaError *error) {
+    if (!plan || !plan->source_path || !plan->source_path[0] ||
+        !plan->sink_path || !plan->sink_path[0] ||
+        (plan->execution_mode != MILENA_DATA_EXECUTION_MATERIALIZED_TABLE &&
+         plan->execution_mode != MILENA_DATA_EXECUTION_CSV_RECORD_STREAM) ||
+        plan->operator_count < 3u ||
+        plan->operator_count > MILENA_DATA_PLAN_MAX_OPERATORS ||
+        plan->operators[0] != MILENA_DATA_OPERATOR_CSV_SCAN ||
+        plan->operators[plan->operator_count - 1u] !=
+            MILENA_DATA_OPERATOR_JSON_SINK ||
+        plan->operators[plan->operator_count - 2u] !=
+            MILENA_DATA_OPERATOR_GROUP_AGGREGATE ||
+        plan->metric_count == 0u ||
+        plan->metric_count > MILENA_DATA_PLAN_MAX_METRICS ||
+        (plan->operator_count == 4u &&
+         plan->operators[1] != MILENA_DATA_OPERATOR_NUMERIC_GREATER_FILTER) ||
+        (plan->operator_count == 3u && plan->has_numeric_greater_filter))
+        return plan_error(error, MILENA_ERR_DATA,
+                          "Invalid common data-operator graph shape");
+    if (plan->has_numeric_greater_filter &&
+        (!plan->filter_column || !plan->filter_column[0] ||
+         !isfinite(plan->filter_threshold)))
+        return plan_error(error, MILENA_ERR_DATA,
+                          "Common numeric filter is missing a finite typed operand");
+    if (!plan->group_key || !plan->group_key[0])
+        return plan_error(error, MILENA_ERR_DATA,
+                          "Common group aggregate requires one text key");
+    for (size_t i = 0; i < plan->metric_count; ++i) {
+        const MilenaDataPlanMetric *metric = &plan->metrics[i];
+        if (!metric->input_column || !metric->input_column[0] ||
+            (metric->operation != MILENA_DATA_AGGREGATE_SUM &&
+             metric->operation != MILENA_DATA_AGGREGATE_MEAN &&
+             metric->operation != MILENA_DATA_AGGREGATE_COUNT))
+            return plan_error(error, MILENA_ERR_DATA,
+                              "Common aggregate metric is not typed or supported");
+    }
+    if (error) milena_error_clear(error);
+    return MILENA_OK;
+}
+
+static bool common_aggregate_from_table(MilenaAggregateOp source,
+                                        MilenaDataAggregateKind *target) {
+    if (source == MILENA_AGG_SUM) *target = MILENA_DATA_AGGREGATE_SUM;
+    else if (source == MILENA_AGG_MEAN) *target = MILENA_DATA_AGGREGATE_MEAN;
+    else if (source == MILENA_AGG_COUNT) *target = MILENA_DATA_AGGREGATE_COUNT;
+    else return false;
+    return true;
+}
+
+static bool common_aggregate_from_stream(ASTStreamOperation source,
+                                         MilenaDataAggregateKind *target) {
+    if (source == AST_STREAM_OPERATION_SUM) *target = MILENA_DATA_AGGREGATE_SUM;
+    else if (source == AST_STREAM_OPERATION_MEAN) *target = MILENA_DATA_AGGREGATE_MEAN;
+    else if (source == AST_STREAM_OPERATION_COUNT) *target = MILENA_DATA_AGGREGATE_COUNT;
+    else return false;
+    return true;
+}
+
+MilenaStatus milena_data_operator_plan_from_hir(
+    const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
+    MilenaError *error) {
+    if (!hir || !plan)
+        return plan_error(error, MILENA_ERR_ARGUMENT,
+                          "Common HIR plan requires a data HIR and destination");
+    memset(plan, 0, sizeof(*plan));
+    if (!hir->schema_bound || hir->source.streaming || !hir->source.path ||
+        !hir->export_path || !hir->export_path[0])
+        return common_plan_unsupported(error,
+            "Data HIR is outside the materialized CSV aggregate overlap");
+    plan->source_path = hir->source.path;
+    plan->sink_path = hir->export_path;
+    plan->execution_mode = MILENA_DATA_EXECUTION_MATERIALIZED_TABLE;
+    plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_CSV_SCAN;
+    const MilenaHIRDataOperation *group = NULL;
+    bool filter_seen = false;
+    for (size_t i = 0; i < hir->operation_count; ++i) {
+        const MilenaHIRDataOperation *op = &hir->operations[i];
+        if (op->kind == MILENA_HIR_DATA_FILTER_NUMERIC) {
+            if (filter_seen || group ||
+                op->as.filter.operation != AST_OPERATOR_GREATER ||
+                op->as.filter.column.type != MILENA_HIR_COLUMN_NUMERIC ||
+                !isfinite(op->as.filter.threshold) ||
+                !op->as.filter.column.name || !op->as.filter.column.name[0])
+                return common_plan_unsupported(error,
+                    "HIR filter is outside the numeric-greater common subset");
+            filter_seen = true;
+            plan->has_numeric_greater_filter = true;
+            plan->filter_column = op->as.filter.column.name;
+            plan->filter_threshold = op->as.filter.threshold;
+        } else if (op->kind == MILENA_HIR_DATA_GROUP) {
+            if (group || !op->as.group.key.name ||
+                op->as.group.key.type != MILENA_HIR_COLUMN_TEXT ||
+                op->as.group.aggregate_count == 0u ||
+                op->as.group.aggregate_count > MILENA_DATA_PLAN_MAX_METRICS)
+                return common_plan_unsupported(error,
+                    "HIR group is outside the one-text-key common subset");
+            group = op;
+        } else {
+            return common_plan_unsupported(error,
+                "HIR operation is outside the filter/group common subset");
+        }
+    }
+    if (!group)
+        return common_plan_unsupported(error,
+            "Common HIR plan requires one grouped aggregate");
+    if (filter_seen)
+        plan->operators[plan->operator_count++] =
+            MILENA_DATA_OPERATOR_NUMERIC_GREATER_FILTER;
+    plan->operators[plan->operator_count++] =
+        MILENA_DATA_OPERATOR_GROUP_AGGREGATE;
+    plan->group_key = group->as.group.key.name;
+    plan->metric_count = group->as.group.aggregate_count;
+    for (size_t i = 0; i < plan->metric_count; ++i) {
+        const MilenaHIRAggregate *aggregate = &group->as.group.aggregates[i];
+        if (!common_aggregate_from_table(aggregate->operation,
+                                         &plan->metrics[i].operation) ||
+            !aggregate->input.name || !aggregate->input.name[0] ||
+            aggregate->input.type != MILENA_HIR_COLUMN_NUMERIC)
+            return common_plan_unsupported(error,
+                "HIR aggregate is outside the numeric sum/mean/count common subset");
+        plan->metrics[i].input_column = aggregate->input.name;
+    }
+    plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_JSON_SINK;
+    return milena_data_operator_plan_validate(plan, error);
+}
+
+static const ASTNode *common_plan_find_declaration(const ASTNode *analysis,
+                                                    const char *name) {
+    if (!analysis || !name) return NULL;
+    for (size_t i = 0; i < analysis->child_count; ++i) {
+        const ASTNode *node = analysis->children[i];
+        if (node && node->type == AST_DECLARACION_VARIABLE && node->value &&
+            strcmp(node->value, name) == 0) return node;
+    }
+    return NULL;
+}
+
+static bool common_plan_declaration_is(const ASTNode *analysis,
+                                      const char *name, const char *type_name) {
+    const ASTNode *declaration = common_plan_find_declaration(analysis, name);
+    return declaration && declaration->type_name && type_name &&
+           strcmp(declaration->type_name, type_name) == 0;
+}
+
+MilenaStatus milena_data_operator_plan_from_stream(
+    const ASTNode *analysis, const struct MilenaStreamExecutionPlan *stream_plan,
+    MilenaDataOperatorPlan *plan, MilenaError *error) {
+    if (!analysis || !stream_plan || !plan ||
+        analysis->type != AST_BLOQUE_ANALISIS)
+        return plan_error(error, MILENA_ERR_ARGUMENT,
+                          "Common stream plan requires a validated analysis plan");
+    memset(plan, 0, sizeof(*plan));
+    if (!stream_plan->source || !stream_plan->group ||
+        stream_plan->group_key_count != 1u || !stream_plan->group_key ||
+        !stream_plan->group_summary || !stream_plan->sink ||
+        !stream_plan->source->value || !stream_plan->sink->value ||
+        !stream_plan->source->value[0] || !stream_plan->sink->value[0] ||
+        stream_plan->group_summary->child_count == 0u ||
+        stream_plan->group_summary->child_count > MILENA_DATA_PLAN_MAX_METRICS)
+        return common_plan_unsupported(error,
+            "CSV stream plan is outside the single-key grouped overlap");
+    const char *key = stream_plan->group_key->value;
+    if (!key || !key[0] || !common_plan_declaration_is(analysis, key, "texto"))
+        return common_plan_unsupported(error,
+            "CSV common grouped key must have an explicit texto declaration");
+    plan->source_path = stream_plan->source->value;
+    plan->sink_path = stream_plan->sink->value;
+    plan->execution_mode = MILENA_DATA_EXECUTION_CSV_RECORD_STREAM;
+    plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_CSV_SCAN;
+    if (stream_plan->filter) {
+        if (stream_plan->filter->stream_filter_kind !=
+                AST_STREAM_FILTER_NUMERIC_GREATER ||
+            !stream_plan->filter->value ||
+            !common_plan_declaration_is(analysis, stream_plan->filter->value,
+                                        "numerica") ||
+            !isfinite(stream_plan->filter->number_value))
+            return common_plan_unsupported(error,
+                "CSV stream filter is outside the numeric-greater common subset");
+        plan->has_numeric_greater_filter = true;
+        plan->filter_column = stream_plan->filter->value;
+        plan->filter_threshold = stream_plan->filter->number_value;
+        plan->operators[plan->operator_count++] =
+            MILENA_DATA_OPERATOR_NUMERIC_GREATER_FILTER;
+    }
+    plan->operators[plan->operator_count++] =
+        MILENA_DATA_OPERATOR_GROUP_AGGREGATE;
+    plan->group_key = key;
+    plan->metric_count = stream_plan->group_summary->child_count;
+    for (size_t i = 0; i < plan->metric_count; ++i) {
+        const ASTNode *metric = stream_plan->group_summary->children[i];
+        if (!metric || metric->type != AST_RESUMEN_METRICA || !metric->value ||
+            !common_plan_declaration_is(analysis, metric->value, "numerica") ||
+            !common_aggregate_from_stream(metric->stream_operation,
+                                          &plan->metrics[i].operation))
+            return common_plan_unsupported(error,
+                "CSV aggregate is outside the numeric sum/mean/count common subset");
+        plan->metrics[i].input_column = metric->value;
+    }
+    plan->operators[plan->operator_count++] = MILENA_DATA_OPERATOR_JSON_SINK;
+    return milena_data_operator_plan_validate(plan, error);
+}
+
+bool milena_data_operator_plans_same_logic(
+    const MilenaDataOperatorPlan *left, const MilenaDataOperatorPlan *right) {
+    if (!left || !right ||
+        left->has_numeric_greater_filter != right->has_numeric_greater_filter ||
+        left->metric_count != right->metric_count ||
+        left->operator_count != right->operator_count ||
+        !left->group_key || !right->group_key ||
+        strcmp(left->group_key, right->group_key) != 0 ||
+        (left->has_numeric_greater_filter &&
+         (!left->filter_column || !right->filter_column ||
+          strcmp(left->filter_column, right->filter_column) != 0 ||
+          left->filter_threshold != right->filter_threshold)))
+        return false;
+    for (size_t i = 0; i < left->operator_count; ++i)
+        if (left->operators[i] != right->operators[i]) return false;
+    for (size_t i = 0; i < left->metric_count; ++i)
+        if (!left->metrics[i].input_column || !right->metrics[i].input_column ||
+            strcmp(left->metrics[i].input_column,
+                   right->metrics[i].input_column) != 0 ||
+            left->metrics[i].operation != right->metrics[i].operation)
+            return false;
+    return true;
 }
 
 static bool supported_analysis_child(ASTNodeType type) {

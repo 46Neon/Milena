@@ -27,6 +27,9 @@ typedef struct {
     size_t capacity;
 } StringList;
 
+static bool file_exists(const char *path);
+static char *optional_read_file(const char *path);
+
 static const char *const product_sources[] = {
     "analysis.c", "array.c", "arrow_ipc.c", "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "common.c",
     "dataset.c", "entrypoints.c", "external_merge.c", "external_sort.c",

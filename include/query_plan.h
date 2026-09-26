@@ -4,6 +4,64 @@
 #include "ast.h"
 #include "common.h"
 
+/* Canonical logical contract for the current, intentionally narrow overlap
+ * between materialized table HIR and CSV record-streaming execution. Strings
+ * are borrowed from the validated source plans. This is not an engine-neutral
+ * physical plan, and it does not imply Arrow/SQLite support. */
+#define MILENA_DATA_PLAN_MAX_METRICS 64u
+#define MILENA_DATA_PLAN_MAX_OPERATORS 4u
+
+typedef enum {
+    MILENA_DATA_OPERATOR_CSV_SCAN = 1,
+    MILENA_DATA_OPERATOR_NUMERIC_GREATER_FILTER,
+    MILENA_DATA_OPERATOR_GROUP_AGGREGATE,
+    MILENA_DATA_OPERATOR_JSON_SINK
+} MilenaDataOperatorKind;
+
+typedef enum {
+    MILENA_DATA_AGGREGATE_SUM = 1,
+    MILENA_DATA_AGGREGATE_MEAN,
+    MILENA_DATA_AGGREGATE_COUNT
+} MilenaDataAggregateKind;
+
+typedef enum {
+    MILENA_DATA_EXECUTION_MATERIALIZED_TABLE = 1,
+    MILENA_DATA_EXECUTION_CSV_RECORD_STREAM
+} MilenaDataExecutionMode;
+
+typedef struct {
+    const char *input_column;
+    MilenaDataAggregateKind operation;
+} MilenaDataPlanMetric;
+
+typedef struct {
+    const char *source_path;
+    const char *sink_path;
+    MilenaDataExecutionMode execution_mode;
+    MilenaDataOperatorKind operators[MILENA_DATA_PLAN_MAX_OPERATORS];
+    size_t operator_count;
+    bool has_numeric_greater_filter;
+    const char *filter_column;
+    double filter_threshold;
+    const char *group_key;
+    MilenaDataPlanMetric metrics[MILENA_DATA_PLAN_MAX_METRICS];
+    size_t metric_count;
+} MilenaDataOperatorPlan;
+
+struct MilenaDataHIR;
+struct MilenaStreamExecutionPlan;
+MilenaStatus milena_data_operator_plan_from_hir(
+    const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
+    MilenaError *error);
+MilenaStatus milena_data_operator_plan_from_stream(
+    const ASTNode *analysis, const struct MilenaStreamExecutionPlan *stream_plan,
+    MilenaDataOperatorPlan *plan, MilenaError *error);
+MilenaStatus milena_data_operator_plan_validate(
+    const MilenaDataOperatorPlan *plan, MilenaError *error);
+bool milena_data_operator_plans_same_logic(
+    const MilenaDataOperatorPlan *left,
+    const MilenaDataOperatorPlan *right);
+
 /* Typed logical and physical plan annotations for the canonical .analisis path.
  * AST references are borrowed and remain valid while the runtime owns the AST. */
 typedef enum {
@@ -33,7 +91,7 @@ typedef enum {
 
 #define MILENA_STREAM_PLAN_MAX_OPERATORS 6u
 
-typedef struct {
+typedef struct MilenaStreamExecutionPlan {
     const ASTNode *source;
     const ASTNode *filter;
     const ASTNode *sink;

@@ -1142,8 +1142,6 @@ int main(void) {
           "el HIR debe fallar cerrado con nodo y ubicación, sin vista parcial");
     milena_canonical_program_release(&program);
 
-||||||| merge_blobs/tests_test_canonical_compiler_c.base.txt
-
     /* A source module with a direct scalar call lowers only on the canonical
        Spanish lexer/parser/semantic -> HIR -> typed-IR path. Calls are
        nonrecursive, numeric-parameter, scalar-returning, and carry owned,

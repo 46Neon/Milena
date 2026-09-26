@@ -195,7 +195,7 @@ typedef struct {
     } as;
 } MilenaHIRDataOperation;
 
-typedef struct {
+typedef struct MilenaDataHIR {
     MilenaHIRDatasetSource source;
     MilenaHIRColumnRef *declared_schema;
     size_t declared_column_count;

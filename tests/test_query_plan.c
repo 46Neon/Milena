@@ -1,4 +1,5 @@
 #include "query_plan.h"
+#include "canonical_compiler.h"
 
 #include <assert.h>
 #include <math.h>
@@ -327,6 +328,112 @@ static void test_ambiguous_and_unsupported_plans(void) {
     ast_destroy(analysis);
 }
 
+static ASTNode *typed_declaration(const char *name, const char *type_name) {
+    ASTNode *node = leaf_with_value(AST_DECLARACION_VARIABLE, name);
+    node->type_name = milena_strdup(type_name);
+    assert(node->type_name);
+    return node;
+}
+
+static void test_common_data_operator_overlap(void) {
+    MilenaHIRDataOperation hir_operations[2] = {{0}};
+    MilenaHIRAggregate hir_aggregates[3] = {{0}};
+    MilenaDataHIR hir = {0};
+    hir.source.path = "rows.csv";
+    hir.export_path = "memory.json";
+    hir.schema_bound = true;
+    hir.operation_count = 2u;
+    hir.operations = hir_operations;
+    hir_operations[0].kind = MILENA_HIR_DATA_FILTER_NUMERIC;
+    hir_operations[0].as.filter.operation = AST_OPERATOR_GREATER;
+    hir_operations[0].as.filter.threshold = 1.0;
+    hir_operations[0].as.filter.column.name = "valor";
+    hir_operations[0].as.filter.column.type = MILENA_HIR_COLUMN_NUMERIC;
+    hir_operations[1].kind = MILENA_HIR_DATA_GROUP;
+    hir_operations[1].as.group.key.name = "grupo";
+    hir_operations[1].as.group.key.type = MILENA_HIR_COLUMN_TEXT;
+    hir_operations[1].as.group.aggregate_count = 3u;
+    hir_operations[1].as.group.aggregates = hir_aggregates;
+    const MilenaAggregateOp table_operations[] = {
+        MILENA_AGG_SUM, MILENA_AGG_MEAN, MILENA_AGG_COUNT
+    };
+    const char *metric_columns[] = {"valor", "valor", "valor"};
+    for (size_t i = 0; i < 3u; ++i) {
+        hir_aggregates[i].operation = table_operations[i];
+        hir_aggregates[i].input.name = (char *)metric_columns[i];
+        hir_aggregates[i].input.type = MILENA_HIR_COLUMN_NUMERIC;
+    }
+    MilenaDataOperatorPlan in_memory = {0};
+    MilenaError error = {0};
+    assert(milena_data_operator_plan_from_hir(&hir, &in_memory, &error) ==
+           MILENA_OK);
+    assert(in_memory.execution_mode ==
+           MILENA_DATA_EXECUTION_MATERIALIZED_TABLE);
+    assert(in_memory.operator_count == 4u && in_memory.has_numeric_greater_filter);
+
+    ASTNode *analysis = ast_create(AST_BLOQUE_ANALISIS);
+    assert(analysis);
+    assert(ast_add_child(analysis, typed_declaration("grupo", "texto")));
+    assert(ast_add_child(analysis, typed_declaration("valor", "numerica")));
+    ASTNode *source = stream_source();
+    assert(ast_add_child(analysis, source));
+    ASTNode *filter = leaf_with_value(AST_STREAM_FILTER, "valor");
+    filter->stream_filter_kind = AST_STREAM_FILTER_NUMERIC_GREATER;
+    filter->number_value = 1.0;
+    assert(ast_add_child(analysis, filter));
+    ASTNode *group = ast_create(AST_BLOQUE_AGRUPAR);
+    assert(group);
+    assert(ast_add_child(group, leaf_with_value(AST_AGRUPACION_POR, "grupo")));
+    ASTNode *summary = ast_create(AST_BLOQUE_RESUMIR);
+    assert(summary);
+    const ASTStreamOperation stream_operations[] = {
+        AST_STREAM_OPERATION_SUM, AST_STREAM_OPERATION_MEAN,
+        AST_STREAM_OPERATION_COUNT
+    };
+    for (size_t i = 0; i < 3u; ++i) {
+        ASTNode *metric = leaf_with_value(AST_RESUMEN_METRICA, "valor");
+        metric->stream_operation = stream_operations[i];
+        assert(ast_add_child(summary, metric));
+    }
+    assert(ast_add_child(group, summary));
+    assert(ast_add_child(analysis, group));
+    assert(ast_add_child(analysis, leaf_with_value(AST_BLOQUE_EXPORTAR,
+                                                    "stream.json")));
+    MilenaStreamExecutionPlan stream_plan = {0};
+    assert(milena_stream_execution_plan_build(analysis, &stream_plan, &error) ==
+           MILENA_OK);
+    MilenaDataOperatorPlan streaming = {0};
+    assert(milena_data_operator_plan_from_stream(analysis, &stream_plan,
+                                                  &streaming, &error) ==
+           MILENA_OK);
+    assert(streaming.execution_mode == MILENA_DATA_EXECUTION_CSV_RECORD_STREAM);
+    assert(milena_data_operator_plans_same_logic(&in_memory, &streaming));
+    assert(strcmp(in_memory.source_path, streaming.source_path) == 0);
+    assert(strcmp(in_memory.sink_path, "memory.json") == 0 &&
+           strcmp(streaming.sink_path, "stream.json") == 0);
+
+    summary->children[0]->stream_operation = AST_STREAM_OPERATION_MIN;
+    assert(milena_stream_execution_plan_build(analysis, &stream_plan, &error) ==
+           MILENA_OK);
+    assert(milena_data_operator_plan_from_stream(analysis, &stream_plan,
+        &streaming, &error) == MILENA_ERR_UNSUPPORTED);
+    summary->children[0]->stream_operation = AST_STREAM_OPERATION_SUM;
+    assert(milena_stream_execution_plan_build(analysis, &stream_plan, &error) ==
+           MILENA_OK);
+    assert(milena_data_operator_plan_from_stream(analysis, &stream_plan,
+        &streaming, &error) == MILENA_OK);
+
+    MilenaDataOperatorPlan malformed = streaming;
+    malformed.operators[1] = MILENA_DATA_OPERATOR_GROUP_AGGREGATE;
+    assert(milena_data_operator_plan_validate(&malformed, &error) ==
+           MILENA_ERR_DATA);
+    ast_destroy(analysis);
+
+    hir_aggregates[0].operation = MILENA_AGG_MIN;
+    assert(milena_data_operator_plan_from_hir(&hir, &in_memory, &error) ==
+           MILENA_ERR_UNSUPPORTED);
+}
+
 int main(void) {
     test_global_stream_plan();
     test_grouped_stream_plan();
@@ -337,6 +444,7 @@ int main(void) {
     test_numeric_filter_plan();
     test_legacy_global_summary_plan();
     test_ambiguous_and_unsupported_plans();
-    puts("Canonical logical/physical stream plans validated.");
+    test_common_data_operator_overlap();
+    puts("Canonical logical/physical stream plans and shared data-operator overlap validated.");
     return 0;
 }

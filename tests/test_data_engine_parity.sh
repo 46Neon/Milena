@@ -9,12 +9,15 @@ B,2
 A,1
 A,3
 C,4
+A,not-a-number
+B,
 CSV
 cat > "$TMP_DIR/in-memory.milena" <<'MILENA'
 .analisis memoria {
   dataset cargar datos("rows.csv")
   variable grupo texto
   variable valor numerica
+  .filtrar { #condicion("valor > 1") }
   .agrupar dataset { #por("grupo") #suma("valor") #media("valor") #conteo("valor") }
   .exportar { ("memory.json") }
 }
@@ -24,12 +27,33 @@ cat > "$TMP_DIR/csv-stream.milena" <<'MILENA'
   variable grupo texto
   variable valor numerica
   datos desde "rows.csv" con grupos de 10 con filas hasta 100 con tiempo hasta 30000 ms
+  filtrar "valor" > 1;
   agrupar por "grupo" resumir { suma de "valor"; media de "valor"; contar de "valor"; }
   guardar resultado en "stream.json"
 }
 MILENA
+cat > "$TMP_DIR/in-memory-count.milena" <<'MILENA'
+.analisis memoria_conteo {
+  dataset cargar datos("rows.csv")
+  variable grupo texto
+  variable valor numerica
+  .agrupar dataset { #por("grupo") #conteo("valor") }
+  .exportar { ("memory-count.json") }
+}
+MILENA
+cat > "$TMP_DIR/csv-count.milena" <<'MILENA'
+.analisis flujo_conteo {
+  variable grupo texto
+  variable valor numerica
+  datos desde "rows.csv" con grupos de 10 con filas hasta 100 con tiempo hasta 30000 ms
+  agrupar por "grupo" resumir { contar de "valor"; }
+  guardar resultado en "stream-count.json"
+}
+MILENA
 (cd "$TMP_DIR" && "$MILENA_BIN" run in-memory.milena)
 (cd "$TMP_DIR" && "$MILENA_BIN" run csv-stream.milena)
+(cd "$TMP_DIR" && "$MILENA_BIN" run in-memory-count.milena)
+(cd "$TMP_DIR" && "$MILENA_BIN" run csv-count.milena)
 python3 - "$TMP_DIR" <<'PY'
 import json, math, pathlib, sys
 p = pathlib.Path(sys.argv[1])
@@ -51,7 +75,7 @@ stream_rows = {
     for row in stream["resultados"]
 }
 expected = {
-    "A": {"suma": 4, "media": 2, "conteo": 2},
+    "A": {"suma": 3, "media": 3, "conteo": 1},
     "B": {"suma": 2, "media": 2, "conteo": 1},
     "C": {"suma": 4, "media": 4, "conteo": 1},
 }
@@ -61,6 +85,16 @@ for key, values in expected.items():
         a, b = mem_rows[key][operation], stream_rows[key][operation]
         assert math.isclose(float(a), expected_value, rel_tol=0, abs_tol=1e-12), (key, operation, a)
         assert math.isclose(float(b), expected_value, rel_tol=0, abs_tol=1e-12), (key, operation, b)
+
+memory_count = json.loads((p / "memory-count.json").read_text())
+stream_count = json.loads((p / "stream-count.json").read_text())
+mem_counts = {row["grupo"]: row["valor_conteo"] for row in memory_count["datos"]}
+stream_counts = {
+    row["clave"]: row["metricas"][0]["valor"]
+    for row in stream_count["resultados"]
+}
+expected_counts = {"A": 2, "B": 1, "C": 1}
+assert mem_counts == stream_counts == expected_counts, (mem_counts, stream_counts)
 PY
 # A source-row budget breach is a controlled failure. A previously published
 # destination must survive unchanged rather than becoming a partial success.
