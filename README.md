@@ -195,7 +195,7 @@ Uso directo:
 ./milena perfil datos.csv perfil.json
 ```
 
-La CLI distribuida todavía no ofrece un comando `build` de fuente a ejecutable. El único backend AOT de este slice es experimental y aislado: consume bytecode MLBC verificado, no fuente ni datasets, y emite código nativo únicamente en Linux x86-64. El bytecode v1.0/v1.1, su subset cerrado de llamadas numéricas y las limitaciones de este backend se describen en [BYTECODE v1](docs/BYTECODE_V1.md). Esto no constituye una integración de producción ni completa la fase 2 o la fase 3 del plan.
+La CLI distribuida todavía no ofrece un comando `build` de fuente a ejecutable. El compilador de fuente del slice experimental emite MLBC v1.2 tipado únicamente para su subconjunto escalar cerrado de HIR resuelto; no representa la gramática completa de `.milena` ni el HIR de datos. El backend AOT aislado consume exactamente bytes MLBC verificados (no fuente ni datasets) y emite código nativo solo en Linux x86-64; v1.0/v1.1 conservan compatibilidad. El formato, el alcance y las limitaciones se describen en [BYTECODE v1](docs/BYTECODE_V1.md). Esto no constituye una integración de producción ni completa la fase 2 o la fase 3 del plan.
 
 También existe un constructor local de paquete Debian:
 

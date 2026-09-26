@@ -27,6 +27,73 @@ static bool near(double actual, double expected) {
     return fabs(actual - expected) < 1e-12;
 }
 
+static uint16_t test_read_u16le(const uint8_t *bytes) {
+    return (uint16_t)((uint16_t)bytes[0] | ((uint16_t)bytes[1] << 8));
+}
+
+static uint32_t test_read_u32le(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+}
+
+static int check_typed_v12(const uint8_t *bytes, size_t length,
+                           bool require_boolean_constant,
+                           bool require_boolean_comparison) {
+    if (!bytes || length < MILENA_BYTECODE_HEADER_SIZE ||
+        test_read_u16le(bytes + 4) != MILENA_BYTECODE_VERSION_MAJOR ||
+        test_read_u16le(bytes + 6) != MILENA_BYTECODE_VERSION_TYPED_MINOR)
+        return 1;
+    uint16_t register_count = test_read_u16le(bytes + 8);
+    uint32_t instruction_count = test_read_u32le(bytes + 12);
+    size_t metadata = MILENA_BYTECODE_HEADER_SIZE +
+                      (size_t)instruction_count * MILENA_BYTECODE_INSTRUCTION_SIZE;
+    if (!register_count || metadata > length || length - metadata < register_count)
+        return 1;
+    size_t function_count = 0;
+    bool found_boolean_register = false;
+    bool found_boolean_constant = false;
+    bool found_boolean_comparison = false;
+    for (uint32_t pc = 0; pc < instruction_count; ++pc) {
+        const uint8_t *record = bytes + MILENA_BYTECODE_HEADER_SIZE +
+                                (size_t)pc * MILENA_BYTECODE_INSTRUCTION_SIZE;
+        if (record[0] == MILENA_BC_FUNCTION) function_count++;
+    }
+    if (!function_count || function_count > MILENA_BYTECODE_MAX_FUNCTIONS ||
+        length - metadata != (size_t)register_count + function_count)
+        return 1;
+    for (uint16_t reg = 0; reg < register_count; ++reg) {
+        uint8_t type = bytes[metadata + reg];
+        if (type != MILENA_BC_TYPE_NUMBER && type != MILENA_BC_TYPE_BOOLEAN)
+            return 1;
+        if (type == MILENA_BC_TYPE_BOOLEAN) found_boolean_register = true;
+    }
+    if (bytes[metadata + register_count] != MILENA_BC_TYPE_NUMBER)
+        return 1;
+    for (uint32_t pc = 0; pc < instruction_count; ++pc) {
+        const uint8_t *record = bytes + MILENA_BYTECODE_HEADER_SIZE +
+                                (size_t)pc * MILENA_BYTECODE_INSTRUCTION_SIZE;
+        uint32_t destination = test_read_u32le(record + 4);
+        if (record[0] == MILENA_BC_CONST_BOOL) {
+            if (destination >= register_count ||
+                bytes[metadata + destination] != MILENA_BC_TYPE_BOOLEAN) return 1;
+            found_boolean_constant = true;
+        }
+        if (record[0] >= MILENA_BC_EQ && record[0] <= MILENA_BC_GE) {
+            if (destination >= register_count ||
+                bytes[metadata + destination] != MILENA_BC_TYPE_BOOLEAN) return 1;
+            found_boolean_comparison = true;
+        }
+        if (record[0] == MILENA_BC_JUMP_IF_FALSE &&
+            (destination >= register_count ||
+             bytes[metadata + destination] != MILENA_BC_TYPE_BOOLEAN)) return 1;
+    }
+    if ((require_boolean_constant &&
+         (!found_boolean_register || !found_boolean_constant)) ||
+        (require_boolean_comparison &&
+         (!found_boolean_register || !found_boolean_comparison))) return 1;
+    return 0;
+}
+
 static int execute_native(const char *path, int *exit_code,
                           char *output, size_t output_capacity) {
     int pipe_fds[2];
@@ -150,7 +217,8 @@ static int check_native_error_status(const uint8_t *bytes, size_t length,
 
 static int check_end_to_end(const char *function_source,
                             const char *reference_source,
-                            double expected) {
+                            double expected, bool require_boolean_constant,
+                            bool require_boolean_comparison) {
     uint8_t *bytes = NULL;
     size_t length = 0;
     MilenaError error;
@@ -161,6 +229,9 @@ static int check_end_to_end(const char *function_source,
           error.message);
     CHECK(bytes != NULL && length > MILENA_BYTECODE_HEADER_SIZE,
           "source lowering must return encoded bytecode");
+    CHECK(check_typed_v12(bytes, length, require_boolean_constant,
+                          require_boolean_comparison) == 0,
+          "canonical source lowering must emit complete v1.2 HIR-derived type metadata");
     CHECK(milena_bytecode_verify(bytes, length, NULL, &diagnostic) == MILENA_BC_OK,
           diagnostic.message);
     CHECK(milena_bytecode_run(bytes, length, NULL, &actual, &diagnostic) == MILENA_BC_OK,
@@ -276,6 +347,19 @@ int main(void) {
         "funcion principal() { variable x = 0; "
         "si (falso) { x = 10; } sino { x = 20; } retornar x; } "
         "variable salida = principal();";
+    const char *boolean_locals =
+        "funcion principal() { variable activo = verdadero; "
+        "variable coincide = activo == verdadero; variable resultado = 0; "
+        "si (coincide) { resultado = 17; } sino { resultado = 21; } "
+        "retornar resultado; }";
+    const char *boolean_locals_reference =
+        "funcion principal() { variable activo = verdadero; "
+        "variable coincide = activo == verdadero; variable resultado = 0; "
+        "si (coincide) { resultado = 17; } sino { resultado = 21; } "
+        "retornar resultado; } variable salida = principal();";
+    const char *numeric_condition =
+        "funcion principal() { si (1) { retornar 1; } "
+        "sino { retornar 0; } }";
     const char *recursive =
         "funcion principal() { retornar ida(1); } "
         "funcion ida(x) { retornar vuelta(x); } "
@@ -301,6 +385,9 @@ int main(void) {
     const char *bad_call_arity =
         "funcion principal() { retornar doble(); } "
         "funcion doble(x) { retornar x; }";
+    const char *bad_call_type =
+        "funcion principal() { retornar elevar(verdadero); } "
+        "funcion elevar(x) { retornar x; }";
     const char *parameter =
         "funcion principal(x) { retornar x; }";
     const char *global =
@@ -314,13 +401,15 @@ int main(void) {
     const char *mixed_comparison =
         "funcion principal() { si (verdadero < 2) { retornar 1; } sino { retornar 0; } }";
 
-    CHECK(check_end_to_end(arithmetic, arithmetic_reference, 13.0) == 0,
-          "arithmetic source-to-bytecode end-to-end test failed");
-    CHECK(check_end_to_end(branch_true, branch_true_reference, 10.0) == 0,
-          "true-branch source-to-bytecode end-to-end test failed");
-    CHECK(check_end_to_end(branch_false, branch_false_reference, 20.0) == 0,
-          "false-branch source-to-bytecode end-to-end test failed");
-    CHECK(check_end_to_end(forward_calls, forward_calls_reference, 13.0) == 0,
+    CHECK(check_end_to_end(arithmetic, arithmetic_reference, 13.0, false, false) == 0,
+          "arithmetic source-to-v1.2-bytecode end-to-end test failed");
+    CHECK(check_end_to_end(branch_true, branch_true_reference, 10.0, false, true) == 0,
+          "comparison-driven control-flow source test failed");
+    CHECK(check_end_to_end(branch_false, branch_false_reference, 20.0, true, false) == 0,
+          "boolean-literal control-flow source test failed");
+    CHECK(check_end_to_end(boolean_locals, boolean_locals_reference, 17.0, true, true) == 0,
+          "boolean locals/comparison/control-flow source test failed");
+    CHECK(check_end_to_end(forward_calls, forward_calls_reference, 13.0, false, false) == 0,
           "forward helper calls must agree across interpreter, bytecode VM, and native AOT");
     CHECK(check_call_limits(nested_calls) == 0,
           "call frame, fuel, malformed-target, and cleanup tests failed");
@@ -334,6 +423,10 @@ int main(void) {
                                          &compile_error) == MILENA_ERR_TYPE &&
               bytes == NULL && length == 0 && compile_error.line > 0,
           "canonical semantic resolution must reject wrong call arity before lowering");
+    CHECK(milena_bytecode_compile_source(bad_call_type, &bytes, &length,
+                                         &compile_error) == MILENA_ERR_TYPE &&
+              bytes == NULL && length == 0 && compile_error.line > 0,
+          "canonical semantic resolution must reject argument/signature type mismatches");
     CHECK(check_rejected(recursive, "recursión") == 0,
           "recursive and mutually recursive graphs must be explicitly rejected");
     CHECK(check_rejected(parameter, "cero parámetros") == 0,
@@ -350,7 +443,9 @@ int main(void) {
           "a function with a fallthrough path should be explicitly rejected");
     CHECK(check_rejected(mixed_comparison, "Comparación HIR mixta") == 0,
           "mixed-type comparisons should be explicitly rejected without coercion");
+    CHECK(check_rejected(numeric_condition, "booleana en bytecode v1.2") == 0,
+          "numeric control conditions must fail closed rather than weaken v1.2 verification");
 
-    puts("bytecode compiler tests: canonical HIR lowering, verification, VM, and interpreter reference OK");
+    puts("bytecode compiler tests: canonical HIR-to-v1.2 lowering, verification, VM, and AOT parity OK");
     return 0;
 }

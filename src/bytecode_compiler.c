@@ -21,6 +21,9 @@ typedef struct {
     size_t local_count;
     size_t local_capacity;
     uint16_t register_count;
+    uint8_t register_types[MILENA_BYTECODE_MAX_REGISTERS];
+    uint8_t function_return_types[MILENA_BYTECODE_MAX_FUNCTIONS];
+    uint32_t current_function;
     const MilenaHIRFunction *const *ordered_functions;
     size_t function_count;
     MilenaError *error;
@@ -109,14 +112,21 @@ static bool patch_target(Lowering *lowering, size_t instruction_index,
     return true;
 }
 
+static bool bytecode_type(MilenaHIRValueType type, uint8_t *type_out);
+
 static bool allocate_register(Lowering *lowering,
                               const MilenaHIRSourceSpan *span,
-                              uint32_t *reg_out) {
+                              MilenaHIRValueType type, uint32_t *reg_out) {
+    uint8_t encoded_type;
+    if (!bytecode_type(type, &encoded_type))
+        return reject_at(lowering, span,
+                         "Tipo HIR no admitido para registro bytecode v1.2");
     if (lowering->register_count >= MILENA_BYTECODE_MAX_REGISTERS) {
         return reject_at(lowering, span,
-                         "Bytecode v1 excede el máximo de registros");
+                         "Bytecode v1.2 excede el máximo de registros");
     }
     *reg_out = (uint32_t)lowering->register_count;
+    lowering->register_types[*reg_out] = encoded_type;
     lowering->register_count = (uint16_t)(lowering->register_count + 1u);
     return true;
 }
@@ -164,6 +174,20 @@ static bool scalar_type(MilenaHIRValueType type) {
     return type == MILENA_HIR_NUMBER || type == MILENA_HIR_BOOLEAN;
 }
 
+static bool bytecode_type(MilenaHIRValueType type, uint8_t *type_out) {
+    if (!type_out) return false;
+    switch (type) {
+        case MILENA_HIR_NUMBER:
+            *type_out = MILENA_BC_TYPE_NUMBER;
+            return true;
+        case MILENA_HIR_BOOLEAN:
+            *type_out = MILENA_BC_TYPE_BOOLEAN;
+            return true;
+        default:
+            return false;
+    }
+}
+
 static size_t function_index_by_symbol(const Lowering *lowering, size_t symbol_id) {
     if (!lowering || !symbol_id) return SIZE_MAX;
     for (size_t i = 0; i < lowering->function_count; ++i)
@@ -187,17 +211,21 @@ static bool lower_expression(Lowering *lowering,
     switch (expression->kind) {
         case MILENA_HIR_EXPR_LITERAL: {
             double value;
+            MilenaBytecodeOpcode opcode;
             if (expression->value_type == MILENA_HIR_NUMBER) {
                 value = expression->as.number;
+                opcode = MILENA_BC_CONST_F64;
                 if (!isfinite(value))
                     return reject_at(lowering, &expression->span,
                                      "Literal numérico no finito no admitido");
             } else {
                 value = expression->as.boolean ? 1.0 : 0.0;
+                opcode = MILENA_BC_CONST_BOOL;
             }
-            if (!allocate_register(lowering, &expression->span, reg_out))
+            if (!allocate_register(lowering, &expression->span,
+                                   expression->value_type, reg_out))
                 return false;
-            return emit(lowering, MILENA_BC_CONST_F64, *reg_out, 0, 0,
+            return emit(lowering, opcode, *reg_out, 0, 0,
                         value, &expression->span, NULL);
         }
         case MILENA_HIR_EXPR_VARIABLE: {
@@ -255,7 +283,8 @@ static bool lower_expression(Lowering *lowering,
             }
             if (!lower_expression(lowering, lhs, depth + 1u, &left) ||
                 !lower_expression(lowering, rhs, depth + 1u, &right) ||
-                !allocate_register(lowering, &expression->span, reg_out))
+                !allocate_register(lowering, &expression->span,
+                                   expression->value_type, reg_out))
                 return false;
             return emit(lowering, opcode, *reg_out, left, right, 0.0,
                         &expression->span, NULL);
@@ -267,7 +296,8 @@ static bool lower_expression(Lowering *lowering,
                 return reject_at(lowering, &expression->span,
                                  "La llamada HIR no se enlaza a una función del programa");
             const MilenaHIRFunction *function = lowering->ordered_functions[callee];
-            if (expression->value_type != MILENA_HIR_NUMBER ||
+            if (!function->return_type_resolved ||
+                expression->value_type != function->return_type ||
                 expression->as.call.argument_count != function->parameter_count ||
                 expression->as.call.argument_count > MILENA_BYTECODE_MAX_REGISTERS ||
                 (expression->as.call.argument_count && !expression->as.call.arguments))
@@ -282,18 +312,21 @@ static bool lower_expression(Lowering *lowering,
             }
             for (size_t i = 0; i < argc; ++i) {
                 if (!expression->as.call.arguments[i] ||
-                    expression->as.call.arguments[i]->value_type != MILENA_HIR_NUMBER ||
+                    expression->as.call.arguments[i]->value_type !=
+                        function->parameters[i].value_type ||
                     !lower_expression(lowering, expression->as.call.arguments[i],
                                       depth + 1u, &arguments[i])) {
                     free(arguments);
                     return reject_at(lowering, &expression->span,
-                                     "El ABI bytecode v1.1 admite solo argumentos numéricos");
+                                     "Los tipos de argumentos HIR no coinciden con la firma resuelta");
                 }
             }
             uint32_t argument_base = (uint32_t)lowering->register_count;
             for (size_t i = 0; i < argc; ++i) {
                 uint32_t slot;
-                if (!allocate_register(lowering, &expression->span, &slot) ||
+                if (!allocate_register(lowering, &expression->span,
+                                       expression->as.call.arguments[i]->value_type,
+                                       &slot) ||
                     slot != argument_base + (uint32_t)i ||
                     !emit(lowering, MILENA_BC_MOVE, slot, arguments[i], 0, 0.0,
                           &expression->span, NULL)) {
@@ -302,7 +335,8 @@ static bool lower_expression(Lowering *lowering,
                 }
             }
             free(arguments);
-            if (!allocate_register(lowering, &expression->span, reg_out)) return false;
+            if (!allocate_register(lowering, &expression->span,
+                                   function->return_type, reg_out)) return false;
             return emit(lowering, MILENA_BC_CALL, *reg_out, (uint32_t)callee,
                         argument_base, (double)argc, &expression->span, NULL);
         }
@@ -331,10 +365,12 @@ static bool lower_statement(Lowering *lowering,
         case MILENA_HIR_STMT_DECLARE: {
             uint32_t destination, source;
             if (!scalar_type(statement->value_type) ||
-                !statement->as.expression)
+                !statement->as.expression ||
+                statement->as.expression->value_type != statement->value_type)
                 return reject_at(lowering, &statement->span,
                                  "Declaración HIR requiere inicializador escalar tipado");
-            if (!allocate_register(lowering, &statement->span, &destination) ||
+            if (!allocate_register(lowering, &statement->span,
+                                   statement->value_type, &destination) ||
                 !bind_local(lowering, statement->resolved_symbol_id,
                             destination, statement->value_type, &statement->span) ||
                 !lower_expression(lowering, statement->as.expression, 0, &source))
@@ -365,10 +401,13 @@ static bool lower_statement(Lowering *lowering,
         case MILENA_HIR_STMT_RETURN: {
             uint32_t result;
             if (!statement->as.expression ||
-                statement->value_type != MILENA_HIR_NUMBER ||
-                statement->as.expression->value_type != MILENA_HIR_NUMBER)
+                lowering->current_function >= lowering->function_count ||
+                !lowering->ordered_functions[lowering->current_function]->return_type_resolved ||
+                statement->value_type !=
+                    lowering->ordered_functions[lowering->current_function]->return_type ||
+                statement->as.expression->value_type != statement->value_type)
                 return reject_at(lowering, &statement->span,
-                                 "Bytecode v1 solo admite retorno numérico");
+                                 "Tipo de retorno HIR no coincide con la firma resuelta");
             if (!lower_expression(lowering, statement->as.expression, 0, &result) ||
                 !emit(lowering, MILENA_BC_RETURN, result, 0, 0, 0.0,
                       &statement->span, NULL))
@@ -379,9 +418,10 @@ static bool lower_statement(Lowering *lowering,
         case MILENA_HIR_STMT_IF: {
             uint32_t condition;
             size_t false_branch;
-            if (!statement->as.conditional.condition)
+            if (!statement->as.conditional.condition ||
+                statement->as.conditional.condition->value_type != MILENA_HIR_BOOLEAN)
                 return reject_at(lowering, &statement->span,
-                                 "Condición HIR ausente");
+                                 "La condición de control HIR debe ser booleana en bytecode v1.2");
             if (!lower_expression(lowering,
                                   statement->as.conditional.condition, 0,
                                   &condition) ||
@@ -479,6 +519,21 @@ static bool ordered_functions(const MilenaScalarHIR *hir,
                           "Función HIR sin nombre o binding semántico");
             return false;
         }
+        if (!function->return_type_resolved || !scalar_type(function->return_type) ||
+            (function->parameter_count && !function->parameters)) {
+            (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
+                          "Firma de función HIR incompleta o sin tipos escalares resueltos");
+            return false;
+        }
+        for (size_t p = 0; p < function->parameter_count; ++p) {
+            if (!function->parameters[p].name ||
+                !function->parameters[p].resolved_symbol_id ||
+                !scalar_type(function->parameters[p].value_type)) {
+                (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
+                              "Parámetro HIR sin binding o tipo escalar resuelto");
+                return false;
+            }
+        }
         if (strcmp(function->name, "principal") == 0) {
             if (principal != SIZE_MAX) {
                 (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
@@ -502,7 +557,12 @@ static bool ordered_functions(const MilenaScalarHIR *hir,
     }
     if (hir->functions[principal].parameter_count != 0) {
         (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &hir->functions[principal].span,
-                      "principal debe tener cero parámetros en bytecode v1.1");
+                      "principal debe tener cero parámetros en bytecode v1.2");
+        return false;
+    }
+    if (hir->functions[principal].return_type != MILENA_HIR_NUMBER) {
+        (void)fail_at(error, MILENA_ERR_UNSUPPORTED, &hir->functions[principal].span,
+                      "principal debe retornar un número en bytecode v1.2");
         return false;
     }
     ordered[0] = &hir->functions[principal];
@@ -651,10 +711,16 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
     lowering.function_count = function_count;
     for (size_t f = 0; f < function_count; ++f) {
         const MilenaHIRFunction *function = ordered[f];
+        lowering.current_function = (uint32_t)f;
+        if (!bytecode_type(function->return_type, &lowering.function_return_types[f])) {
+            status = fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
+                             "Tipo de retorno HIR no representable en bytecode v1.2");
+            goto lower_fail;
+        }
         uint32_t parameter_base = lowering.register_count;
         if (function->parameter_count > MILENA_BYTECODE_MAX_REGISTERS) {
             status = fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
-                             "La función excede el límite de parámetros bytecode v1.1");
+                             "La función excede el límite de parámetros bytecode v1.2");
             goto lower_fail;
         }
         if (!emit(&lowering, MILENA_BC_FUNCTION, (uint32_t)f, parameter_base,
@@ -665,10 +731,11 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
         lowering.local_count = 0;
         for (size_t p = 0; p < function->parameter_count; ++p) {
             uint32_t reg;
-            if (!allocate_register(&lowering, &function->span, &reg) ||
+            if (!allocate_register(&lowering, &function->span,
+                                   function->parameters[p].value_type, &reg) ||
                 reg != parameter_base + p ||
                 !bind_local(&lowering, function->parameters[p].resolved_symbol_id,
-                            reg, MILENA_HIR_NUMBER, &function->span)) {
+                            reg, function->parameters[p].value_type, &function->span)) {
                 status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
                 goto lower_fail;
             }
@@ -681,7 +748,7 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
         }
         if (!terminates) {
             status = fail_at(error, MILENA_ERR_UNSUPPORTED, &function->span,
-                             "Todos los caminos de cada función deben retornar un número");
+                             "Todos los caminos de cada función deben retornar su tipo HIR resuelto");
             goto lower_fail;
         }
     }
@@ -692,12 +759,15 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
     }
 
     MilenaBytecodeProgram program = {
-        MILENA_BYTECODE_VERSION_MAJOR,
-        MILENA_BYTECODE_VERSION_CALL_MINOR,
-        lowering.register_count,
-        lowering.instruction_count,
-        lowering.instructions,
-        NULL, 0, NULL, 0
+        .major = MILENA_BYTECODE_VERSION_MAJOR,
+        .minor = MILENA_BYTECODE_VERSION_TYPED_MINOR,
+        .register_count = lowering.register_count,
+        .instruction_count = lowering.instruction_count,
+        .instructions = lowering.instructions,
+        .register_types = lowering.register_types,
+        .register_type_count = lowering.register_count,
+        .function_return_types = lowering.function_return_types,
+        .function_return_type_count = function_count
     };
     size_t required = 0;
     MilenaBytecodeDiagnostic diagnostic;

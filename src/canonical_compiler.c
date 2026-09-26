@@ -319,6 +319,48 @@ static MilenaHIRStatement *hir_build_statement(const ASTNode *node,
     return statement;
 }
 
+static bool hir_collect_function_return_type(
+    MilenaHIRStatement *const *statements, size_t statement_count,
+    bool *found, bool *consistent, MilenaHIRValueType *return_type) {
+    if (!found || !consistent || !return_type ||
+        (statement_count && !statements)) return false;
+    for (size_t i = 0; i < statement_count; ++i) {
+        const MilenaHIRStatement *statement = statements[i];
+        if (!statement) return false;
+        switch (statement->kind) {
+            case MILENA_HIR_STMT_RETURN:
+                if (statement->value_type != MILENA_HIR_NUMBER &&
+                    statement->value_type != MILENA_HIR_BOOLEAN) {
+                    *consistent = false;
+                    break;
+                }
+                if (!*found) {
+                    *return_type = statement->value_type;
+                    *found = true;
+                } else if (*return_type != statement->value_type) {
+                    *consistent = false;
+                }
+                break;
+            case MILENA_HIR_STMT_IF:
+                if (!hir_collect_function_return_type(
+                        statement->as.conditional.then_body,
+                        statement->as.conditional.then_count,
+                        found, consistent, return_type) ||
+                    !hir_collect_function_return_type(
+                        statement->as.conditional.else_body,
+                        statement->as.conditional.else_count,
+                        found, consistent, return_type)) return false;
+                break;
+            case MILENA_HIR_STMT_DECLARE:
+            case MILENA_HIR_STMT_ASSIGN:
+                break;
+            default:
+                return false;
+        }
+    }
+    return true;
+}
+
 static HIRBuildResult scalar_hir_build(const ASTNode *ast,
                                        MilenaScalarHIR **output) {
     *output = NULL;
@@ -392,6 +434,11 @@ static HIRBuildResult scalar_hir_build(const ASTNode *ast,
             function->parameters[j].name = milena_strdup(parameter->value);
             function->parameters[j].resolved_symbol_id =
                 parameter->resolved_symbol_id;
+            if (!hir_value_type(parameter->value_type,
+                                &function->parameters[j].value_type)) {
+                result = HIR_BUILD_UNSUPPORTED;
+                break;
+            }
             if (!function->parameters[j].name) {
                 result = HIR_BUILD_MEMORY;
                 break;
@@ -403,6 +450,17 @@ static HIRBuildResult scalar_hir_build(const ASTNode *ast,
         if (!hir_build_statement_array(
                 (const ASTNode *const *)body->children, body->child_count,
                 &function->body, &result)) break;
+        bool found_return = false;
+        bool consistent_returns = true;
+        MilenaHIRValueType return_type = MILENA_HIR_NUMBER;
+        if (!hir_collect_function_return_type(
+                function->body, function->body_count, &found_return,
+                &consistent_returns, &return_type)) {
+            result = HIR_BUILD_UNSUPPORTED;
+            break;
+        }
+        function->return_type_resolved = found_return && consistent_returns;
+        if (found_return) function->return_type = return_type;
         function_index++;
     }
     if (result != HIR_BUILD_OK) {

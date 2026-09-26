@@ -60,10 +60,11 @@ v1.0/v1.1 deliberately retain their original, untyped semantics for wire
 compatibility. In those formats comparisons and booleans may be represented by
 numeric zero/nonzero values, and this verifier does **not** claim static type
 safety for them. Existing v1.0/v1.1 fixtures, call behavior, and VM execution
-remain tested. The canonical source-to-bytecode compiler currently emits v1.1
-and therefore does not yet emit the v1.2 type table or provide v1.2 guarantees;
-manual/other producers can use the v1.2 API by supplying both exact metadata
-tables.
+remain tested. Canonical source-to-bytecode lowering now emits v1.2 for its
+closed supported scalar-HIR subset, deriving register and function metadata from
+the resolved HIR. This guarantee does not extend to other source grammar, data
+HIR, or arbitrary programs; manual/other producers may use the v1.2 API only by
+supplying both exact metadata tables.
 
 The function marker table is encoded in the same instruction stream, rather than
 out-of-band metadata. Function IDs, parameter and argument ranges, exact arity,
@@ -100,32 +101,41 @@ ignore statements. The supported source subset consists of one zero-parameter
 forward declarations/calls and multiple calls. Each lowered function must
 return a number along every path. Numeric parameters, initialized numeric or
 boolean locals, assignments, finite literals, numeric `+ - * /`, same-type
-numeric comparisons, boolean equality/inequality, nested `si`/`sino`, and
-resolved numeric function calls are supported. Call arguments and returns use
-numeric values; calls with boolean ABI values are rejected without coercion.
-All globals, unsupported HIR/statement forms, mixed-type or boolean-relational
-comparisons, unreachable statements after a guaranteed return, malformed
-bindings, missing returns, register/function/instruction-cap overflow, wrong
-arity, and recursive or mutually recursive call graphs are rejected. Function
-calls continue through semantic resolution and the compiler uses resolved
-symbol IDs to link canonical HIR declarations.
+numeric comparisons, boolean equality/inequality, nested `si`/`sino` with
+boolean conditions, and resolved numeric function calls are supported. Call
+arguments and returns use numeric values; calls with boolean ABI values are
+rejected without coercion. Although the broader semantic path accepts scalar
+numeric conditions, this typed subset rejects them rather than weakening the
+v1.2 boolean-branch verifier contract. All globals, unsupported HIR/statement
+forms, mixed-type or boolean-relational comparisons, unreachable statements
+after a guaranteed return, malformed bindings, missing returns,
+register/function/instruction-cap overflow, wrong arity, and recursive or
+mutually recursive call graphs are rejected. Function calls continue through
+semantic resolution and the compiler uses resolved symbol IDs to link
+canonical HIR declarations.
 
 The compiler reserves disjoint static register ranges per function and emits a
 contiguous temporary argument range at each call site. This is bounded by 256
 total registers. Function ID zero is `principal`; other IDs follow source order.
-The bytecode encoder verifies the complete emitted v1.1 stream before publishing
-it. `milena_bytecode_run` verifies it again before allocating the runtime state.
+The bytecode encoder verifies the complete emitted v1.2 stream before publishing
+it. `milena_bytecode_run` verifies those exact encoded bytes again before
+allocating the runtime state; the Linux AOT backend likewise verifies and
+consumes the same bytes.
 
-Focused differential tests cover `principal -> combinar(doble(5), 3)` against
-the canonical interpreter, the bytecode VM, and the native executable. The name
-`combinar` is an ordinary user-function identifier; `suma` is reserved by the
-lexer for a statistical operation and is not a valid user-function identifier
-in this grammar. Additional coverage includes forward/helper functions, unused
-helper declarations, recursive-graph rejection, malformed function IDs and
-arities, semantic wrong arity, callee runtime errors, frame/fuel exhaustion,
-and successful later runs after bounded-runtime failures. A source program
-with top-level output binding is used as the canonical interpreter comparison
-wrapper.
+Focused source tests cover numeric locals, boolean locals/constants/comparisons,
+boolean control flow, and resolved helper calls/signatures. Every successful
+source case checks its v1.2 type-table shape, runs the verifier, and compares
+VM and Linux AOT execution of the same serialized bytes; differential cases
+also compare against the canonical interpreter. The call example
+`principal -> combinar(doble(5), 3)` uses ordinary user-function identifiers;
+`suma` is reserved by the lexer for a statistical operation and is not a valid
+user-function identifier in this grammar. Additional coverage includes
+forward/helper functions, unused helper declarations, recursive-graph
+rejection, mismatched numeric control conditions, semantic wrong arity/type,
+malformed function IDs and arities, callee runtime errors, frame/fuel
+exhaustion, and successful later runs after bounded-runtime failures. A source
+program with top-level output binding is used as the canonical interpreter
+comparison wrapper.
 
 ## Native AOT backend
 
