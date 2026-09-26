@@ -335,6 +335,8 @@ tools/check_repository_contracts: tools/check_repository_contracts.c tools/milen
 	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_repository_contracts.c tools/milena_sha256.c -o $@
 
 check-hir-ast-coverage:
+	python3 tools/check_ast_ir_coverage.py
+	python3 tests/test_ast_ir_coverage.py
 	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_architecture.c -o tools/check_architecture && ./tools/check_architecture hir
 
 .PHONY: test-native-aot
