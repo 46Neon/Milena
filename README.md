@@ -165,7 +165,7 @@ de latencia fija.
 La ruta admite `suma`, `media`, `minimo`, `maximo`, `conteo`, `varianza` y
 `desviacion_estandar`, sin agrupaciones ilimitadas, joins, medianas, percentiles,
 spill a disco ni procesamiento distribuido. La sintaxis legacy de PR24 sigue
-siendo compatible. Consulta [la documentación del modo flujo](docs/STREAMING_EXECUTION.md).
+siendo compatible. Consulta [la documentación del modo flujo](docs/STREAMING_EXECUTION.md) y la [matriz de operadores por backend](docs/BIG_DATA_OPERATOR_MATRIX.md).
 
 ## Instalación y uso
 
@@ -277,11 +277,11 @@ El proyecto se encuentra en una etapa de **consolidación avanzada del núcleo d
 
 ## Volumen de datos y alcance industrial
 
-Milena trabaja principalmente con datasets y tablas cargados en memoria para transformaciones, joins y análisis completos. Además, PR24 incorpora una ruta de flujo para resúmenes numéricos CSV: esa ruta procesa el archivo secuencialmente y mantiene memoria acotada, sin materializar todas las filas.
+Milena combina rutas distintas y acotadas: operaciones de tabla que materializan datasets CSV en memoria; agregación global y agrupada en streaming CSV, incluido un reducer con spill local explícito; un candidato de lectura/proyección/filtro Arrow IPC STREAM; y un baseline SQLite raw SQL con un slice tipado pequeño. Los nombres de operación que coinciden no implican que los backends compartan planner ni tengan la misma semántica o límites.
 
-El modo flujo no convierte automáticamente cualquier operación en streaming. Todavía no ofrece procesamiento distribuido, clústeres, joins externos ni garantías de latencia fija para volúmenes masivos. Leer todas las filas tiene un coste proporcional al archivo; los milisegundos se miden como observabilidad, no como una promesa universal.
+El modo streaming no convierte automáticamente cualquier operación en streaming. En particular, transformaciones tabulares y joins siguen materializando datos; no hay join externo/distribuido, y no se prometen límites de RSS global ni latencia fija. Arrow IPC STREAM continúa como trabajo en progreso no verificado ni publicado; SQLite tipado no es un ORM completo. Consulta la [matriz de operadores y límites](docs/BIG_DATA_OPERATOR_MATRIX.md) para el comportamiento exacto, los formatos admitidos y las exclusiones.
 
-Para convertirse en una plataforma preparada para grandes soluciones tecnológicas del mercado deberá ampliar el streaming a agrupaciones y joins externos, incorporar más formatos, medir benchmarks de alto volumen, mejorar la planificación, mantener políticas de memoria, añadir observabilidad y completar el empaquetado oficial.
+La cobertura entre backends y el planner común siguen en desarrollo. Los benchmarks de un millón de filas y archivo grande son mediciones reproducibles de fixtures concretos, no una garantía universal ni evidencia de procesamiento distribuido.
 
 La descripción más honesta es:
 
