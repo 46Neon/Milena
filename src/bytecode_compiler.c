@@ -648,42 +648,30 @@ static bool graph_visit(CallGraph *graph, size_t function, unsigned depth) {
     return true;
 }
 
-MilenaStatus milena_bytecode_compile_source(const char *source,
-                                             uint8_t **bytes_out,
-                                             size_t *length_out,
-                                             MilenaError *error) {
+MilenaStatus milena_bytecode_compile_hir(const MilenaScalarHIR *hir,
+                                           uint8_t **bytes_out,
+                                           size_t *length_out,
+                                           MilenaError *error) {
     MilenaError local_error;
     if (!error) error = &local_error;
     if (bytes_out) *bytes_out = NULL;
     if (length_out) *length_out = 0;
     milena_error_clear(error);
-    if (!source || !bytes_out || !length_out) {
+    if (!bytes_out || !length_out) {
         milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
-                         "Fuente y salidas son obligatorias para compilar bytecode v1");
+                         "Las salidas son obligatorias para compilar bytecode v1");
         return MILENA_ERR_ARGUMENT;
     }
-
-    MilenaCanonicalProgram canonical;
-    milena_canonical_program_init(&canonical);
-    MilenaStatus status = milena_canonical_program_parse(
-        &canonical, source, error);
-    if (status != MILENA_OK) {
-        milena_canonical_program_release(&canonical);
-        return status;
+    if (!hir) {
+        milena_error_set(error, MILENA_ERR_UNSUPPORTED, 0, 0, 0,
+                         "No existe HIR escalar tipada para compilar bytecode v1.2");
+        return MILENA_ERR_UNSUPPORTED;
     }
-    MilenaCanonicalCompilerInput canonical_input = {0};
-    status = milena_canonical_compiler_input(&canonical, &canonical_input, error);
-    if (status != MILENA_OK) {
-        milena_canonical_program_release(&canonical);
-        return status;
-    }
-
-    const MilenaScalarHIR *hir = canonical_input.hir;
+    MilenaStatus status = MILENA_ERR_UNSUPPORTED;
     const MilenaHIRFunction *ordered[MILENA_BYTECODE_MAX_FUNCTIONS] = {0};
     size_t function_count = 0;
     if (!ordered_functions(hir, ordered, &function_count, error)) {
         status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
-        milena_canonical_program_release(&canonical);
         return status;
     }
     MilenaHIRSourceSpan entry_span = ordered[0]->span;
@@ -693,14 +681,12 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
         if (!graph_statement_list(&graph, i, ordered[i]->body,
                                   ordered[i]->body_count, 0)) {
             status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
-            milena_canonical_program_release(&canonical);
             return status;
         }
     }
     for (size_t i = 0; i < function_count; ++i) {
         if (!graph.color[i] && !graph_visit(&graph, i, 1u)) {
             status = error->code != MILENA_OK ? error->code : MILENA_ERR_UNSUPPORTED;
-            milena_canonical_program_release(&canonical);
             return status;
         }
     }
@@ -781,7 +767,6 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
         status = fail_at(error, MILENA_ERR_INTERNAL, &entry_span, message);
         free(lowering.instructions);
         free(lowering.locals);
-        milena_canonical_program_release(&canonical);
         return status;
     }
     uint8_t *encoded = malloc(required);
@@ -790,14 +775,12 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
                          "Sin memoria para serializar bytecode v1");
         free(lowering.instructions);
         free(lowering.locals);
-        milena_canonical_program_release(&canonical);
         return status;
     }
     bytecode_status = milena_bytecode_encode(
         &program, encoded, required, &required, NULL, &diagnostic);
     free(lowering.instructions);
     free(lowering.locals);
-    milena_canonical_program_release(&canonical);
     if (bytecode_status != MILENA_BC_OK) {
         char message[160];
         (void)snprintf(message, sizeof(message),
@@ -815,6 +798,38 @@ MilenaStatus milena_bytecode_compile_source(const char *source,
 lower_fail:
     free(lowering.instructions);
     free(lowering.locals);
+    return status;
+}
+
+
+MilenaStatus milena_bytecode_compile_source(const char *source,
+                                             uint8_t **bytes_out,
+                                             size_t *length_out,
+                                             MilenaError *error) {
+    MilenaError local_error;
+    if (!error) error = &local_error;
+    if (bytes_out) *bytes_out = NULL;
+    if (length_out) *length_out = 0;
+    milena_error_clear(error);
+    if (!source || !bytes_out || !length_out) {
+        milena_error_set(error, MILENA_ERR_ARGUMENT, 0, 0, 0,
+                         "Fuente y salidas son obligatorias para compilar bytecode v1");
+        return MILENA_ERR_ARGUMENT;
+    }
+
+    MilenaCanonicalProgram canonical;
+    milena_canonical_program_init(&canonical);
+    MilenaStatus status = milena_canonical_program_parse(&canonical, source, error);
+    if (status != MILENA_OK) {
+        milena_canonical_program_release(&canonical);
+        return status;
+    }
+    MilenaCanonicalCompilerInput canonical_input = {0};
+    status = milena_canonical_compiler_input(&canonical, &canonical_input, error);
+    if (status == MILENA_OK) {
+        status = milena_bytecode_compile_hir(canonical_input.hir, bytes_out,
+                                             length_out, error);
+    }
     milena_canonical_program_release(&canonical);
     return status;
 }

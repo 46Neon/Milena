@@ -1,11 +1,13 @@
 # Portable MLBC v1 — experimental typed-verifier slice
 
-This document specifies the isolated bytecode/verifier/VM implementation in
-`include/bytecode.h` and `src/bytecode.c`, canonical scalar-HIR lowering in
-`src/bytecode_compiler.c`, and the optional Linux x86-64 native backend in
-`src/bytecode_native.c`. These experimental modules remain outside the shipped
-production source list. The PR remains partial: compiler-plan phase 2 and full
-phase 3 are not complete, and this slice is not production compiler integration.
+This document specifies the explicitly experimental MLBC CLI slice: the portable
+bytecode verifier/VM in `include/bytecode.h` and `src/bytecode.c`, canonical
+scalar-HIR lowering in `src/bytecode_compiler.c`, and Linux x86-64 native backend
+in `src/bytecode_native.c`. The verifier/VM and HIR lowerer are linked into the
+official CLI for the explicit `vm` path; the native object is linked only for a
+native Linux x86-64 build and is excluded from Windows and Termux builds. This is
+not full language/backend integration. The PR remains partial: compiler-plan
+phase 2 and full phase 3 are not complete.
 
 ## Wire compatibility and records
 
@@ -94,9 +96,13 @@ described above; it is not a claim of general language type-flow analysis.
 ## Canonical source lowering
 
 `milena_bytecode_compile_source` passes source through the official canonical
-lexer/parser/semantic/name-resolution path, obtains `MilenaScalarHIR`, and lowers
-only that resolved HIR. It does not bypass semantic resolution or silently
-ignore statements. The supported source subset consists of one zero-parameter
+lexer/parser/semantic/name-resolution path; `milena_bytecode_compile_hir` lowers
+an already-resolved `MilenaScalarHIR` without reparsing. The official CLI's
+`vm` and `build` commands use `milena_canonical_program_parse`, request the
+canonical typed HIR, lower that HIR to MLBC v1.2, and verify the encoded bytes
+before VM execution or AOT emission. The path does not bypass semantic
+resolution or silently ignore statements. The supported source subset consists
+of one zero-parameter
 `principal` and up to 63 additional scalar numeric helper functions, including
 forward declarations/calls and multiple calls. Each lowered function must
 return a number along every path. Numeric parameters, initialized numeric or
@@ -137,6 +143,32 @@ exhaustion, and successful later runs after bounded-runtime failures. A source
 program with top-level output binding is used as the canonical interpreter
 comparison wrapper.
 
+## Official CLI slice
+
+`milena run <archivo.milena>` keeps its existing interpreter behavior. The
+separate `milena vm <archivo.milena>` command prints the numeric result as a C
+hexadecimal floating literal after canonical parse, typed-HIR lowering, v1.2
+version checking, full bytecode verification, and bounded VM execution. It never
+falls back to `run` on unsupported syntax or HIR.
+
+`milena build <archivo.milena> -o <programa>` follows the same typed-HIR and
+verification path before invoking native AOT. The published executable is
+source-independent and prints the numeric result itself. It is available only
+when Milena is built natively for Linux x86-64; Windows, Termux/Android, and
+other targets return an explicit unsupported-target error. The portable VM
+command remains available on those targets. The native object is excluded from
+the Termux build even when its build is invoked on an x86-64 Linux host.
+
+The closed supported subset is the one described above: zero-parameter numeric
+`principal`, bounded non-recursive numeric helpers, numeric/boolean locals,
+assignments, supported arithmetic and comparisons, and boolean `si`/`sino`,
+with numeric returns on all paths. Global statements, data/table HIR, unsupported
+function signatures, recursion, and all other unrepresented constructs fail
+explicitly. Users may still use the default `run` route for grammar/features
+supported by the existing interpreter. `make test-bytecode-cli` covers native
+build/run, execution without source, VM/AOT output parity, interpreter-route
+preservation, unsupported constructs/targets, and output/read errors.
+
 ## Native AOT backend
 
 `milena_bytecode_compile_native` verifies the same serialized bytes before it
@@ -155,10 +187,13 @@ the executable only on success. Native artifacts print the result as a C
 hexadecimal floating literal.
 
 The optional AOT path remains limited to Linux x86-64; the API uses its fixed
-1,000,000-step budget. It is not the compiler-plan AOT gate. Windows, Android /
-Termux, general parameterized entry points, recursion, broader language parity,
-data-HIR lowering, CLI integration, and production source-manifest inclusion
-remain out of scope. `make test-bytecode` runs v1.0/v1.1 compatibility tests,
-v1.2 static-type verifier/VM/AOT tests, canonical lowering, differential,
-native-call, malformed-input, runtime-error, limit, cleanup, and sanitizer-ready
-regression suites.
+1,000,000-step budget. It is not the compiler-plan AOT gate. Windows and
+Android/Termux native AOT, general parameterized entry points, recursion,
+broader language parity, and data-HIR lowering remain out of scope. Portable
+bytecode verification/VM and canonical-HIR lowering are now in the product
+source manifest only to support the explicit CLI slice; this does not make the
+subset a general or production-complete compiler. `make test-bytecode` runs
+v1.0/v1.1 compatibility tests, v1.2 static-type verifier/VM/AOT tests, canonical
+lowering, differential, native-call, malformed-input, runtime-error, limit,
+cleanup, and sanitizer-ready regressions. `make test-bytecode-cli` adds the
+official command-line integration checks.

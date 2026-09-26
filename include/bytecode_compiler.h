@@ -2,6 +2,7 @@
 #define MILENA_BYTECODE_COMPILER_H
 
 #include "bytecode.h"
+#include "canonical_compiler.h"
 #include "common.h"
 
 #ifdef __cplusplus
@@ -9,14 +10,19 @@ extern "C" {
 #endif
 
 /*
- * Experimental source-to-bytecode v1.1 boundary (while retaining v1.0 wire
- * decoding). Source is parsed and semantically validated by
+ * Experimental source-to-bytecode v1.2 boundary (while retaining v1.0/v1.1
+ * wire compatibility). Source is parsed and semantically validated by
  * milena_canonical_program_parse; lowering consumes only canonical
  * MilenaScalarHIR. On success, *bytes_out owns a malloc-allocated encoded
  * program which the caller must free. Outputs are cleared on every failure.
  * The bounded source subset supports a zero-parameter numeric `principal`,
  * non-recursive numeric helpers, and the operations documented in BYTECODE_V1.md.
  */
+MilenaStatus milena_bytecode_compile_hir(const MilenaScalarHIR *hir,
+                                           uint8_t **bytes_out,
+                                           size_t *length_out,
+                                           MilenaError *error);
+
 MilenaStatus milena_bytecode_compile_source(const char *source,
                                              uint8_t **bytes_out,
                                              size_t *length_out,

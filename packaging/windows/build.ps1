@@ -27,7 +27,7 @@ $SourceNames = @(
     'logger.c', 'metrics.c', 'function_parser.c', 'user_functions.c',
     'third_party/nanoarrow/src/nanoarrow.c', 'third_party/nanoarrow/src/nanoarrow_ipc.c',
     'third_party/nanoarrow/src/flatcc.c',
-    'sqlite_backend.c', 'third_party/sqlite/sqlite3.c'
+    'sqlite_backend.c', 'bytecode.c', 'bytecode_compiler.c', 'third_party/sqlite/sqlite3.c'
 )
 $Compiler = if ($env:CC) { $env:CC } else { 'clang' }
 $VersionHeader = Join-Path $ObjectDir 'milena-version.h'

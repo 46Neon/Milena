@@ -25,6 +25,10 @@ jobs:
           set -euxo pipefail
           make clean
           make CC=${{ matrix.compiler }} test-bytecode
+      - name: Exercise the official VM and native-build CLI paths
+        run: |
+          set -euxo pipefail
+          make CC=${{ matrix.compiler }} test-bytecode-cli
 
   bytecode-v1-sanitizers:
     name: Bytecode and native AOT API ASan/UBSan regressions
