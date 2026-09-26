@@ -280,14 +280,16 @@ int main(void) {
         "funcion principal() { retornar ida(1); } "
         "funcion ida(x) { retornar vuelta(x); } "
         "funcion vuelta(y) { retornar ida(y); }";
+    /* `suma` is a reserved statistical-function token, not a user-function
+       identifier. Use an ordinary identifier while exercising forward calls. */
     const char *forward_calls =
-        "funcion principal() { retornar suma(doble(5), 3); } "
+        "funcion principal() { retornar combinar(doble(5), 3); } "
         "funcion doble(x) { retornar x * 2; } "
-        "funcion suma(a, b) { retornar a + b; }";
+        "funcion combinar(a, b) { retornar a + b; }";
     const char *forward_calls_reference =
-        "funcion principal() { retornar suma(doble(5), 3); } "
+        "funcion principal() { retornar combinar(doble(5), 3); } "
         "funcion doble(x) { retornar x * 2; } "
-        "funcion suma(a, b) { retornar a + b; } "
+        "funcion combinar(a, b) { retornar a + b; } "
         "variable salida = principal();";
     const char *nested_calls =
         "funcion principal() { retornar uno(7); } "

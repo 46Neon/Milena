@@ -76,13 +76,16 @@ total registers. Function ID zero is `principal`; other IDs follow source order.
 The bytecode encoder verifies the complete emitted v1.1 stream before publishing
 it. `milena_bytecode_run` verifies it again before allocating the runtime state.
 
-Focused differential tests cover `principal -> suma(doble(5), 3)` against the
-canonical interpreter, the bytecode VM, and the native executable. Additional
-coverage includes forward/helper functions, unused helper declarations,
-recursive-graph rejection, malformed function IDs and arities, semantic wrong
-arity, callee runtime errors, frame/fuel exhaustion, and successful later runs
-after bounded-runtime failures. A source program with top-level output binding
-is used as the canonical interpreter comparison wrapper.
+Focused differential tests cover `principal -> combinar(doble(5), 3)` against
+the canonical interpreter, the bytecode VM, and the native executable. The name
+`combinar` is an ordinary user-function identifier; `suma` is reserved by the
+lexer for a statistical operation and is not a valid user-function identifier
+in this grammar. Additional coverage includes forward/helper functions, unused
+helper declarations, recursive-graph rejection, malformed function IDs and
+arities, semantic wrong arity, callee runtime errors, frame/fuel exhaustion,
+and successful later runs after bounded-runtime failures. A source program
+with top-level output binding is used as the canonical interpreter comparison
+wrapper.
 
 ## Native AOT backend
 
