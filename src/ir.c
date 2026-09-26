@@ -1,4 +1,18 @@
 #include "ir.h"
+#include <string.h>
+#include <stdlib.h>
+
+static char *ir_duplicate_string(const char *source) {
+    size_t length;
+    char *copy;
+    if (!source) return NULL;
+    length = strlen(source);
+    if (length == SIZE_MAX) return NULL;
+    copy = (char *)malloc(length + 1);
+    if (!copy) return NULL;
+    memcpy(copy, source, length + 1);
+    return copy;
+}
 
 IRProgram* ir_program_create(void) {
     IRProgram *program = (IRProgram *)calloc(1, sizeof(IRProgram));
@@ -39,9 +53,10 @@ void ir_add_instruction(IRProgram *program, IROpCode opcode, const char *arg1, c
     }
     
     IRInstruction *ins = &program->instructions[program->count++];
+    memset(ins, 0, sizeof(*ins));
     ins->opcode = opcode;
-    ins->arg1 = arg1 ? strdup(arg1) : NULL;
-    ins->arg2 = arg2 ? strdup(arg2) : NULL;
+    ins->arg1 = ir_duplicate_string(arg1);
+    ins->arg2 = ir_duplicate_string(arg2);
     ins->arg3 = NULL;
     ins->num_arg1 = 0.0;
     ins->num_arg2 = 0.0;
@@ -61,6 +76,7 @@ void ir_add_instruction_num(IRProgram *program, IROpCode opcode, double num1) {
     }
     
     IRInstruction *ins = &program->instructions[program->count++];
+    memset(ins, 0, sizeof(*ins));
     ins->opcode = opcode;
     ins->arg1 = NULL;
     ins->arg2 = NULL;
@@ -214,3 +230,4 @@ bool ir_generate(IRProgram *program, ASTNode *ast) {
     
     return ir_generate_from_ast(program, ast);
 }
+

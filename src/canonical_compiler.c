@@ -1,6 +1,7 @@
 #include "canonical_compiler.h"
 
 #include "language_semantic.h"
+#include "query_plan.h"
 #include "lexer.h"
 #include "parser.h"
 
@@ -15,10 +16,10 @@ static void canonical_error(MilenaError *error, MilenaStatus code,
 
 static void hir_source_span(MilenaHIRSourceSpan *span, const ASTNode *node) {
     if (!span || !node) return;
-    span->line = node->line > 0 ? (size_t)node->line : 0;
-    span->column = node->column > 0 ? (size_t)node->column : 0;
-    span->end_line = node->end_line > 0 ? (size_t)node->end_line : 0;
-    span->end_column = node->end_column > 0 ? (size_t)node->end_column : 0;
+    span->line = node->line;
+    span->column = node->column;
+    span->end_line = node->end_line;
+    span->end_column = node->end_column;
     span->start_offset = node->start_offset;
     span->end_offset = node->end_offset;
     span->has_source_span = node->has_source_span;
@@ -396,6 +397,11 @@ static HIRBuildResult scalar_hir_build(const ASTNode *ast,
                 result = HIR_BUILD_MEMORY;
                 break;
             }
+            if (!hir_value_type(parameter->value_type,
+                                &function->parameters[j].value_type)) {
+                result = HIR_BUILD_UNSUPPORTED;
+                break;
+            }
         }
         if (result != HIR_BUILD_OK) break;
         const ASTNode *body = node->children[1];
@@ -483,6 +489,109 @@ static void data_hir_release(MilenaDataHIR *hir) {
     }
     free(hir->operations);
     free(hir);
+}
+
+static void arrow_hir_release(MilenaArrowHIR *hir) {
+    if (!hir) return;
+    free(hir->source_path);
+    free(hir->output_path);
+    if (hir->projections)
+        for (size_t i = 0; i < hir->projection_count; ++i)
+            free(hir->projections[i].name);
+    free(hir->projections);
+    free(hir->filter.column);
+    free(hir->filter.text_value);
+    free(hir);
+}
+
+static HIRBuildResult arrow_hir_build(
+    const ASTNode *analysis, const MilenaArrowIpcExecutionPlan *plan,
+    MilenaArrowHIR **output) {
+    if (output) *output = NULL;
+    if (!analysis || analysis->type != AST_BLOQUE_ANALISIS || !plan ||
+        !plan->source || !plan->projection || !plan->sink || !output)
+        return HIR_BUILD_UNSUPPORTED;
+    MilenaArrowHIR *hir = (MilenaArrowHIR *)calloc(1, sizeof(*hir));
+    if (!hir) return HIR_BUILD_MEMORY;
+    hir->source_path = milena_strdup(plan->source->value);
+    hir->output_path = milena_strdup(plan->sink->value);
+    hir->span.has_source_span = analysis->has_source_span;
+    hir_source_span(&hir->span, analysis);
+    hir->batch_rows = plan->source->stream_chunk_rows;
+    hir->max_batch_bytes = plan->source->stream_batch_limit_bytes;
+    hir->max_rows = plan->source->stream_row_limit;
+    hir->max_columns = plan->source->stream_column_limit;
+    hir->max_input_bytes = plan->source->stream_input_limit_bytes;
+    hir->max_output_bytes = plan->source->stream_output_limit_bytes;
+    hir->max_elapsed_milliseconds = plan->source->stream_time_limit_ms;
+    hir->projection_count = plan->projection->child_count;
+    if (!hir->source_path || !hir->output_path || hir->projection_count == 0 ||
+        hir->projection_count > MILENA_ARROW_PLAN_MAX_COLUMNS ||
+        hir->projection_count > SIZE_MAX / sizeof(*hir->projections)) {
+        arrow_hir_release(hir);
+        return HIR_BUILD_UNSUPPORTED;
+    }
+    hir->projections = (MilenaArrowHIRProjection *)calloc(
+        hir->projection_count, sizeof(*hir->projections));
+    if (!hir->projections) {
+        arrow_hir_release(hir);
+        return HIR_BUILD_MEMORY;
+    }
+    for (size_t i = 0; i < hir->projection_count; ++i) {
+        const ASTNode *field = plan->projection->children[i];
+        const ASTNode *declaration = plan->projection_declarations[i];
+        if (!field || field->type != AST_COLUMNAR_FIELD || !field->value ||
+            !declaration || !declaration->type_name) {
+            arrow_hir_release(hir);
+            return HIR_BUILD_UNSUPPORTED;
+        }
+        hir->projections[i].name = milena_strdup(field->value);
+        if (strcmp(declaration->type_name, "numerica") == 0)
+            hir->projections[i].type = MILENA_ARROW_HIR_NUMERIC;
+        else if (strcmp(declaration->type_name, "texto") == 0)
+            hir->projections[i].type = MILENA_ARROW_HIR_TEXT;
+        else {
+            arrow_hir_release(hir);
+            return HIR_BUILD_UNSUPPORTED;
+        }
+        hir_source_span(&hir->projections[i].span, field);
+        if (!hir->projections[i].span.has_source_span)
+            hir_source_span(&hir->projections[i].span, declaration);
+        if (!hir->projections[i].name) {
+            arrow_hir_release(hir);
+            return HIR_BUILD_MEMORY;
+        }
+    }
+    if (plan->filter) {
+        const ASTNode *filter = plan->filter;
+        hir->has_filter = true;
+        hir->filter.column = filter->value ? milena_strdup(filter->value) : NULL;
+        hir_source_span(&hir->filter.span, filter);
+        if (!hir->filter.column) {
+            arrow_hir_release(hir);
+            return HIR_BUILD_MEMORY;
+        }
+        if (filter->stream_filter_kind == AST_STREAM_FILTER_TEXT_EQUAL) {
+            hir->filter.kind = MILENA_ARROW_HIR_FILTER_TEXT_EQUAL;
+            hir->filter.column_type = MILENA_ARROW_HIR_TEXT;
+            hir->filter.text_value = filter->type_name
+                ? milena_strdup(filter->type_name) : NULL;
+            if (!hir->filter.text_value) {
+                arrow_hir_release(hir);
+                return HIR_BUILD_MEMORY;
+            }
+        } else if (filter->stream_filter_kind ==
+                   AST_STREAM_FILTER_NUMERIC_GREATER) {
+            hir->filter.kind = MILENA_ARROW_HIR_FILTER_NUMERIC_GREATER;
+            hir->filter.column_type = MILENA_ARROW_HIR_NUMERIC;
+            hir->filter.numeric_threshold = filter->number_value;
+        } else {
+            arrow_hir_release(hir);
+            return HIR_BUILD_UNSUPPORTED;
+        }
+    }
+    *output = hir;
+    return HIR_BUILD_OK;
 }
 
 static MilenaHIRColumnRef hir_unresolved_column(const char *name,
@@ -998,14 +1107,27 @@ void milena_canonical_program_init(MilenaCanonicalProgram *program) {
     program->right_table = NULL;
     program->hir = NULL;
     program->data_hir = NULL;
+    program->arrow_hir = NULL;
+    program->typed_ir = NULL;
+    program->typed_module = NULL;
 }
 
 void milena_canonical_program_release(MilenaCanonicalProgram *program) {
     if (!program) return;
+    if (program->typed_module) {
+        milena_ir_module_destroy(program->typed_module);
+        program->typed_module = NULL;
+        program->typed_ir = NULL;
+    } else {
+        milena_ir_program_destroy(program->typed_ir);
+        program->typed_ir = NULL;
+    }
     scalar_hir_release(program->hir);
     program->hir = NULL;
     data_hir_release(program->data_hir);
     program->data_hir = NULL;
+    arrow_hir_release(program->arrow_hir);
+    program->arrow_hir = NULL;
     ast_destroy(program->ast);
     program->ast = NULL;
     program->table = NULL;
@@ -1062,10 +1184,113 @@ MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
                         "Sin memoria para construir la HIR de datos canónica");
         return MILENA_ERR_MEMORY;
     }
-    /* ASTs outside both closed HIR subsets remain compatibility-only. */
+    MilenaArrowHIR *arrow_hir = NULL;
+    if (ast->child_count == 1 && ast->children[0] &&
+        ast->children[0]->type == AST_BLOQUE_ANALISIS) {
+        const ASTNode *analysis = ast->children[0];
+        bool has_arrow_source = false;
+        for (size_t i = 0; i < analysis->child_count; ++i) {
+            const ASTNode *node = analysis->children[i];
+            has_arrow_source |= node && node->type == AST_LLAMADA_CARGAR &&
+                node->type_name &&
+                strcmp(node->type_name, "arrow_ipc_stream") == 0;
+        }
+        if (has_arrow_source) {
+            MilenaArrowIpcExecutionPlan plan = {0};
+            MilenaError plan_error = {0};
+            MilenaStatus plan_status = milena_arrow_ipc_execution_plan_build(
+                analysis, &plan, &plan_error);
+            if (plan_status == MILENA_OK) {
+                HIRBuildResult arrow_result = arrow_hir_build(
+                    analysis, &plan, &arrow_hir);
+                if (arrow_result == HIR_BUILD_MEMORY) {
+                    scalar_hir_release(hir);
+                    data_hir_release(data_hir);
+                    ast_destroy(ast);
+                    canonical_error(error, MILENA_ERR_MEMORY,
+                                    "Sin memoria para construir la HIR Arrow IPC canónica");
+                    return MILENA_ERR_MEMORY;
+                }
+            }
+        }
+    }
+    /* Unsupported AST shapes remain compatibility-only. Arrow HIR owns its
+     * paths, declarations, filters, and limits independently of the AST. */
     program->ast = ast;
     program->hir = hir;
     program->data_hir = data_hir;
+    program->arrow_hir = arrow_hir;
+    return MILENA_OK;
+}
+
+MilenaStatus milena_canonical_program_compile_scalar_ir(
+    MilenaCanonicalProgram *program, MilenaError *error) {
+    if (error) milena_error_clear(error);
+    if (!program || !program->ast) {
+        canonical_error(error, MILENA_ERR_ARGUMENT,
+                        "El programa canónico debe parsearse antes de compilar IR");
+        return MILENA_ERR_ARGUMENT;
+    }
+    if (!program->hir || !program->hir->function_count ||
+        program->hir->statement_count != 0 || !program->hir->functions) {
+        canonical_error(error, MILENA_ERR_UNSUPPORTED,
+                        "La compilación IR requiere funciones escalares soportadas y ninguna sentencia global");
+        return MILENA_ERR_UNSUPPORTED;
+    }
+
+    if (program->hir->function_count > 1) {
+        MilenaIRModule *module = NULL;
+        char module_error[MILENA_ERROR_TEXT] = {0};
+        if (!milena_ir_module_lower_scalar_hir(&module, program->hir,
+                                               module_error, sizeof(module_error))) {
+            MilenaStatus status = MILENA_ERR_UNSUPPORTED;
+            if (strstr(module_error, "out of memory") || strstr(module_error, "could not"))
+                status = MILENA_ERR_MEMORY;
+            else if (strstr(module_error, "too large") || strstr(module_error, "exhausted"))
+                status = MILENA_ERR_OVERFLOW;
+            if (error) milena_error_set(error, status, 0, 0, 0,
+                module_error[0] ? module_error : "Scalar IR module lowering failed closed");
+            return status;
+        }
+        MilenaIRModule *previous_module = program->typed_module;
+        MilenaIRProgram *previous_ir = program->typed_ir;
+        program->typed_module = module;
+        program->typed_ir = module->functions[0].body;
+        if (previous_module) milena_ir_module_destroy(previous_module);
+        else milena_ir_program_destroy(previous_ir);
+        return MILENA_OK;
+    }
+
+    MilenaIRProgram *lowered = milena_ir_program_create();
+    if (!lowered) {
+        canonical_error(error, MILENA_ERR_MEMORY,
+                        "Sin memoria para reservar la IR tipada canónica");
+        return MILENA_ERR_MEMORY;
+    }
+    char lowering_error[MILENA_ERROR_TEXT] = {0};
+    const MilenaHIRFunction *function = &program->hir->functions[0];
+    if (!milena_ir_program_lower_scalar_function_body(
+            lowered, function, lowering_error, sizeof(lowering_error))) {
+        MilenaStatus status = MILENA_ERR_UNSUPPORTED;
+        if (strstr(lowering_error, "out of memory") ||
+            strstr(lowering_error, "could not"))
+            status = MILENA_ERR_MEMORY;
+        else if (strstr(lowering_error, "too large") ||
+                 strstr(lowering_error, "exhausted"))
+            status = MILENA_ERR_OVERFLOW;
+        if (error)
+            milena_error_set(error, status,
+                function->span.has_source_span ? function->span.line : 0,
+                function->span.has_source_span ? function->span.column : 0,
+                0, lowering_error[0] ? lowering_error :
+                   "La función excede el subconjunto de IR escalar soportado");
+        milena_ir_program_destroy(lowered);
+        return status;
+    }
+
+    MilenaIRProgram *previous = program->typed_ir;
+    program->typed_ir = lowered;
+    milena_ir_program_destroy(previous);
     return MILENA_OK;
 }
 
@@ -1590,6 +1815,7 @@ MilenaStatus milena_canonical_compatibility_input(
         input->right_table = NULL;
         input->hir = NULL;
         input->data_hir = NULL;
+        input->arrow_hir = NULL;
     }
     if (error) milena_error_clear(error);
     if (!program || !program->ast || !input) {
@@ -1602,6 +1828,7 @@ MilenaStatus milena_canonical_compatibility_input(
     input->right_table = program->right_table;
     input->hir = program->hir;
     input->data_hir = program->data_hir;
+    input->arrow_hir = program->arrow_hir;
     return MILENA_OK;
 }
 
@@ -1691,6 +1918,7 @@ MilenaStatus milena_canonical_hir_input(
         input->right_table = NULL;
         input->hir = NULL;
         input->data_hir = NULL;
+        input->arrow_hir = NULL;
     }
     if (error) milena_error_clear(error);
     if (!program || !program->ast || !input) {
@@ -1704,6 +1932,27 @@ MilenaStatus milena_canonical_hir_input(
         return MILENA_ERR_DATA;
     }
     if (!program->hir && !program->data_hir) {
+        if (program->ast->child_count == 1 && program->ast->children[0] &&
+            program->ast->children[0]->type == AST_BLOQUE_ANALISIS) {
+            const ASTNode *analysis = program->ast->children[0];
+            bool has_arrow_source = false;
+            for (size_t i = 0; i < analysis->child_count; ++i) {
+                const ASTNode *node = analysis->children[i];
+                has_arrow_source |= node && node->type == AST_LLAMADA_CARGAR &&
+                    node->type_name &&
+                    strcmp(node->type_name, "arrow_ipc_stream") == 0;
+            }
+            if (has_arrow_source) {
+                MilenaArrowIpcExecutionPlan rejected_plan = {0};
+                MilenaError plan_error = {0};
+                MilenaStatus plan_status = milena_arrow_ipc_execution_plan_build(
+                    analysis, &rejected_plan, &plan_error);
+                if (plan_status != MILENA_OK) {
+                    if (error) *error = plan_error;
+                    return plan_status;
+                }
+            }
+        }
         const ASTNode *unsupported = NULL;
         if (program->ast->child_count == 1 && program->ast->children[0] &&
             program->ast->children[0]->type == AST_BLOQUE_ANALISIS) {

@@ -28,11 +28,11 @@ typedef struct {
 } StringList;
 
 static const char *const product_sources[] = {
-    "analysis.c", "array.c", "arrow_ipc.c", "canonical_compiler.c", "common.c",
+    "analysis.c", "array.c", "arrow_ipc.c", "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "common.c",
     "dataset.c", "entrypoints.c", "external_merge.c", "external_sort.c",
     "finance.c", "group_key_codec.c", "grouped_aggregate.c", "interpreter.c",
     "language_grouped_spill.c", "language_runtime.c", "logger.c", "main.c",
-    "mergeable_aggregate.c", "metrics.c", "partition_executor.c", "partition_plan.c",
+    "mergeable_aggregate.c", "metrics.c", "native_aot.c", "partition_executor.c", "partition_plan.c",
     "partition_protocol.c", "partition_protocol_reduce.c", "partition_reduce.c",
     "process_executor.c", "query_plan.c", "schema.c", "script.c", "source_reader.c",
     "spill_store.c", "sqlite_backend.c", "sst_advanced.c", "sst_contingency.c",
@@ -48,8 +48,12 @@ static const char *const function_sources[] = {
 };
 static const char *const experimental_sources[] = {
     "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c", "instructions.c",
-    "ir.c", "module.c", "semantic.c", "temp_scope.c", "vm.c"
+    "ir.c", "module.c", "semantic.c", "temp_scope.c"
 };
+static const char *const reference_sources[] = {"vm.c"};
+
+static bool file_exists(const char *path);
+static char *optional_read_file(const char *path);
 
 static void list_init(StringList *list)
 {
@@ -365,11 +369,16 @@ static bool make_has_source_token(Span sources, const char *name, bool restricte
     return false;
 }
 
-static bool is_experimental(const char *name)
+static bool is_exempt_from_experimental_isolation(const char *name)
 {
     size_t index;
     for (index = 0U; index < ARRAY_COUNT(experimental_sources); ++index) {
         if (strcmp(name, experimental_sources[index]) == 0) {
+            return true;
+        }
+    }
+    for (index = 0U; index < ARRAY_COUNT(reference_sources); ++index) {
+        if (strcmp(name, reference_sources[index]) == 0) {
             return true;
         }
     }
@@ -399,6 +408,11 @@ static bool manifest_has(const char *name)
             return true;
         }
     }
+    for (index = 0U; index < ARRAY_COUNT(reference_sources); ++index) {
+        if (strcmp(name, reference_sources[index]) == 0) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -410,9 +424,9 @@ static void check_source_manifest(int argc, char **argv)
     StringList extra;
     int argument;
     size_t index;
-    const char *const *groups[] = {product_sources, language_sources, function_sources, experimental_sources};
-    const size_t group_counts[] = {ARRAY_COUNT(product_sources), ARRAY_COUNT(language_sources), ARRAY_COUNT(function_sources), ARRAY_COUNT(experimental_sources)};
-    const char *const group_names[] = {"producto", "lenguaje", "funciones", "experimental"};
+    const char *const *groups[] = {product_sources, language_sources, function_sources, experimental_sources, reference_sources};
+    const size_t group_counts[] = {ARRAY_COUNT(product_sources), ARRAY_COUNT(language_sources), ARRAY_COUNT(function_sources), ARRAY_COUNT(experimental_sources), ARRAY_COUNT(reference_sources)};
+    const char *const group_names[] = {"producto", "lenguaje", "funciones", "experimental", "compilador_referencia"};
     size_t group;
 
     list_init(&actual);
@@ -508,6 +522,7 @@ static void check_source_manifest(int argc, char **argv)
     (void)printf("  - lenguaje: %lu\n", (unsigned long)ARRAY_COUNT(language_sources));
     (void)printf("  - funciones: %lu\n", (unsigned long)ARRAY_COUNT(function_sources));
     (void)printf("  - experimental: %lu\n", (unsigned long)ARRAY_COUNT(experimental_sources));
+    (void)printf("  - compilador_referencia: %lu\n", (unsigned long)ARRAY_COUNT(reference_sources));
     list_free(&actual);
     list_free(&errors);
     list_free(&missing);
@@ -546,7 +561,7 @@ static void check_compiler_boundary(int argc, char **argv)
     int argument;
     const char *const canonical[] = {
         "lexer.c", "parser.c", "ast.c", "language_semantic.c", "language_runtime.c",
-        "canonical_compiler.c", "table.c", "dataset.c"
+        "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "native_aot.c", "table.c", "dataset.c"
     };
     const char *const guarded_headers[] = {"compiler.h", "ir.h", "vm.h", "gc.h"};
 
@@ -563,6 +578,67 @@ static void check_compiler_boundary(int argc, char **argv)
         if (!make_has_source_token(sources, canonical[index], true)) {
             list_addf(&errors, "falta una fuente del pipeline canónico: %s", canonical[index]);
         }
+    }
+    {
+        char *reference_vm = optional_read_file("src/vm.c");
+        char *vm_header = optional_read_file("include/vm.h");
+        char *windows_build = optional_read_file("packaging/windows/build.ps1");
+        const char *source_names = windows_build == NULL ? NULL : strstr(windows_build, "$SourceNames");
+        const char *source_names_end = source_names == NULL ? NULL : strstr(source_names, "\n)");
+        const char *vm_package_entry = source_names == NULL ? NULL : strstr(source_names, "vm.c");
+        if (make_has_source_token(sources, "vm.c", true)) {
+            list_add(&errors, "la VM original de referencia no debe enlazarse en SOURCES del producto");
+        }
+        if (reference_vm == NULL || vm_header == NULL) {
+            list_add(&errors, "falta la VM original de referencia o include/vm.h");
+        } else {
+            if (!has_include(reference_vm, "vm.h", false) ||
+                !contains(reference_vm, "vm_execute_instruction") ||
+                !contains(reference_vm, "vm_execute_function") ||
+                contains(reference_vm, "compiler.h")) {
+                list_add(&errors, "la VM de referencia debe integrarse en src/vm.c y permanecer aislada del compilador experimental");
+            }
+            if (!contains(vm_header, "vm_init(") || !contains(vm_header, "vm_run(") ||
+                !contains(vm_header, "vm_step(") || !contains(vm_header, "vm_destroy(") ||
+                !contains(vm_header, "vm_init_bytecode(") ||
+                contains(vm_header, "vm_run(const uint8_t")) {
+                list_add(&errors, "include/vm.h debe conservar el ciclo de vida de la VM original y su modo MLBC");
+            }
+        }
+        if (file_exists("src/typed_vm.c")) {
+            list_add(&errors, "no debe existir una segunda implementación typed_vm.c");
+        }
+        if (source_names != NULL && source_names_end != NULL && vm_package_entry != NULL &&
+            vm_package_entry < source_names_end) {
+            list_add(&errors, "la VM original interna no debe incluirse en el paquete Windows");
+        }
+        free(reference_vm);
+        free(vm_header);
+        free(windows_build);
+    }
+    {
+        char *native_aot = optional_read_file("src/native_aot.c");
+        if (native_aot == NULL) {
+            list_add(&errors, "falta el backend nativo AOT del producto");
+        } else {
+            if (!has_include(native_aot, "typed_ir.h", false) ||
+                !contains(native_aot, "milena_canonical_program_compile_scalar_ir") ||
+                !contains(native_aot, "milena_ir_program_validate") ||
+                !contains(native_aot, "milena_ir_module_validate")) {
+                list_add(&errors, "AOT debe consumir y verificar la IR tipada canónica compilada");
+            }
+            if (contains(native_aot, "milena_ir_module_lower_scalar_hir") ||
+                contains(native_aot, "milena_ir_program_lower_scalar_function_body") ||
+                contains(native_aot, "system(") || contains(native_aot, "popen(")) {
+                list_add(&errors, "AOT no debe volver a bajar HIR ni ejecutar un shell");
+            }
+            if (!contains(native_aot, "execvp(") ||
+                !contains(native_aot, "mkstemp(") ||
+                !contains(native_aot, "rename(binary_template")) {
+                list_add(&errors, "AOT debe invocar argv/exec y reemplazar la salida atómicamente");
+            }
+        }
+        free(native_aot);
     }
     for (argument = 2; argument < argc; ++argument) {
         const char *name;
@@ -652,7 +728,7 @@ static void check_experimental_isolation(int argc, char **argv)
         const char *name = slash == NULL ? argv[argument] : slash + 1;
         size_t header_index;
         char *text;
-        if (is_experimental(name)) {
+        if (is_exempt_from_experimental_isolation(name)) {
             continue;
         }
         text = read_file(argv[argument]);
@@ -1975,6 +2051,7 @@ static void check_termux_packaging(void)
     StringList errors;
     size_t index;
     char *makefile;
+    Span product_sources;
     char *recipe_text;
     char *common;
     char *workflow;
@@ -2010,11 +2087,12 @@ static void check_termux_packaging(void)
         list_add(&errors, "Makefile lacks explicit Termux build/install variables");
     }
     if (makefile != NULL) {
-        static const char *const experimental[] = {"src/compiler.c", "src/ir.c", "src/vm.c"};
+        static const char *const experimental[] = {"compiler.c", "ir.c", "vm.c"};
         static const char *const forbidden_make[] = {"/usr/bin", "/usr/local", "apt-get", "__GLIBC__"};
+        product_sources = find_make_sources(makefile);
         for (index = 0U; index < ARRAY_COUNT(experimental); ++index) {
-            if (contains(makefile, experimental[index])) {
-                list_addf(&errors, "experimental source enters canonical Makefile: %s", experimental[index]);
+            if (make_has_source_token(product_sources, experimental[index], true)) {
+                list_addf(&errors, "experimental/reference source enters canonical product SOURCES: %s", experimental[index]);
             }
         }
         for (index = 0U; index < ARRAY_COUNT(forbidden_make); ++index) {

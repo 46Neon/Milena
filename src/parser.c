@@ -17,8 +17,8 @@ void parser_release(Parser *parser) {
 }
 
 void parser_error(Parser *parser, const char *msg) {
-    size_t line = parser->current.line > 0 ? (size_t)parser->current.line : 0;
-    size_t column = parser->current.column > 0 ? (size_t)parser->current.column : 0;
+    size_t line = parser->current.line;
+    size_t column = parser->current.column;
     milena_error_set(&parser->error, MILENA_ERR_PARSE, line, column, 0, msg);
     parser->has_error = true;
 }
@@ -26,8 +26,8 @@ void parser_error(Parser *parser, const char *msg) {
 static void parser_error_at(Parser *parser, const Token *token,
                             const char *msg) {
     if (!parser || !token || !msg) return;
-    size_t line = token->line > 0 ? (size_t)token->line : 0;
-    size_t column = token->column > 0 ? (size_t)token->column : 0;
+    size_t line = token->line;
+    size_t column = token->column;
     milena_error_set(&parser->error, MILENA_ERR_PARSE, line, column, 0, msg);
     parser->has_error = true;
 }

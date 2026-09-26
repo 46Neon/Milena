@@ -4,7 +4,11 @@
 #include "common.h"
 #include "ast.h"
 #include "symbol.h"
+#include <stdint.h>
 
+/* Experimental legacy string IR. Production typed lowering uses typed_ir.h and
+ * MilenaIRProgram; this separate container is retained only by the isolated
+ * compiler/assembler/VM prototype. */
 typedef enum {
     IR_LOAD_DATASET,
     IR_CLEAN_NULLS,
@@ -38,9 +42,10 @@ typedef struct IRProgram {
     SymbolTable *symbols;
 } IRProgram;
 
-IRProgram* ir_program_create(void);
+IRProgram *ir_program_create(void);
 void ir_program_destroy(IRProgram *program);
-void ir_add_instruction(IRProgram *program, IROpCode opcode, const char *arg1, const char *arg2);
+void ir_add_instruction(IRProgram *program, IROpCode opcode,
+                        const char *arg1, const char *arg2);
 void ir_add_instruction_num(IRProgram *program, IROpCode opcode, double num1);
 void ir_print_program(IRProgram *program);
 bool ir_generate(IRProgram *program, ASTNode *ast);

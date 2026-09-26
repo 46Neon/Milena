@@ -1,4 +1,4 @@
-name: Compiler phase 1 lexer checks
+name: Compiler phase 1 frontend and typed IR checks
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   lexer-and-parser:
-    name: Lexer/parser regressions (${{ matrix.compiler }})
+    name: Lexer/parser/typed-IR regressions (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -21,6 +21,12 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
+      - name: Compile and execute canonical typed-IR regressions
+        run: |
+          set -euxo pipefail
+          ${{ matrix.compiler }} -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O2 tests/test_ir_validation.c src/canonical_ir.c src/common.c -lm -pthread -o tests/test_ir_validation
+          ./tests/test_ir_validation
+          make CC=${{ matrix.compiler }} test-typed-bytecode
       - name: Compile and execute focused frontend tests
         run: |
           set -euxo pipefail
@@ -28,7 +34,7 @@ jobs:
           make CC=${{ matrix.compiler }} test-lexer-safety test-parser-variables test-parser-statistics test-ast-validation test-canonical-compiler test-functions
 
   lexer-sanitizers:
-    name: Lexer ASan and UBSan
+    name: Frontend and typed IR ASan and UBSan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -36,6 +42,17 @@ jobs:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - uses: actions/checkout@v4
+      - name: Compile and execute typed-IR regressions under sanitizers
+        run: |
+          set -euxo pipefail
+          clang -Iinclude -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_ir_validation.c src/canonical_ir.c src/common.c \
+            -fsanitize=address,undefined -lm -pthread -o tests/test_ir_validation
+          ./tests/test_ir_validation
+          make CC=clang \
+            CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
+            LDFLAGS='-fsanitize=address,undefined -lm -pthread' \
+            test-typed-bytecode
       - name: Compile and execute lexer safety tests under sanitizers
         run: |
           set -euxo pipefail

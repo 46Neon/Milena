@@ -90,6 +90,25 @@ int main(void) {
     assert(error.code == MILENA_ERR_ARGUMENT);
     program->parent = saved_root_parent;
 
+    /* AST spans preserve lexer coordinates above INT_MAX without narrowing. */
+    Token wide_start = {0};
+    Token wide_end = {0};
+    size_t wide_position = (size_t)INT_MAX + (size_t)1;
+    wide_start.line = wide_position;
+    wide_start.column = wide_position;
+    wide_start.start_offset = 9;
+    wide_end.end_line = wide_position;
+    wide_end.end_column = wide_position + (size_t)1;
+    wide_end.end_offset = 10;
+    ASTNode *wide_span = ast_create(AST_EXPRESION_LITERAL);
+    assert(wide_span != NULL);
+    assert(ast_set_source_span(wide_span, &wide_start, &wide_end));
+    assert(wide_span->line == wide_position);
+    assert(wide_span->column == wide_position);
+    assert(wide_span->end_line == wide_position);
+    assert(wide_span->end_column == wide_position + (size_t)1);
+    ast_destroy(wide_span);
+
     ast_destroy(program);
     parser_release(&parser);
 

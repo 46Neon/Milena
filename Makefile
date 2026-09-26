@@ -18,7 +18,7 @@ endif
 CPPFLAGS += -Iinclude -Ithird_party/nanoarrow/include -Ithird_party/sqlite
 SQLITE_CFLAGS = -DSQLITE_THREADSAFE=1 -DSQLITE_DQS=0 -DSQLITE_OMIT_LOAD_EXTENSION
 SOURCES = src/common.c src/array.c src/table.c src/finance.c src/schema.c src/dataset.c src/analysis.c src/script.c src/main.c \
-          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/arrow_ipc.c src/language_runtime.c src/language_grouped_spill.c src/canonical_compiler.c src/interpreter.c \
+          src/lexer.c src/ast.c src/language_semantic.c src/parser.c src/symbol_table.c src/symbol.c src/arrow_ipc.c src/language_runtime.c src/language_grouped_spill.c src/canonical_compiler.c src/canonical_ir.c src/typed_bytecode.c src/native_aot.c src/interpreter.c \
           src/sst_dates.c src/sst_model.c src/sst_stats.c src/sst_histogram.c \
           src/sst_rates.c src/sst_report.c src/sst_report_advanced.c \
           src/sst_advanced.c src/sst_contingency.c src/sst_inference.c \
@@ -223,7 +223,7 @@ tests/test_lexer_safety: tests/test_lexer_safety.c src/lexer.c src/common.c
 test-language-runtime: tests/test_language_runtime
 	timeout --signal=TERM --kill-after=5s 60s ./tests/test_language_runtime
 
-tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/arrow_ipc.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/source_reader.c src/group_key_codec.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/query_plan.c src/sqlite_backend.c $(TEST_SQLITE_OBJECT)
+tests/test_language_runtime: tests/test_language_runtime.c src/finance.c src/language_runtime.c src/canonical_compiler.c src/canonical_ir.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/array.c src/dataset.c src/schema.c src/analysis.c src/table.c src/arrow_ipc.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c src/sst_advanced.c src/sst_histogram.c src/sst_normality.c src/sst_rates.c src/sst_inference.c src/sst_correlation.c src/sst_contingency.c src/sst_model.c src/common.c src/stream.c src/source_reader.c src/group_key_codec.c src/language_grouped_spill.c src/grouped_aggregate.c src/mergeable_aggregate.c src/spill_store.c src/query_plan.c src/sqlite_backend.c $(TEST_SQLITE_OBJECT)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SQLITE_CFLAGS) $(filter %.c,$^) $(filter %.o,$^) $(LDFLAGS) -o $@
 
 .PHONY: test-arrow-ipc
@@ -337,11 +337,22 @@ tools/check_repository_contracts: tools/check_repository_contracts.c tools/milen
 check-hir-ast-coverage:
 	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_architecture.c -o tools/check_architecture && ./tools/check_architecture hir
 
+.PHONY: test-native-aot
+test-native-aot: $(TARGET)
+	sh tests/test_native_aot.sh
+
+test-typed-bytecode: tests/test_typed_bytecode
+	./tests/test_typed_bytecode
+
+.PHONY: test-typed-bytecode
+tests/test_typed_bytecode: tests/test_typed_bytecode.c src/vm.c src/gc.c src/typed_bytecode.c src/canonical_ir.c src/dataset.c src/table.c src/array.c src/schema.c src/common.c include/vm.h include/typed_bytecode.h include/typed_ir.h include/ir.h include/dataset.h include/gc.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
+
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
-tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
+tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/query_plan.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/gc.c src/canonical_ir.c src/typed_bytecode.c src/vm.c include/canonical_compiler.h include/query_plan.h include/vm.h include/typed_bytecode.h include/typed_ir.h include/ir.h include/dataset.h include/gc.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
 
 test-termux-packaging: check-termux-packaging tools/validate_termux_elf tests/test_termux_packaging
 	./tests/test_termux_packaging
@@ -416,15 +427,14 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
-	./tests/run_tests.sh
+test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler test-typed-bytecode test-native-aot benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
 	./tests/run_tests.sh
 	./benchmarks/benchmark --help && rm -f benchmarks/benchmark
 
 clean:
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tools/check_architecture tools/check_repository_contracts tools/validate_termux_elf tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
-		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/check_arrow_ipc_fixtures tests/test_common_tokenizer tests/test_canonical_compiler tests/test_termux_packaging benchmarks/grouped_stream_benchmark tests/test_sqlite_backend tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
+		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/check_arrow_ipc_fixtures tests/test_common_tokenizer tests/test_canonical_compiler tests/test_typed_bytecode tests/test_termux_packaging benchmarks/grouped_stream_benchmark tests/test_sqlite_backend tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json
 
 # Opt-in end-to-end million-row validation; it remains outside ordinary make test.
 .PHONY: scale-million-row

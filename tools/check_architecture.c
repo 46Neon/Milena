@@ -739,7 +739,7 @@ static void check_architecture(void)
     static const char *const required_sources[] = {
         "src/main.c", "src/entrypoints.c", "src/script.c", "src/lexer.c",
         "src/parser.c", "src/ast.c", "src/language_semantic.c",
-        "src/language_runtime.c", "src/canonical_compiler.c", "src/query_plan.c"
+        "src/language_runtime.c", "src/canonical_compiler.c", "src/native_aot.c", "src/query_plan.c"
     };
     static const char *const frontend_stages[] = {
         "lexer_init(", "parser_init(", "parser_parse(", "milena_validate_ast("
@@ -788,7 +788,7 @@ static void check_architecture(void)
         "milena_run_dataset_program("
     };
     static const char *const cli_commands[] = {
-        "analyze", "profile", "inspect", "run_script"
+        "analyze", "profile", "inspect", "run_script", "build"
     };
     static const char *const script_tokens[] = {
         "script_pipeline_from_ast", "script_pipeline_for_source", "SCRIPT_PIPELINE_PARSE_ERROR",
@@ -1041,6 +1041,7 @@ static void check_hir_coverage(void)
     const char *header;
     const char *implementation;
     const char *documentation;
+    const char *query_plan_source;
     const char *represented_start;
     const char *rejected_start;
     const char *rejected_end;
@@ -1164,6 +1165,51 @@ static void check_hir_coverage(void)
          span_has(hir_entry_body, "hir_first_unsupported_node"),
          "the public HIR-only entry point must fail closed and locate an unsupported node");
 
+    query_plan_source = read_file("src/query_plan.c");
+    {
+        static const char *const arrow_cases[] = {
+            "case AST_LLAMADA_CARGAR", "case AST_COLUMNAR_PROJECT",
+            "case AST_STREAM_FILTER", "case AST_BLOQUE_EXPORTAR",
+            "case AST_DECLARACION_VARIABLE"
+        };
+        static const char *const arrow_hir_fields[] = {
+            "milena_strdup(plan->source->value)", "milena_strdup(plan->sink->value)",
+            "MILENA_ARROW_HIR_NUMERIC", "MILENA_ARROW_HIR_TEXT",
+            "MILENA_ARROW_HIR_FILTER_TEXT_EQUAL",
+            "MILENA_ARROW_HIR_FILTER_NUMERIC_GREATER",
+            "stream_batch_limit_bytes", "stream_input_limit_bytes"
+        };
+        Span arrow_builder = function_body(query_plan_source,
+            "MilenaStatus milena_arrow_ipc_execution_plan_build(", "Arrow execution-plan builder");
+        Span arrow_hir_builder = function_body(implementation,
+            "static HIRBuildResult arrow_hir_build(", "Arrow HIR builder");
+        Span canonical_parse = function_body(implementation,
+            "MilenaStatus milena_canonical_program_parse(", "canonical parser Arrow-HIR ownership");
+        Span compatibility_entry = function_body(implementation,
+            "MilenaStatus milena_canonical_compatibility_input(", "canonical compatibility input");
+        for (index = 0U; index < ARRAY_COUNT(arrow_cases); ++index) {
+            need(span_has(arrow_builder, arrow_cases[index]),
+                 "Arrow plan builder is missing an audited AST case");
+        }
+        need(span_has(arrow_builder, "AST_COLUMNAR_FIELD") &&
+             span_has(arrow_builder, "MILENA_ERR_UNSUPPORTED") &&
+             span_has(arrow_builder, "default:"),
+             "Arrow plan builder must validate projected fields and reject unknown AST nodes");
+        for (index = 0U; index < ARRAY_COUNT(arrow_hir_fields); ++index) {
+            need(span_has(arrow_hir_builder, arrow_hir_fields[index]),
+                 "Arrow HIR builder is missing an audited typed ownership or limit field");
+        }
+        need(span_has(canonical_parse, "milena_arrow_ipc_execution_plan_build") &&
+             span_has(canonical_parse, "program->arrow_hir = arrow_hir"),
+             "canonical parser must build and own Arrow IPC HIR");
+        need(span_has(compatibility_entry, "input->arrow_hir = program->arrow_hir"),
+             "compatibility input must expose Arrow HIR as a borrowed view");
+        need(span_has(hir_entry_body, "if (!program->hir && !program->data_hir)") &&
+             !span_has(hir_entry_body, "program->arrow_hir") &&
+             span_has(hir_entry_body, "milena_canonical_compatibility_input(program, input, error)"),
+             "Arrow HIR must not bypass strict HIR-to-IR lowering");
+    }
+
     (void)printf("HIR AST coverage: scalar=%lu represented/%lu outside; data=%lu represented/%lu fail-closed; all ASTNodeType values classified in both closed subsets.\n",
                  (unsigned long)represented.count,
                  (unsigned long)rejected.count,
@@ -1185,6 +1231,7 @@ static void check_hir_coverage(void)
     free((void *)header);
     free((void *)implementation);
     free((void *)documentation);
+    free((void *)query_plan_source);
 }
 
 int main(int argc, char **argv)

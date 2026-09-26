@@ -59,6 +59,8 @@ int main(void) {
     assert(token.type == TOKEN_EOF);
     assert(token.start_offset == strlen(span_source));
     assert(token.end_offset == token.start_offset);
+    assert(token.line == 2 && token.column == 17);
+    assert(token.end_line == token.line && token.end_column == token.column);
 
     lexer_init(&lexer, "x-2");
     assert(lexer_next_token(&lexer).type == TOKEN_IDENTIFICADOR);
@@ -95,7 +97,11 @@ int main(void) {
     assert(lexer.error.code == MILENA_ERR_PARSE);
 
     lexer_init(&lexer, "\"escape\\q\"");
-    assert(lexer_next_token(&lexer).type == TOKEN_ERROR);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.start_offset == 0 && token.end_offset == 10);
+    assert(token.line == 1 && token.column == 1);
+    assert(lexer.error.line == 1 && lexer.error.column == 1);
     assert(strstr(lexer.error.message, "escape") != NULL);
 
     const char *unterminated = "\"line\nopen";
@@ -108,14 +114,67 @@ int main(void) {
     assert(lexer.error.code == MILENA_ERR_PARSE);
     assert(lexer.error.line == 1 && lexer.error.column == 1);
 
+    /* CRLF occupies two source bytes but one logical line break. Spans stay
+       byte-based, columns are one-based/exclusive, and EOF has a zero-width
+       span at the final source position. */
+    const char *crlf_source = "uno\r\n\"á\"\r\n1e+\r\n";
+    lexer_init(&lexer, crlf_source);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_IDENTIFICADOR);
+    assert(token.start_offset == 0 && token.end_offset == 3);
+    assert(token.line == 1 && token.column == 1);
+    assert(token.end_line == 1 && token.end_column == 4);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_CADENA);
+    assert(token.start_offset == 5 && token.end_offset == 9);
+    assert(token.line == 2 && token.column == 1);
+    assert(token.end_line == 2 && token.end_column == 5);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.start_offset == 11 && token.end_offset == 14);
+    assert(token.line == 3 && token.column == 1);
+    assert(token.end_line == 3 && token.end_column == 4);
+    assert(lexer.error.line == 3 && lexer.error.column == 1);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_EOF);
+    assert(token.start_offset == sizeof("uno\r\n\"á\"\r\n1e+\r\n") - 1);
+    assert(token.end_offset == token.start_offset);
+    assert(token.line == 4 && token.column == 1);
+    assert(token.end_line == 4 && token.end_column == 1);
+
+    /* A terminal backslash is a truncated unsupported escape, not an out-of-
+       bounds read; the diagnostic keeps the opening quote's source position. */
+    const char *truncated_escape = "\"x\\";
+    lexer_init(&lexer, truncated_escape);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.start_offset == 0 && token.end_offset == strlen(truncated_escape));
+    assert(token.line == 1 && token.column == 1);
+    assert(token.end_line == 1 && token.end_column == 4);
+    assert(lexer.error.code == MILENA_ERR_PARSE);
+    assert(lexer.error.line == 1 && lexer.error.column == 1);
+    assert(strstr(lexer.error.message, "escape") != NULL);
+
+    /* Token and diagnostic locations use size_t end-to-end: no narrowing to
+       signed int occurs when a source position is beyond INT_MAX. */
+    lexer_init(&lexer, "@");
+    size_t wide_position = (size_t)INT_MAX + (size_t)1;
+    lexer.line = wide_position;
+    lexer.column = wide_position;
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.line == wide_position && token.column == wide_position);
+    assert(lexer.error.line == wide_position);
+    assert(lexer.error.column == wide_position);
+
     /* Peek must leave the previous/current tokens, coordinates, and diagnostic
        untouched even when the peeked token is malformed. */
     lexer_init(&lexer, "suma 1e+");
     Token current = lexer_next_token(&lexer);
     Token previous = lexer.previous_token;
     size_t saved_position = lexer.position;
-    int saved_line = lexer.line;
-    int saved_column = lexer.column;
+    size_t saved_line = lexer.line;
+    size_t saved_column = lexer.column;
     peeked = lexer_peek_token(&lexer);
     assert(peeked.type == TOKEN_ERROR);
     assert(lexer.position == saved_position);

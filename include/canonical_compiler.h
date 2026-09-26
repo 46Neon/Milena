@@ -3,6 +3,7 @@
 
 #include "ast.h"
 #include "table.h"
+#include "typed_ir.h"
 
 /* Provenance key stamped by the canonical loader before a data-HIR table is bound. */
 #define MILENA_HIR_DATASET_PATH_METADATA "milena.hir.dataset.path"
@@ -95,17 +96,20 @@ struct MilenaHIRStatement {
 typedef struct {
     char *name;
     size_t resolved_symbol_id;
+    MilenaHIRValueType value_type;
+} MilenaHIRFunctionParameter;
+
+typedef struct MilenaHIRFunction {
+    char *name;
+    size_t resolved_symbol_id;
     MilenaHIRSourceSpan span;
-    struct {
-        char *name;
-        size_t resolved_symbol_id;
-    } *parameters;
+    MilenaHIRFunctionParameter *parameters;
     size_t parameter_count;
     MilenaHIRStatement **body;
     size_t body_count;
 } MilenaHIRFunction;
 
-typedef struct {
+typedef struct MilenaScalarHIR {
     MilenaHIRFunction *functions;
     size_t function_count;
     MilenaHIRStatement **statements;
@@ -202,12 +206,59 @@ typedef struct {
     bool schema_bound;
 } MilenaDataHIR;
 
+typedef enum {
+    MILENA_ARROW_HIR_NUMERIC,
+    MILENA_ARROW_HIR_TEXT
+} MilenaArrowHIRValueType;
+
+typedef struct {
+    char *name;
+    MilenaArrowHIRValueType type;
+    MilenaHIRSourceSpan span;
+} MilenaArrowHIRProjection;
+
+typedef enum {
+    MILENA_ARROW_HIR_FILTER_TEXT_EQUAL,
+    MILENA_ARROW_HIR_FILTER_NUMERIC_GREATER
+} MilenaArrowHIRFilterKind;
+
+typedef struct {
+    char *column;
+    MilenaArrowHIRFilterKind kind;
+    char *text_value;
+    double numeric_threshold;
+    MilenaArrowHIRValueType column_type;
+    MilenaHIRSourceSpan span;
+} MilenaArrowHIRFilter;
+
+/* Owned typed contract for the candidate Arrow IPC STREAM vertical. It is
+ * independent of AST storage, but intentionally is not yet lowered to the
+ * portable typed IR or bytecode. */
+typedef struct {
+    char *source_path;
+    char *output_path;
+    size_t batch_rows;
+    size_t max_batch_bytes;
+    size_t max_rows;
+    size_t max_columns;
+    size_t max_input_bytes;
+    size_t max_output_bytes;
+    double max_elapsed_milliseconds;
+    MilenaArrowHIRProjection *projections;
+    size_t projection_count;
+    bool has_filter;
+    MilenaArrowHIRFilter filter;
+    MilenaHIRSourceSpan span;
+} MilenaArrowHIR;
+
 typedef struct {
     const ASTNode *ast;
     const MilenaTable *table;
     const MilenaTable *right_table; /* Borrowed second dataset for a typed join. */
     const MilenaScalarHIR *hir;
     const MilenaDataHIR *data_hir; /* NULL outside the typed data subset. */
+    /* Borrowed owned HIR for the candidate Arrow STREAM vertical. */
+    const MilenaArrowHIR *arrow_hir;
 } MilenaCanonicalCompilerInput;
 
 typedef struct {
@@ -216,6 +267,9 @@ typedef struct {
     const MilenaTable *right_table; /* Borrowed second dataset when HIR has a join. */
     MilenaScalarHIR *hir; /* Owned scalar HIR, when the scalar subset applies. */
     MilenaDataHIR *data_hir; /* Owned data HIR, when the table subset applies. */
+    MilenaArrowHIR *arrow_hir; /* Owned and independent from program->ast. */
+    MilenaIRProgram *typed_ir; /* Borrowed compatibility view of the first compiled body. */
+    MilenaIRModule *typed_module; /* Owned interprocedural IR when the source has calls. */
 } MilenaCanonicalProgram;
 
 void milena_canonical_program_init(MilenaCanonicalProgram *program);
@@ -225,6 +279,16 @@ void milena_canonical_program_release(MilenaCanonicalProgram *program);
 MilenaStatus milena_canonical_program_parse(MilenaCanonicalProgram *program,
                                              const char *source,
                                              MilenaError *error);
+
+/* Compile the supported scalar HIR into verified canonical typed IR. A single
+ * function keeps the typed_ir body representation; multi-function modules own
+ * typed_module and expose typed_ir as a borrowed view of its first body.
+ * Direct calls are limited to registered nonrecursive functions with 0-2
+ * numeric parameters and numeric/boolean returns. Unsupported shapes fail
+ * closed; this never invokes the interpreter. Successful replacement is
+ * transactional and release destroys the owned body/module. */
+MilenaStatus milena_canonical_program_compile_scalar_ir(
+    MilenaCanonicalProgram *program, MilenaError *error);
 
 /* Bind a borrowed canonical dataframe and validate SST column contracts.
  * Data-HIR programs require MILENA_HIR_DATASET_PATH_METADATA to equal the

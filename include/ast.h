@@ -236,10 +236,10 @@ typedef struct ASTNode {
     struct ASTNode **children;
     size_t child_count;
     size_t child_capacity;
-    int line;
-    int column;
-    int end_line;
-    int end_column;
+    size_t line;
+    size_t column;
+    size_t end_line;
+    size_t end_column;
     size_t start_offset;
     size_t end_offset;
     bool has_source_span;

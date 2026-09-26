@@ -22,7 +22,7 @@ El AST pasa por `milena_validate_ast` antes de aceptar una ejecución de dataset
 
 | Familia | Representación/planner | Runtime/backend | Alcance comprobable |
 |---|---|---|---|
-| Funciones escalares | `MilenaScalarHIR` | intérprete/runtime del lenguaje | Subconjunto cerrado; lo no representado se rechaza en la entrada HIR. |
+| Funciones escalares | `MilenaScalarHIR`; para AOT, `MilenaIRProgram`/`MilenaIRModule` verificados | intérprete/runtime del lenguaje; `native_aot.c` para el subconjunto AOT (`milena build`) | El backend nativo consume y vuelve a verificar la IR tipada; dataset HIR y opcodes no soportados se rechazan. Véase [Native AOT](NATIVE_AOT.md). |
 | Operaciones de tabla en memoria | `MilenaDataHIR` | `milena_canonical_program_execute_data` sobre `MilenaTable` | Subconjunto cerrado; fuente, esquema, spans, tipos y operaciones se validan. |
 | CSV streaming | `MilenaStreamExecutionPlan` | runtime de lenguaje → `stream.c` | Plan lógico/físico tipado; plan y límites se validan antes de ejecutar. |
 | Arrow IPC | `MilenaArrowIpcExecutionPlan` | runtime de lenguaje → backend Arrow | Proyección/filtro y operadores del slice soportado se validan antes del backend. |
