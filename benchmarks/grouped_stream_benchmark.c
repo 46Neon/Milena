@@ -103,6 +103,22 @@ static bool json_u64(const char *json, const char *key, uint64_t *value)
     return true;
 }
 
+/* Parse one integer from a JSON value while allowing the following delimiter;
+ * parse_u64 remains strict for complete command-line arguments. */
+static bool json_u64_prefix(const char *text, uint64_t *value)
+{
+    char *end = NULL;
+    unsigned long long parsed;
+    if (text == NULL || value == NULL) return false;
+    errno = 0;
+    parsed = strtoull(text, &end, 10);
+    if (errno != 0 || end == text || parsed > UINT64_MAX) return false;
+    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') ++end;
+    if (*end != ',' && *end != '}' && *end != ']') return false;
+    *value = (uint64_t)parsed;
+    return true;
+}
+
 static uint64_t sum_sum_invalid(const char *json, bool *ok)
 {
     const char *cursor = json;
@@ -125,7 +141,7 @@ static uint64_t sum_sum_invalid(const char *json, bool *ok)
                 if (number == NULL) { *ok = false; return 0U; }
                 ++number;
                 while (*number == ' ' || *number == '\t' || *number == '\r' || *number == '\n') ++number;
-                if (!parse_u64(number, &value) || UINT64_MAX - total < value) { *ok = false; return 0U; }
+                if (!json_u64_prefix(number, &value) || UINT64_MAX - total < value) { *ok = false; return 0U; }
                 total += value;
             }
         }
