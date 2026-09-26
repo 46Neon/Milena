@@ -265,7 +265,7 @@ Los comandos objetivo, la arquitectura de cada artefacto, su disponibilidad y lo
 |---|---|---|
 | Windows x64 | `winget install --id 46Neon.Milena --exact` | Manifiestos adjuntos a una Release; publicación/indexación WinGet y prueba limpia pendientes. |
 | Debian/Ubuntu Linux amd64 | `sudo apt install milena` | `.deb` local/de Release; repositorio APT Linux firmado y registrado pendiente. |
-| Android/Termux AArch64 | `pkg install milena` | Receta candidata; aceptación/publicación y prueba en Android/Bionic pendientes. |
+| Android/Termux AArch64 | Todavía no disponible: `pkg install milena` | Receta candidata; aceptación/publicación y prueba en Android/Bionic pendientes. |
 
 Los paquetes Linux y Termux son diferentes aunque ambos usen formato `.deb`: Linux usa su ABI y rutas `/usr`; Termux usa Bionic y `$PREFIX`. El workflow `.github/workflows/publish-apt.yml` corresponde al repositorio Termux/AArch64, no al canal APT de Debian/Ubuntu. Consulta la matriz para los gates y límites exactos por canal.
 
