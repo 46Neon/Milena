@@ -1,11 +1,13 @@
 # Portable bytecode v1 — experimental slice
 
 This document specifies the small, versioned bytecode/verifier/VM slice in
-`include/bytecode.h` and `src/bytecode.c`. The bytecode is a portable serialized
-instruction format; it is **not native machine code**. This slice is not yet
-lowered from Milena source or from the canonical scalar/data HIR and is not
-called by the shipped CLI/runtime. It is deliberately not included in the
-production `SOURCES` list.
+`include/bytecode.h` and `src/bytecode.c`, its experimental canonical scalar-HIR
+lowering in `src/bytecode_compiler.c`, and an optional native backend in
+`src/bytecode_native.c`. The wire format remains portable serialized bytecode;
+it is **not native machine code**. The native backend is a separate, explicitly
+limited Linux x86-64 AOT path over the exact same verified MLBC bytes executed
+by the VM. Neither module is called by the shipped CLI/runtime, and they remain
+outside the production `SOURCES` list.
 
 ## Wire format
 
@@ -98,12 +100,48 @@ compare it with the legacy interpreter executing the corresponding function
 plus a top-level `variable salida = principal();` wrapper.
 
 This remains an isolated experimental foundation rather than production
-compiler integration. It has no function-call ABI, data HIR lowering, shared
-physical IR with the existing AOT path, or strings/datasets/typed data runtime.
-It does not replace the experimental legacy `src/vm.c`, and the source compiler
-module remains outside production `SOURCES`; this slice does not establish
-parity for all `.milena` constructions or mark compiler-plan phase 2, Phase 3,
-or Phase 4 complete. `make test-bytecode` runs both hand-authored verifier/VM
-regressions and the canonical source-to-HIR-to-bytecode encode/verify/run suite;
-it is a dependency of `make test` and the dedicated GCC/Clang and ASan/UBSan CI
-jobs.
+compiler integration. It has no function-call ABI, data HIR lowering, strings,
+datasets, or typed data runtime, and it does not directly lower HIR to native
+code: AOT consumes only already-verified MLBC bytes. It does not replace the
+experimental legacy `src/vm.c`, and the bytecode/compiler/AOT modules remain
+outside production `SOURCES`; this slice does not establish parity for all
+`.milena` constructions or mark compiler-plan phase 2, Phase 3, Phase 4, or
+Phase 6 complete.
+
+## Experimental native AOT for the closed subset
+
+`milena_bytecode_compile_native` in `include/bytecode_compiler.h` first verifies
+the complete byte stream and refuses malformed input before creating an output.
+It currently supports Linux x86-64 with IEEE-754 binary64 only. It decodes the
+verified instructions and emits per-instruction C labels and direct `goto`
+control flow, then invokes the fixed `/usr/bin/cc` using `fork`/`execve` and an
+argument vector; there is no shell command construction, user-bytecode text is
+never interpolated, and the generated artifact has no bytecode dispatch loop.
+The generated code has source-specific native arithmetic/comparison/branch
+instructions, a zero-initialized register file, finite-result and divide-by-zero
+checks, and the VM's default 1,000,000-instruction budget. Private temporary
+files are cleaned on all paths and the final executable is atomically published
+only after successful compilation. Compiler diagnostics remain on stderr and
+API errors report verification, I/O, and compiler failures.
+
+The artifact prints a successful numeric result as a C hexadecimal floating
+literal on stdout and exits 0. It exits 70 for VM runtime errors, 71 for the
+instruction budget, and 74 if result output fails. AOT is deliberately limited
+to the VM's default fuel value (unlike `milena_bytecode_run`, callers cannot
+supply a custom fuel budget to the artifact). The focused source-compiler smoke
+tests compile the same source-derived, verified MLBC bytes to AOT and compare
+both native numeric output and process success with `milena_bytecode_run` for
+arithmetic and both branch outcomes. Additional tests compare native runtime
+error and fuel-exhaustion exits with VM statuses, reject invalid bytecode before
+output publication, and use shell metacharacters in an output path to exercise
+argv-only invocation. The bytecode CI jobs run this test on Linux x86-64 with
+GCC/Clang harness builds and under ASan/UBSan; the generated native child is
+compiled with the fixed system compiler.
+
+This is not the compiler-plan AOT gate: it validates one numeric/boolean
+`principal` subset and one Linux target only. Windows PE, Android/Termux Bionic,
+ABI/call lowering, HIR/data lowering, broad semantic parity, CLI integration,
+production source-manifest inclusion, and the remaining compiler plan gates
+are still open. `make test-bytecode` runs the verifier/VM, canonical HIR lowering,
+and native-artifact regression suites; all experimental modules remain
+excluded from production `SOURCES`.

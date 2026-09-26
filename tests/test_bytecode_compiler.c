@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "bytecode_compiler.h"
 
 #include "canonical_compiler.h"
@@ -5,10 +6,14 @@
 #include "lexer.h"
 #include "parser.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #define CHECK(condition, message) \
     do { \
@@ -20,6 +25,127 @@
 
 static bool near(double actual, double expected) {
     return fabs(actual - expected) < 1e-12;
+}
+
+static int execute_native(const char *path, int *exit_code,
+                          char *output, size_t output_capacity) {
+    int pipe_fds[2];
+    if (pipe(pipe_fds) != 0) return -1;
+    pid_t child = fork();
+    if (child < 0) {
+        (void)close(pipe_fds[0]);
+        (void)close(pipe_fds[1]);
+        return -1;
+    }
+    if (child == 0) {
+        (void)close(pipe_fds[0]);
+        if (dup2(pipe_fds[1], STDOUT_FILENO) < 0) _exit(126);
+        (void)close(pipe_fds[1]);
+        execl(path, path, (char *)NULL);
+        _exit(127);
+    }
+    (void)close(pipe_fds[1]);
+    size_t used = 0;
+    bool overflow = false;
+    char chunk[64];
+    for (;;) {
+        ssize_t count = read(pipe_fds[0], chunk, sizeof(chunk));
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) {
+            (void)close(pipe_fds[0]);
+            return -1;
+        }
+        if (count == 0) break;
+        size_t received = (size_t)count;
+        if (used + received >= output_capacity) {
+            overflow = true;
+        } else {
+            memcpy(output + used, chunk, received);
+            used += received;
+        }
+    }
+    (void)close(pipe_fds[0]);
+    if (output_capacity == 0) return -1;
+    output[used] = '\0';
+    int status;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    if (WIFEXITED(status)) *exit_code = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status)) *exit_code = 128 + WTERMSIG(status);
+    else *exit_code = 125;
+    return overflow ? 1 : 0;
+}
+
+static int native_path(char *directory, size_t directory_capacity,
+                       char *executable, size_t executable_capacity) {
+    (void)directory_capacity;
+    (void)executable_capacity;
+    (void)snprintf(directory, directory_capacity,
+                   "/tmp/milena-bytecode-aot-test-XXXXXX");
+    if (!mkdtemp(directory)) return -1;
+    (void)snprintf(executable, executable_capacity, "%s/native-result", directory);
+    return 0;
+}
+
+static int check_native_success(const uint8_t *bytes, size_t length,
+                                double expected) {
+    char directory[128];
+    char executable[192];
+    char output[128];
+    int exit_code = -1;
+    MilenaError error;
+    MilenaBytecodeDiagnostic diagnostic;
+    double vm_result = 0.0;
+    if (native_path(directory, sizeof(directory), executable, sizeof(executable)) != 0)
+        return 1;
+    if (milena_bytecode_run(bytes, length, NULL, &vm_result, &diagnostic) != MILENA_BC_OK ||
+        !near(vm_result, expected)) {
+        (void)rmdir(directory);
+        return 1;
+    }
+    if (milena_bytecode_compile_native(bytes, length, executable, &error) != MILENA_OK) {
+        fprintf(stderr, "native compilation failed: %s\n", error.message);
+        (void)rmdir(directory);
+        return 1;
+    }
+    int execution_status = execute_native(executable, &exit_code, output, sizeof(output));
+    (void)unlink(executable);
+    (void)rmdir(directory);
+    if (execution_status != 0 || exit_code != 0) return 1;
+    char *end = NULL;
+    errno = 0;
+    double native_result = strtod(output, &end);
+    if (errno != 0 || end == output || strcmp(end, "\n") != 0 ||
+        !near(native_result, vm_result)) return 1;
+    return 0;
+}
+
+static int check_native_error_status(const uint8_t *bytes, size_t length,
+                                     MilenaBytecodeStatus expected_vm_status,
+                                     int expected_exit_code) {
+    char directory[128];
+    char executable[192];
+    char output[128];
+    int exit_code = -1;
+    MilenaError error;
+    MilenaBytecodeDiagnostic diagnostic;
+    double result = -1.0;
+    if (native_path(directory, sizeof(directory), executable, sizeof(executable)) != 0)
+        return 1;
+    if (milena_bytecode_run(bytes, length, NULL, &result, &diagnostic) != expected_vm_status) {
+        (void)rmdir(directory);
+        return 1;
+    }
+    if (milena_bytecode_compile_native(bytes, length, executable, &error) != MILENA_OK) {
+        fprintf(stderr, "native compilation failed: %s\n", error.message);
+        (void)rmdir(directory);
+        return 1;
+    }
+    int execution_status = execute_native(executable, &exit_code, output, sizeof(output));
+    (void)unlink(executable);
+    (void)rmdir(directory);
+    return execution_status == 0 && exit_code == expected_exit_code && output[0] == '\0' ? 0 : 1;
 }
 
 static int check_end_to_end(const char *function_source,
@@ -40,6 +166,8 @@ static int check_end_to_end(const char *function_source,
     CHECK(milena_bytecode_run(bytes, length, NULL, &actual, &diagnostic) == MILENA_BC_OK,
           diagnostic.message);
     CHECK(near(actual, expected), "compiled entry result differs from expected value");
+    CHECK(check_native_success(bytes, length, expected) == 0,
+          "native AOT result must match the same verified source-derived bytecode and VM");
 
     /* The interpreter runs the corresponding complete program with a global
        binding. The bytecode API compiles only principal's entry-function body. */

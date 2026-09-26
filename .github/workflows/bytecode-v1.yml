@@ -1,4 +1,4 @@
-name: Experimental bytecode v1
+name: Experimental bytecode v1 and native AOT
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   bytecode-v1:
-    name: Bytecode/VM regression (${{ matrix.compiler }})
+    name: Bytecode, canonical lowering, and Linux x86-64 AOT (${{ matrix.compiler }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -20,14 +20,14 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
-      - name: Build and execute bytecode verifier/VM and canonical HIR-lowering tests
+      - name: Build and execute bytecode, source-to-HIR-to-AOT parity, and native-runtime tests (Linux x86-64)
         run: |
           set -euxo pipefail
           make clean
           make CC=${{ matrix.compiler }} test-bytecode
 
   bytecode-v1-sanitizers:
-    name: Bytecode/VM ASan and UBSan
+    name: Bytecode and native AOT API ASan/UBSan regressions
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -35,7 +35,7 @@ jobs:
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - uses: actions/checkout@v4
-      - name: Build and execute bytecode and canonical HIR-lowering tests under sanitizers
+      - name: Build and execute bytecode, canonical lowering, and AOT tests under sanitizers
         run: |
           set -euxo pipefail
           make clean
