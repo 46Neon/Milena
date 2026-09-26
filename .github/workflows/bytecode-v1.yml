@@ -1,0 +1,45 @@
+name: Experimental bytecode v1
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bytecode-v1:
+    name: Bytecode/VM regression (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and execute verifier/VM tests
+        run: |
+          set -euxo pipefail
+          make clean
+          make CC=${{ matrix.compiler }} test-bytecode
+
+  bytecode-v1-sanitizers:
+    name: Bytecode/VM ASan and UBSan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and execute bytecode tests under sanitizers
+        run: |
+          set -euxo pipefail
+          make clean
+          make CC=clang \
+            CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude' \
+            LDFLAGS='-fsanitize=address,undefined -lm -pthread' \
+            test-bytecode

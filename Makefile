@@ -32,6 +32,7 @@ TARGET = milena
 
 .PHONY: all benchmark benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill clean termux-build termux-install termux-contract test check-termux-packaging check-termux-runner-contract check-termux-industrial check-markdown-links check-compiler-boundary test-termux-packaging test-canonical-compiler test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-partition-protocol test-protocol-reduce test-spill-store test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-language-array test-lexer-safety test-language-runtime test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-group-key-codec test-arrow-ipc test-common-tokenizer test-ast-validation check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-hir-ast-coverage debug
 
+.PHONY: test-bytecode
 .PHONY: test-common-tokenizer
 test-common-tokenizer: tests/test_common_tokenizer
 	./tests/test_common_tokenizer
@@ -340,6 +341,13 @@ check-hir-ast-coverage:
 test-canonical-compiler: check-hir-ast-coverage tests/test_canonical_compiler
 	./tests/test_canonical_compiler
 
+# Portable experimental bytecode slice: never added to the production source list.
+test-bytecode: tests/test_bytecode
+	./tests/test_bytecode
+
+tests/test_bytecode: tests/test_bytecode.c src/bytecode.c include/bytecode.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< src/bytecode.c $(LDFLAGS) -o $@
+
 tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $^ $(LDFLAGS) -o $@
 
@@ -416,12 +424,13 @@ debug:
 	$(MAKE) clean
 	$(MAKE) CFLAGS='-std=c17 -Wall -Wextra -Wpedantic -g3 -O0 -fsanitize=address,undefined -Iinclude' LDFLAGS='-fsanitize=address,undefined -lm'
 
-test: check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
+test: test-bytecode check-source-manifest check-experimental-isolation check-stream-architecture check-unification-architecture check-termux-packaging check-termux-runner-contract check-termux-industrial check-compiler-boundary test-termux-packaging benchmarks/benchmark test-canonical-compiler benchmark-stream benchmark-stream-grouped benchmark-stream-grouped-spill $(TARGET) test-sst test-array test-array-worker2 test-array-worker3 test-forest test-arena test-table test-table-worker4 test-pr21-regressions test-finance test-stream test-partition-plan test-partition-executor test-partition-equivalence test-partition-concurrency test-partition-reduce test-partition-budget test-process-executor test-spill-store test-group-key-codec test-mergeable-aggregate test-grouped-aggregate test-external-merge test-external-sort test-query-plan test-grouped-stream-spill-runtime test-entrypoints test-common-tokenizer test-ast-validation test-language-array test-lexer-safety test-language-runtime test-arrow-ipc test-parser-array test-parser-statistics test-parser-variables test-functions test-script-functions test-user-functions test-sqlite-backend test-sqlite-typed-sql test-sqlite-cli
 	./tests/run_tests.sh
 	./tests/run_tests.sh
 	./benchmarks/benchmark --help && rm -f benchmarks/benchmark
 
 clean:
+	rm -f tests/test_bytecode
 	rm -f $(OBJECTS) $(FUNCTION_OBJECTS) $(TARGET) tools/check_architecture tools/check_repository_contracts tools/validate_termux_elf tests/test_sst_modules \
 		tests/test_array tests/test_array_worker2 tests/test_array_worker3 tests/test_forest tests/test_arena tests/test_table tests/test_table_worker4 \
 		tests/test_finance tests/test_pr21_regressions tests/test_stream tests/test_partition_plan tests/test_partition_executor tests/test_partition_equivalence tests/test_partition_concurrency tests/test_partition_reduce tests/test_partition_budget tests/test_process_executor tests/test_partition_protocol tests/test_protocol_reduce tests/test_spill_store tests/test_group_key_codec tests/test_mergeable_aggregate tests/test_grouped_aggregate tests/test_external_merge tests/test_external_sort tests/test_query_plan tests/test_entrypoints tests/test_language_array tests/test_lexer_safety tests/test_language_runtime tests/test_parser_array tests/test_parser_statistics tests/test_parser_variables tests/test_ast_validation tests/test_functions tests/test_script_functions tests/test_user_functions tests/test_arrow_ipc tests/check_arrow_ipc_fixtures tests/test_common_tokenizer tests/test_canonical_compiler tests/test_termux_packaging benchmarks/grouped_stream_benchmark tests/test_sqlite_backend tests/test_sqlite_typed_sql tests/arrow-primitive-output.stream tests/arrow-text-output.stream tests/arrow-wide-output.stream tests/arrow-failure-destination.stream tests/arrow-truncated.stream reporte.json resultado.json

@@ -1,0 +1,249 @@
+#include "bytecode.h"
+
+#include <float.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define CHECK(condition)                                                        \
+    do {                                                                        \
+        if (!(condition)) {                                                     \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__,          \
+                    #condition);                                                \
+            return 1;                                                          \
+        }                                                                       \
+    } while (0)
+
+#define BC_BUFFER_SIZE 256u
+
+typedef struct {
+    uint8_t bytes[BC_BUFFER_SIZE];
+    size_t length;
+} Encoded;
+
+static int encode_program(const MilenaBytecodeInstruction *instructions,
+                          size_t count,
+                          uint16_t registers,
+                          const MilenaBytecodeLimits *limits,
+                          Encoded *encoded,
+                          MilenaBytecodeStatus expected_status) {
+    MilenaBytecodeProgram program = {
+        MILENA_BYTECODE_VERSION_MAJOR,
+        MILENA_BYTECODE_VERSION_MINOR,
+        registers,
+        count,
+        instructions
+    };
+    MilenaBytecodeDiagnostic diagnostic;
+    size_t written = 0;
+    memset(encoded->bytes, 0xa5, sizeof(encoded->bytes));
+    encoded->length = 0;
+    MilenaBytecodeStatus status = milena_bytecode_encode(
+        &program, encoded->bytes, sizeof(encoded->bytes), &written, limits,
+        &diagnostic);
+    if (status != expected_status) {
+        fprintf(stderr, "unexpected encode status: got %s, expected %s (%s)\n",
+                milena_bytecode_status_name(status),
+                milena_bytecode_status_name(expected_status), diagnostic.message);
+        return 1;
+    }
+    if (status == MILENA_BC_OK) {
+        encoded->length = written;
+    }
+    return 0;
+}
+
+static bool near(double actual, double expected) {
+    return fabs(actual - expected) < 1e-12;
+}
+
+int main(void) {
+    const MilenaBytecodeInstruction arithmetic[] = {
+        {MILENA_BC_CONST_F64, 0, 0, 0, 2.0},
+        {MILENA_BC_CONST_F64, 1, 0, 0, 3.0},
+        {MILENA_BC_MUL, 2, 0, 1, 0.0},
+        {MILENA_BC_RETURN, 2, 0, 0, 0.0}
+    };
+    const MilenaBytecodeInstruction conditional[] = {
+        {MILENA_BC_CONST_F64, 0, 0, 0, 0.0},
+        {MILENA_BC_CONST_F64, 1, 0, 0, 5.0},
+        {MILENA_BC_CONST_F64, 2, 0, 0, 5.0},
+        {MILENA_BC_EQ, 3, 1, 2, 0.0},
+        {MILENA_BC_JUMP_IF_FALSE, 3, 7, 0, 0.0},
+        {MILENA_BC_CONST_F64, 4, 0, 0, 10.0},
+        {MILENA_BC_RETURN, 4, 0, 0, 0.0},
+        {MILENA_BC_CONST_F64, 4, 0, 0, 20.0},
+        {MILENA_BC_RETURN, 4, 0, 0, 0.0}
+    };
+    const MilenaBytecodeInstruction infinite_loop[] = {
+        {MILENA_BC_CONST_F64, 0, 0, 0, 1.0},
+        {MILENA_BC_JUMP_IF_FALSE, 0, 3, 0, 0.0},
+        {MILENA_BC_JUMP, 2, 0, 0, 0.0},
+        {MILENA_BC_RETURN, 0, 0, 0, 0.0}
+    };
+    const MilenaBytecodeInstruction divide_by_zero[] = {
+        {MILENA_BC_CONST_F64, 0, 0, 0, 1.0},
+        {MILENA_BC_CONST_F64, 1, 0, 0, 0.0},
+        {MILENA_BC_DIV, 2, 0, 1, 0.0},
+        {MILENA_BC_RETURN, 2, 0, 0, 0.0}
+    };
+    const MilenaBytecodeInstruction overflow[] = {
+        {MILENA_BC_CONST_F64, 0, 0, 0, DBL_MAX},
+        {MILENA_BC_MUL, 1, 0, 0, 0.0},
+        {MILENA_BC_RETURN, 1, 0, 0, 0.0}
+    };
+    Encoded encoded;
+    MilenaBytecodeDiagnostic diagnostic;
+    MilenaBytecodeLimits limits = {0, 0, 0, 0};
+    double value = -123.0;
+    size_t required = 0;
+
+    CHECK(milena_bytecode_encoded_size(4, &required));
+    CHECK(required == MILENA_BYTECODE_HEADER_SIZE +
+                         4u * MILENA_BYTECODE_INSTRUCTION_SIZE);
+    CHECK(!milena_bytecode_encoded_size(0, &required));
+    CHECK(!milena_bytecode_encoded_size(
+        (size_t)MILENA_BYTECODE_MAX_INSTRUCTIONS + 1u, &required));
+    {
+        MilenaBytecodeProgram program = {
+            MILENA_BYTECODE_VERSION_MAJOR,
+            MILENA_BYTECODE_VERSION_MINOR,
+            3,
+            4,
+            arithmetic
+        };
+        CHECK(milena_bytecode_encode(&program, NULL, 0, &required, NULL,
+                                     &diagnostic) == MILENA_BC_BUFFER_TOO_SMALL);
+        CHECK(required == MILENA_BYTECODE_HEADER_SIZE +
+                             4u * MILENA_BYTECODE_INSTRUCTION_SIZE);
+    }
+
+    CHECK(encode_program(arithmetic, 4, 3, NULL, &encoded, MILENA_BC_OK) == 0);
+    CHECK(encoded.length == MILENA_BYTECODE_HEADER_SIZE +
+                                4u * MILENA_BYTECODE_INSTRUCTION_SIZE);
+    CHECK(memcmp(encoded.bytes, "MLBC", 4) == 0);
+    CHECK(encoded.bytes[4] == 1 && encoded.bytes[5] == 0);
+    CHECK(milena_bytecode_verify(encoded.bytes, encoded.length, NULL,
+                                 &diagnostic) == MILENA_BC_OK);
+    CHECK(milena_bytecode_run(encoded.bytes, encoded.length, NULL, &value,
+                               &diagnostic) == MILENA_BC_OK);
+    CHECK(near(value, 6.0));
+    CHECK(encode_program(conditional, 9, 5, NULL, &encoded, MILENA_BC_OK) == 0);
+    CHECK(milena_bytecode_run(encoded.bytes, encoded.length, NULL, &value,
+                              &diagnostic) == MILENA_BC_OK);
+    CHECK(near(value, 10.0));
+
+    CHECK(milena_bytecode_verify(encoded.bytes, encoded.length - 1, NULL,
+                                 &diagnostic) == MILENA_BC_BAD_FORMAT);
+    {
+        uint8_t extra[BC_BUFFER_SIZE];
+        memcpy(extra, encoded.bytes, encoded.length);
+        extra[encoded.length] = 0;
+        CHECK(milena_bytecode_verify(extra, encoded.length + 1, NULL,
+                                     &diagnostic) == MILENA_BC_BAD_FORMAT);
+    }
+    {
+        uint8_t corrupted[BC_BUFFER_SIZE];
+        memcpy(corrupted, encoded.bytes, encoded.length);
+        corrupted[4] = 2;
+        CHECK(milena_bytecode_verify(corrupted, encoded.length, NULL,
+                                     &diagnostic) == MILENA_BC_BAD_VERSION);
+        memcpy(corrupted, encoded.bytes, encoded.length);
+        corrupted[MILENA_BYTECODE_HEADER_SIZE + 1] = 1;
+        CHECK(milena_bytecode_verify(corrupted, encoded.length, NULL,
+                                     &diagnostic) == MILENA_BC_BAD_FORMAT);
+    }
+    {
+        uint8_t mutated[BC_BUFFER_SIZE];
+        MilenaBytecodeLimits bounded = {0, 0, 0, 16};
+        for (size_t i = 0; i < encoded.length; ++i) {
+            for (unsigned bit = 0; bit < 8u; ++bit) {
+                memcpy(mutated, encoded.bytes, encoded.length);
+                mutated[i] ^= (uint8_t)(1u << bit);
+                MilenaBytecodeStatus status = milena_bytecode_verify(
+                    mutated, encoded.length, NULL, &diagnostic);
+                if (status == MILENA_BC_OK) {
+                    status = milena_bytecode_run(mutated, encoded.length,
+                                                 &bounded, &value, &diagnostic);
+                    CHECK(status == MILENA_BC_OK ||
+                          status == MILENA_BC_RUNTIME_ERROR ||
+                          status == MILENA_BC_STEP_LIMIT);
+                }
+            }
+        }
+    }
+    {
+        MilenaBytecodeInstruction bad_opcode[] = {
+            {255, 0, 0, 0, 0.0},
+            {MILENA_BC_RETURN, 0, 0, 0, 0.0}
+        };
+        memset(encoded.bytes, 0xa5, sizeof(encoded.bytes));
+        CHECK(encode_program(bad_opcode, 2, 1, NULL, &encoded,
+                             MILENA_BC_BAD_OPCODE) == 0);
+        for (size_t i = 0; i < sizeof(encoded.bytes); ++i) {
+            CHECK(encoded.bytes[i] == 0xa5);
+        }
+    }
+    {
+        const MilenaBytecodeInstruction bad_target[] = {
+            {MILENA_BC_JUMP, 2, 0, 0, 0.0},
+            {MILENA_BC_RETURN, 0, 0, 0, 0.0}
+        };
+        CHECK(encode_program(bad_target, 2, 1, NULL, &encoded,
+                             MILENA_BC_BAD_OPERAND) == 0);
+    }
+    {
+        const MilenaBytecodeInstruction falls_through[] = {
+            {MILENA_BC_CONST_F64, 0, 0, 0, 1.0}
+        };
+        CHECK(encode_program(falls_through, 1, 1, NULL, &encoded,
+                             MILENA_BC_BAD_CONTROL_FLOW) == 0);
+    }
+    {
+        const MilenaBytecodeInstruction bad_register[] = {
+            {MILENA_BC_RETURN, 2, 0, 0, 0.0}
+        };
+        CHECK(encode_program(bad_register, 1, 1, NULL, &encoded,
+                             MILENA_BC_BAD_OPERAND) == 0);
+    }
+    {
+        MilenaBytecodeProgram program = {
+            MILENA_BYTECODE_VERSION_MAJOR,
+            MILENA_BYTECODE_VERSION_MINOR,
+            3,
+            4,
+            arithmetic
+        };
+        CHECK(milena_bytecode_encode(&program, encoded.bytes, 1, &required,
+                                     NULL, &diagnostic) ==
+              MILENA_BC_BUFFER_TOO_SMALL);
+        CHECK(required == MILENA_BYTECODE_HEADER_SIZE +
+                             4u * MILENA_BYTECODE_INSTRUCTION_SIZE);
+    }
+    {
+        limits.max_steps = 16;
+        CHECK(encode_program(infinite_loop, 4, 1, NULL, &encoded,
+                             MILENA_BC_OK) == 0);
+        CHECK(milena_bytecode_run(encoded.bytes, encoded.length, &limits, &value,
+                                  &diagnostic) == MILENA_BC_STEP_LIMIT);
+        CHECK(value == 0.0);
+        limits.max_steps = 0;
+    }
+    CHECK(encode_program(divide_by_zero, 4, 3, NULL, &encoded,
+                         MILENA_BC_OK) == 0);
+    CHECK(milena_bytecode_run(encoded.bytes, encoded.length, NULL, &value,
+                              &diagnostic) == MILENA_BC_RUNTIME_ERROR);
+    CHECK(value == 0.0);
+    CHECK(encode_program(overflow, 3, 2, NULL, &encoded, MILENA_BC_OK) == 0);
+    CHECK(milena_bytecode_run(encoded.bytes, encoded.length, NULL, &value,
+                              &diagnostic) == MILENA_BC_RUNTIME_ERROR);
+
+    limits.max_steps = MILENA_BYTECODE_MAX_STEP_LIMIT + 1u;
+    CHECK(milena_bytecode_verify(encoded.bytes, encoded.length, &limits, NULL) ==
+          MILENA_BC_LIMIT_EXCEEDED);
+
+    printf("bytecode tests: ok\n");
+    return 0;
+}
