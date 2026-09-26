@@ -369,11 +369,16 @@ static bool make_has_source_token(Span sources, const char *name, bool restricte
     return false;
 }
 
-static bool is_experimental(const char *name)
+static bool is_exempt_from_experimental_isolation(const char *name)
 {
     size_t index;
     for (index = 0U; index < ARRAY_COUNT(experimental_sources); ++index) {
         if (strcmp(name, experimental_sources[index]) == 0) {
+            return true;
+        }
+    }
+    for (index = 0U; index < ARRAY_COUNT(reference_sources); ++index) {
+        if (strcmp(name, reference_sources[index]) == 0) {
             return true;
         }
     }
@@ -723,7 +728,7 @@ static void check_experimental_isolation(int argc, char **argv)
         const char *name = slash == NULL ? argv[argument] : slash + 1;
         size_t header_index;
         char *text;
-        if (is_experimental(name)) {
+        if (is_exempt_from_experimental_isolation(name)) {
             continue;
         }
         text = read_file(argv[argument]);
