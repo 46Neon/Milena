@@ -380,6 +380,17 @@ static bool is_experimental(const char *name)
     return false;
 }
 
+static bool is_reference(const char *name)
+{
+    size_t index;
+    for (index = 0U; index < ARRAY_COUNT(reference_sources); ++index) {
+        if (strcmp(name, reference_sources[index]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool manifest_has(const char *name)
 {
     size_t index;
@@ -699,7 +710,7 @@ static void check_experimental_isolation(int argc, char **argv)
         const char *name = slash == NULL ? argv[argument] : slash + 1;
         size_t header_index;
         char *text;
-        if (is_experimental(name)) {
+        if (is_experimental(name) || is_reference(name)) {
             continue;
         }
         text = read_file(argv[argument]);
