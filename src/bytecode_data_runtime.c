@@ -333,6 +333,22 @@ MilenaStatus milena_bytecode_run_data(
         status = data_runtime_fail(error, MILENA_ERR_DATA, &plan,
                                    "El CSV no contiene el encabezado numérico declarado");
     }
+    /* Table conversion intentionally maps malformed numeric cells to null for
+     * ordinary data workflows. A bytecode plan declares this input numeric, so
+     * reject non-empty malformed values before that lossy conversion. */
+    for (size_t row = 0u; status == MILENA_OK && row < dataset.row_count; ++row) {
+        const char *value = dataset.rows[row][(size_t)input_column];
+        double parsed;
+        if (value && value[0] != '\0' &&
+            milena_parse_double(value, &parsed) != MILENA_OK) {
+            milena_error_set(error, MILENA_ERR_TYPE,
+                             plan.span_present ? plan.source_line : 0u,
+                             plan.span_present ? plan.source_column : 0u,
+                             row + 1u,
+                             "La columna numérica declarada contiene un valor no numérico");
+            status = MILENA_ERR_TYPE;
+        }
+    }
     if (status == MILENA_OK)
         status = schema_add(&schema, input_name, MILENA_VAR_NUMERIC,
                             MILENA_ROLE_FEATURE, error);

@@ -247,12 +247,14 @@ static int test_header_and_numeric_binding_failures(void) {
                       sizeof("valor\nnot-a-number\n") - 1u),
           "write nonnumeric CSV");
     remove_if_exists("tests/non-numeric.json");
-    CHECK(milena_bytecode_run_data(bytes, length, CONTEXT_PATH, NULL, &error) ==
-              MILENA_ERR_TYPE,
+    MilenaStatus numeric_status = milena_bytecode_run_data(
+        bytes, length, CONTEXT_PATH, NULL, &error);
+    free(bytes);
+    bytes = NULL;
+    CHECK(numeric_status == MILENA_ERR_TYPE,
           "declared numeric column must reject nonnumeric values");
     CHECK(file_absent("tests/non-numeric.json"),
           "numeric conversion failure must not publish output");
-    free(bytes);
     return 0;
 }
 
