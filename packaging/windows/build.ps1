@@ -22,7 +22,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Falló el smoke test de portabilidad de Milena
 $SourceNames = @(
     'common.c', 'array.c', 'table.c', 'finance.c', 'schema.c', 'dataset.c',
     'analysis.c', 'script.c', 'entrypoints.c', 'interpreter.c', 'main.c', 'lexer.c', 'ast.c', 'parser.c',
-    'symbol_table.c', 'symbol.c', 'language_semantic.c', 'arrow_ipc.c', 'language_runtime.c', 'query_plan.c', 'language_grouped_spill.c', 'grouped_aggregate.c', 'mergeable_aggregate.c', 'spill_store.c', 'canonical_compiler.c', 'canonical_ir.c', 'typed_bytecode.c', 'stream.c', 'source_reader.c', 'group_key_codec.c', 'sst_dates.c', 'sst_model.c',
+    'symbol_table.c', 'symbol.c', 'language_semantic.c', 'arrow_ipc.c', 'language_runtime.c', 'query_plan.c', 'language_grouped_spill.c', 'grouped_aggregate.c', 'mergeable_aggregate.c', 'spill_store.c', 'canonical_compiler.c', 'canonical_ir.c', 'typed_bytecode.c', 'native_aot.c', 'stream.c', 'source_reader.c', 'group_key_codec.c', 'sst_dates.c', 'sst_model.c',
     'sst_stats.c', 'sst_histogram.c', 'sst_rates.c', 'sst_report.c',
     'sst_report_advanced.c', 'sst_advanced.c', 'sst_contingency.c',
     'sst_inference.c', 'sst_correlation.c', 'sst_normality.c',

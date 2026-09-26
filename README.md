@@ -289,6 +289,10 @@ La descripción más honesta es:
 
 No es solamente un ejercicio educativo, pero tampoco se presenta todavía como una plataforma industrial masiva ya consolidada. Es una base tecnológica real, verificable y en evolución hacia ese objetivo.
 
+## Compilación nativa AOT (subconjunto de fase 1)
+
+En hosts POSIX con un compilador C17 disponible, `milena build programa.milena -o programa` genera un ejecutable nativo a partir de la IR tipada canónica verificada. No ejecuta ni empaqueta bytecode. El alcance está limitado a funciones escalares `F64`, comparaciones booleanas, CFG y llamadas internas verificadas; las operaciones no representadas se rechazan. Windows conserva el comando, pero el backend AOT no está habilitado allí. Consulta [el contrato y el subconjunto exacto de AOT](docs/NATIVE_AOT.md).
+
 ## Contribuir
 
 Puedes contribuir mediante:

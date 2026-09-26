@@ -739,7 +739,7 @@ static void check_architecture(void)
     static const char *const required_sources[] = {
         "src/main.c", "src/entrypoints.c", "src/script.c", "src/lexer.c",
         "src/parser.c", "src/ast.c", "src/language_semantic.c",
-        "src/language_runtime.c", "src/canonical_compiler.c", "src/query_plan.c"
+        "src/language_runtime.c", "src/canonical_compiler.c", "src/native_aot.c", "src/query_plan.c"
     };
     static const char *const frontend_stages[] = {
         "lexer_init(", "parser_init(", "parser_parse(", "milena_validate_ast("
@@ -788,7 +788,7 @@ static void check_architecture(void)
         "milena_run_dataset_program("
     };
     static const char *const cli_commands[] = {
-        "analyze", "profile", "inspect", "run_script"
+        "analyze", "profile", "inspect", "run_script", "build"
     };
     static const char *const script_tokens[] = {
         "script_pipeline_from_ast", "script_pipeline_for_source", "SCRIPT_PIPELINE_PARSE_ERROR",

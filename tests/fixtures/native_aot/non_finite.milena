@@ -1,0 +1,1 @@
+funcion principal() { retornar 1e308 * 1e308; }

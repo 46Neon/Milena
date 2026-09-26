@@ -1,0 +1,10 @@
+funcion sumar(a, b) { retornar a + b; }
+funcion principal() {
+    variable resultado = 0;
+    si (verdadero) {
+        resultado = sumar(19, 23);
+    } sino {
+        resultado = 0;
+    }
+    retornar resultado;
+}
