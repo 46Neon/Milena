@@ -1,16 +1,18 @@
 # Empaquetado de Milena
 
-El código fuente y el empaquetado se mantienen separados:
+El código fuente y el empaquetado se mantienen separados. La fuente de verdad para los comandos de instalación, arquitecturas objetivo y estado de disponibilidad es la [matriz de instalación](../docs/INSTALLATION_MATRIX.md).
 
 - `packaging/termux`: construcción del paquete nativo de Termux.
 - `packaging/debian`: construcción independiente para Debian/Ubuntu.
-- `.github/workflows/publish-apt.yml`: única definición de publicación APT; no hay una copia ejecutable bajo `packaging/ci`.
+- `packaging/windows`: ejecutable portable y manifiestos WinGet.
+- `packaging/windows/validate-winget-v020.ps1`: valida e instala localmente el candidato v0.2.0 con WinGet; no lo envía a la fuente pública.
+- `.github/workflows/publish-apt.yml`: publicación del canal APT Termux/AArch64; no es un repositorio Debian/Ubuntu.
 
 ## Estado verificable
 
-El objetivo actual de este flujo es un `.deb` local de Termux/aarch64 que se pueda inspeccionar e instalar en un dispositivo Termux real. El repositorio APT todavía no es oficial: antes de anunciarlo deben existir una construcción real, una instalación y actualización verificadas en Termux, índices firmados y una prueba desde el repositorio publicado.
+La Release `v0.2.0` contiene un `.deb` Debian/Ubuntu `amd64`, un ejecutable y ZIP portable Windows x64 y tres manifiestos WinGet adjuntos. La CI valida los manifiestos y prueba instalación/ejecución con WinGet usando el manifiesto local y el artefacto real en un runner efímero; no prueba desinstalación ni la fuente pública. Adjuntar manifiestos a una Release no los publica ni indexa en WinGet. La receta Termux tiene una URL versionada y un SHA-256 real para `v0.2.0`, pero sigue siendo candidata; la Release no contiene el paquete Termux/AArch64 ni su procedencia exigida por el publicador APT.
 
-No se anuncia ninguna instalación mediante un gestor de paquetes mientras esas pruebas no estén documentadas. La mera presencia de un `.deb` en una Release de GitHub no constituye un repositorio Termux.
+El workflow APT actual genera el canal **Termux/AArch64** firmado; no construye ni publica índices Debian/Ubuntu. No se debe anunciar ninguno de los tres comandos como disponible hasta que el índice/fuente correspondiente exista y se pruebe en una instalación limpia. La matriz enlazada arriba mantiene los gates por plataforma.
 
 ## Separación de plataformas
 
@@ -22,13 +24,16 @@ Un `.deb` de Termux no es intercambiable con uno de Debian/Ubuntu. El workflow A
 
 ## Reproducibilidad y seguridad
 
-El constructor Termux fija `SOURCE_DATE_EPOCH`, normaliza modos y timestamps y emite un checksum SHA-256. El generador APT crea únicamente `binary-aarch64`, valida el nombre, metadatos y rutas del paquete, y firma `Release` e `InRelease`. Las claves privadas y contraseñas solo se leen desde secretos de CI; nunca se guardan en el repositorio ni en el árbol publicado.
+El constructor Termux fija `SOURCE_DATE_EPOCH`, normaliza modos y timestamps y emite un checksum SHA-256. El generador APT de Termux crea únicamente `binary-aarch64`, valida el nombre, metadatos y rutas del paquete, y firma `Release` e `InRelease`.
 
-La publicación a Netlify es un canal de hosting opcional del workflow único y no es una dependencia del lenguaje.
+`packaging/debian/generate-apt-repo.sh` es el generador separado para Linux `amd64`: valida el `.deb`, su checksum y el mantenedor, crea `Packages`/`Release` firmados y verifica las firmas. La CI lo prueba con una clave efímera e instala/elimina el paquete desde un origen `file:`; no publica el repositorio ni configura una fuente para usuarios. Las claves privadas reales solo se leen desde secretos de CI; nunca se guardan en el repositorio ni en el árbol publicado.
+
+La publicación a Netlify descrita por `.github/workflows/publish-apt.yml` corresponde al canal Termux/AArch64; no es una dependencia del lenguaje ni publica el repositorio Linux.
 
 ## Plantilla para termux-packages
 
 `packaging/termux-packages/milena/build.sh` sigue la forma de una receta de
-`termux-packages`, pero contiene un placeholder de SHA-256 y no está aceptada
-oficialmente. Solo se puede proponer después de una Release y una validación
-real en Termux/aarch64; no se anuncia `pkg install milena` antes de ese proceso.
+`termux-packages` y fija el tarball y SHA-256 reales de `v0.2.0`; todavía no está
+aceptada oficialmente. La aceptación requiere build del paquete, validación en
+Android/Termux AArch64 y revisión de los mantenedores. No se anuncia `pkg install
+milena` como disponible hasta que el paquete se publique en una fuente accesible.
