@@ -16,15 +16,15 @@ expect_failure() {
 }
 
 write_summary_source() {
-    name=$1
-    operation=$2
-    output=$3
-    cat >"$tmpdir/$name.milena" <<EOF
+    summary_name=$1
+    summary_operation=$2
+    summary_output=$3
+    cat >"$tmpdir/$summary_name.milena" <<EOF
 .analisis resumen {
   variable valor numerica
   dataset cargar datos("data.csv")
-  .resumir dataset { #$operation("valor") }
-  .exportar { ("$output") }
+  .resumir dataset { #$summary_operation("valor") }
+  .exportar { ("$summary_output") }
 }
 EOF
 }
