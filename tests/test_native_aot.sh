@@ -96,7 +96,12 @@ if code.count(b'\xe8') < 2:
 PYCODE
 "$ROOT/tests/test_typed_bytecode" --aot-reference-calls >"$TEMP_DIR/calls.vm.out" 2>"$TEMP_DIR/calls.vm.err"
 "$TEMP_DIR/direct-calls" >"$TEMP_DIR/calls.native.out" 2>"$TEMP_DIR/calls.native.err"
-cmp "$TEMP_DIR/calls.vm.out" "$TEMP_DIR/calls.native.out"
+if ! cmp -s "$TEMP_DIR/calls.vm.out" "$TEMP_DIR/calls.native.out"; then
+    printf 'typed-bytecode output: '; cat "$TEMP_DIR/calls.vm.out"
+    printf 'native output: '; cat "$TEMP_DIR/calls.native.out"
+    echo 'direct-call output differs from the typed-bytecode reference VM' >&2
+    exit 1
+fi
 [ "$(cat "$TEMP_DIR/calls.native.out")" = '6' ]
 
 # A helper's native division-by-zero behavior must match the typed-bytecode VM.
