@@ -14,7 +14,13 @@ EXPECTED_VARIANTS = 72
 EXPECTED_CONTRACT_COUNTS = {
     "documented_syntax_contract": 68,
     "unresolved_public_contract": 0,
-    "unresolved_enum_only_legacy_status": 4,
+    "reserved_internal_enum_not_language_construct": 4,
+}
+RESERVED_ENUM_VARIANTS = {
+    "AST_ASIGNACION_DATASET",
+    "AST_BLOQUE_VISUALIZAR",
+    "AST_EXPRESION_FUNCION",
+    "AST_COMANDO_EXTRAER",
 }
 CONTRACT_DOC_VARIANTS = {
     "AST_BLOQUE_LIMPIAR",
@@ -53,21 +59,22 @@ EXPECTED_PARTIAL = {
     "AST_EXPRESION_OPERACION",
 }
 SENTINEL = "AST_NODE_TYPE_COUNT"
-LOWERING_STATUSES = {"full", "partial", "not_lowered"}
+LOWERING_STATUSES = {"full", "partial", "not_lowered", "not_applicable_reserved"}
 LANGUAGE_CONTRACT_STATUSES = {
     "documented_syntax_contract",
     "unresolved_public_contract",
-    "unresolved_enum_only_legacy_status",
+    "reserved_internal_enum_not_language_construct",
 }
 PARSER_STATUSES = {
     "parser_reachable_documented_contract",
     "parser_reachable_contract_unresolved",
-    "no_current_parser_constructor_found_enum_only_legacy_unconfirmed",
+    "enum_only_reserved_not_language_construct",
 }
 PER_VARIANT_EVIDENCE_STATUSES = {
     "unresolved_per_variant",
     "partially_verified",
     "verified",
+    "not_applicable_reserved",
 }
 FULL_EVIDENCE_STAGES = {
     "language_contract",
@@ -158,7 +165,7 @@ def check_contract_document(contract_doc_path: Path) -> None:
 
 
 def check_ledger(header_path: Path, ledger_path: Path,
-                 contract_doc_path: Path) -> tuple[int, int, int, int]:
+                 contract_doc_path: Path) -> tuple[int, int, int, int, int]:
     header_variants = ast_enum_variants(header_path)
     check_contract_document(contract_doc_path)
     try:
@@ -209,8 +216,8 @@ def check_ledger(header_path: Path, ledger_path: Path,
         expected_parser = {
             "documented_syntax_contract": "parser_reachable_documented_contract",
             "unresolved_public_contract": "parser_reachable_contract_unresolved",
-            "unresolved_enum_only_legacy_status": (
-                "no_current_parser_constructor_found_enum_only_legacy_unconfirmed"
+            "reserved_internal_enum_not_language_construct": (
+                "enum_only_reserved_not_language_construct"
             ),
         }[language]
         require(parser == expected_parser, f"{name}: parser status conflicts with contract classification")
@@ -229,6 +236,21 @@ def check_ledger(header_path: Path, ledger_path: Path,
             isinstance(testing_status, str) and testing_status in PER_VARIANT_EVIDENCE_STATUSES,
             f"{name}: invalid testing_status {testing_status!r}",
         )
+        if name in RESERVED_ENUM_VARIANTS:
+            require(
+                lowering == "not_applicable_reserved"
+                and language == "reserved_internal_enum_not_language_construct"
+                and parser == "enum_only_reserved_not_language_construct"
+                and semantic_status == "not_applicable_reserved"
+                and testing_status == "not_applicable_reserved",
+                f"{name}: reserved enum variants must stay outside language lowering/evidence scope",
+            )
+        else:
+            require(
+                lowering != "not_applicable_reserved"
+                and language != "reserved_internal_enum_not_language_construct",
+                f"{name}: only the four declared enum-only variants may be reserved",
+            )
         if lowering == "full":
             require(
                 language == "documented_syntax_contract"
@@ -284,7 +306,12 @@ def check_ledger(header_path: Path, ledger_path: Path,
         and set(listed_partial) == actual_partial,
         "partial_variants must list each partial AST variant exactly once",
     )
-    require(counts["not_lowered"] == EXPECTED_VARIANTS - len(EXPECTED_PARTIAL), "not_lowered count invariant failed")
+    reserved_count = len(RESERVED_ENUM_VARIANTS)
+    active_source_count = EXPECTED_VARIANTS - reserved_count
+    require(counts["not_applicable_reserved"] == reserved_count,
+            "reserved enum count invariant failed")
+    require(counts["not_lowered"] == active_source_count - len(EXPECTED_PARTIAL),
+            "not_lowered count invariant failed")
     require(
         ledger.get("coverage_invariants") == counts,
         f"coverage_invariants must equal observed counts {counts}",
@@ -299,10 +326,11 @@ def check_ledger(header_path: Path, ledger_path: Path,
     )
     sources = ledger.get("classification_sources")
     require(isinstance(sources, dict), "ledger classification_sources must be an object")
-    for key in ("documented_syntax_contract", "unresolved_public_contract", "unresolved_enum_only_legacy_status", "semantic_status", "testing_status"):
+    for key in ("documented_syntax_contract", "unresolved_public_contract", "reserved_internal_enum_not_language_construct", "semantic_status", "testing_status"):
         require(isinstance(sources.get(key), str) and sources[key].strip(), f"missing classification source: {key}")
 
-    return len(records), counts["full"], counts["partial"], counts["not_lowered"]
+    return (len(records), counts["full"], counts["partial"],
+            counts["not_lowered"], counts["not_applicable_reserved"])
 
 
 def main() -> int:
@@ -314,15 +342,16 @@ def main() -> int:
                         default=root / "docs/COMPILADOR_IR_CONTRATOS_AST.md")
     args = parser.parse_args()
     try:
-        total, full, partial, not_lowered = check_ledger(
+        total, full, partial, not_lowered, reserved = check_ledger(
             args.ast_header, args.ledger, args.contract_doc)
     except (LedgerError, OSError) as exc:
         print(f"AST→typed-IR coverage check failed: {exc}", file=sys.stderr)
         return 1
     print(
         "AST→typed-IR coverage ledger: "
-        f"{total} real variants; {full}/{total} full, {partial} partial, "
-        f"{not_lowered} not lowered; {SENTINEL} excluded."
+        f"{total} enum variants; {full}/{total - reserved} source constructs full, "
+        f"{partial} partial, {not_lowered} not lowered, {reserved} reserved; "
+        f"{SENTINEL} excluded."
     )
     return 0
 

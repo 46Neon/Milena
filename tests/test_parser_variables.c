@@ -180,6 +180,12 @@ int main(void) {
         ". analisis ventas { .exportar { ignorado } }",
         "ignorado", "Token desconocido en exportar");
 
+    /* A reserved keyword after '.' must fail closed instead of leaving the
+       analysis parser on the same token forever. */
+    expect_parse_error_at(
+        ". analisis ventas { .visualizar { datos } }", "visualizar",
+        "El bloque .visualizar está reservado y no se admite");
+
     /* Bare dataset and an empty numbered command must not silently succeed. */
     expect_parse_error_at(
         ". analisis ventas { dataset }", "dataset",

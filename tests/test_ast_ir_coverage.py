@@ -60,7 +60,10 @@ class ASTIRCoverageCheckerTests(unittest.TestCase):
     def test_current_ledger_passes(self) -> None:
         result = self.run_checker()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("72 real variants; 0/72 full, 7 partial, 65 not lowered", result.stdout)
+        self.assertIn(
+            "72 enum variants; 0/68 source constructs full, 7 partial, 61 not lowered, 4 reserved",
+            result.stdout,
+        )
 
     def test_duplicate_variant_is_rejected(self) -> None:
         ledger = json.loads(json.dumps(self.ledger))
@@ -99,6 +102,39 @@ class ASTIRCoverageCheckerTests(unittest.TestCase):
         record = ledger["variants"][0]
         record["language_contract_status"] = "unresolved_public_contract"
         record["parser_status"] = "parser_reachable_contract_unresolved"
+        self.assertNotEqual(self.run_checker(ledger).returncode, 0)
+
+    def test_four_enum_only_variants_are_reserved_outside_language_coverage(self) -> None:
+        reserved = {
+            "AST_ASIGNACION_DATASET", "AST_BLOQUE_VISUALIZAR",
+            "AST_EXPRESION_FUNCION", "AST_COMANDO_EXTRAER",
+        }
+        records = {record["ast_variant"]: record for record in self.ledger["variants"]}
+        self.assertEqual(
+            self.ledger["classification_invariants"][
+                "reserved_internal_enum_not_language_construct"
+            ], 4,
+        )
+        for name in reserved:
+            with self.subTest(ast_variant=name):
+                record = records[name]
+                self.assertEqual(record["lowering_status"], "not_applicable_reserved")
+                self.assertEqual(
+                    record["language_contract_status"],
+                    "reserved_internal_enum_not_language_construct",
+                )
+                self.assertEqual(record["semantic_status"], "not_applicable_reserved")
+                self.assertEqual(record["testing_status"], "not_applicable_reserved")
+
+    def test_reserved_status_is_rejected_for_source_construct(self) -> None:
+        ledger = json.loads(json.dumps(self.ledger))
+        record = next(item for item in ledger["variants"]
+                      if item["ast_variant"] == "AST_DECLARACION_DATOS")
+        record["lowering_status"] = "not_applicable_reserved"
+        record["language_contract_status"] = "reserved_internal_enum_not_language_construct"
+        record["parser_status"] = "enum_only_reserved_not_language_construct"
+        record["semantic_status"] = "not_applicable_reserved"
+        record["testing_status"] = "not_applicable_reserved"
         self.assertNotEqual(self.run_checker(ledger).returncode, 0)
 
     def test_full_with_incomplete_stage_evidence_is_rejected(self) -> None:

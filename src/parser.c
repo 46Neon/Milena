@@ -1903,6 +1903,12 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         }
                         else ast_destroy(filtrar);
                     }
+                } else {
+                    Token block_token = parser->current;
+                    parser_error_at(parser, &block_token,
+                        block_token.type == TOKEN_KW_VISUALIZAR
+                            ? "El bloque .visualizar está reservado y no se admite"
+                            : "Bloque de análisis desconocido");
                 }
             }
         } else {
