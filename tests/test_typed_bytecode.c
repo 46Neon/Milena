@@ -265,8 +265,11 @@ static void test_v1_0_compatibility_defaults_empty_spans(void) {
                                          error, sizeof(error)));
     legacy = downgrade_v1_1_to_v1_0(encoded, encoded_size, &legacy_size);
     assert(legacy_size < encoded_size && legacy[6] == 0u && legacy[7] == 0u);
-    assert(milena_bytecode_decode_module(legacy, legacy_size, &decoded,
-                                         error, sizeof(error)));
+    if (!milena_bytecode_decode_module(legacy, legacy_size, &decoded,
+                                       error, sizeof(error))) {
+        fprintf(stderr, "v1.0 compatibility decode failed: %s\n", error);
+        assert(decoded != NULL);
+    }
     assert(decoded && decoded->function_count == 2u);
     assert(!decoded->functions[0].body->instructions[0].source_span.has_source_span);
     assert(!decoded->functions[1].body->instructions[3].source_span.has_source_span);
