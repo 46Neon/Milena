@@ -883,7 +883,9 @@ static int print_aot_reference_result(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
-    if (argc >= 2 && strcmp(argv[1], "--aot-reference") == 0)
+    if (argc >= 2 && (strcmp(argv[1], "--aot-reference") == 0 ||
+                      strcmp(argv[1], "--aot-reference-calls") == 0 ||
+                      strcmp(argv[1], "--aot-reference-call-div-zero") == 0))
         return print_aot_reference_result(argc, argv);
     test_original_vm_lifecycle();
     test_legacy_vm_fails_closed_for_unavailable_dataset_ops();
