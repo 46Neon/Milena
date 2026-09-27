@@ -427,6 +427,11 @@ int main(void) {
           program.data_hir->operations[0].kind == MILENA_HIR_DATA_GROUP &&
           program.data_hir->operations[0].as.group.aggregate_count == 1,
           "la agrupación debe bajar a claves y agregados HIR tipados");
+    const ASTNode *group_key_ast = program.ast->children[0]->children[1]->children[0];
+    CHECK(group_key_ast->group_key.present && group_key_ast->group_key.name &&
+          strcmp(group_key_ast->group_key.name, "ciudad") == 0 &&
+          strcmp(program.data_hir->operations[0].as.group.key.name, "ciudad") == 0,
+          "la clave #por debe conservar el payload tipado y bajar sin reparsear value");
     const ASTNode *group_metric = find_aggregate_metric(
         program.ast, AST_AGGREGATE_OPERATION_SUM);
     CHECK(group_metric && group_metric->has_source_span &&

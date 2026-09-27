@@ -167,6 +167,16 @@ int main(void) {
     parser_init(&parser, &lexer);
     program = parser_parse(&parser);
     assert(program != NULL && !parser.has_error);
+    ASTNode *group_key_node = program->children[0]->children[1]->children[0];
+    const char *group_key_text = "#por(\"ciudad\")";
+    assert(group_key_node->group_key.present && group_key_node->group_key.name &&
+           group_key_node->group_key.name != group_key_node->value &&
+           strcmp(group_key_node->group_key.name, "ciudad") == 0 &&
+           group_key_node->has_source_span &&
+           group_key_node->end_offset - group_key_node->start_offset ==
+               strlen(group_key_text) &&
+           strncmp(aggregate_source + group_key_node->start_offset,
+                   group_key_text, strlen(group_key_text)) == 0);
     ASTNode *sum_metric = find_metric(program, AST_AGGREGATE_OPERATION_SUM);
     ASTNode *mean_metric = find_metric(program, AST_AGGREGATE_OPERATION_MEAN);
     assert(sum_metric && mean_metric);
@@ -182,6 +192,16 @@ int main(void) {
                strlen("suma(\"precio\")"));
     assert(mean_metric->has_source_span &&
            mean_metric->aggregate_operation == AST_AGGREGATE_OPERATION_MEAN);
+    assert(ast_validate(program, &error));
+    char saved_group_key_char = group_key_node->value[0];
+    group_key_node->value[0] = saved_group_key_char == 'c' ? 'x' : 'c';
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)group_key_node->line);
+    group_key_node->value[0] = saved_group_key_char;
+    bool saved_group_key_presence = group_key_node->group_key.present;
+    group_key_node->group_key.present = false;
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT);
+    group_key_node->group_key.present = saved_group_key_presence;
     assert(ast_validate(program, &error));
     ASTAggregateOperation saved_aggregate_operation = sum_metric->aggregate_operation;
     sum_metric->aggregate_operation = AST_AGGREGATE_OPERATION_MAX;

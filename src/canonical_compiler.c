@@ -805,7 +805,9 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
                     aggregate_result = HIR_BUILD_UNSUPPORTED;
                     break;
                 }
-                if (child->type == AST_AGRUPACION_POR && child->value && !key_node) {
+                if (child->type == AST_AGRUPACION_POR &&
+                    child->group_key.present && child->group_key.name &&
+                    !key_node) {
                     key_node = child;
                 } else if (child->type == AST_RESUMEN_METRICA &&
                            op.as.group.aggregate_count < 16) {
@@ -827,7 +829,7 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
                 return aggregate_result == HIR_BUILD_OK ? HIR_BUILD_UNSUPPORTED :
                                                          aggregate_result;
             }
-            op.as.group.key = hir_unresolved_column(key_node->value, key_node);
+            op.as.group.key = hir_unresolved_column(key_node->group_key.name, key_node);
             if (!op.as.group.key.name) {
                 hir_aggregate_array_release(op.as.group.aggregates,
                                             op.as.group.aggregate_count);
@@ -1692,6 +1694,8 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
             return node->data_source.present && node->data_source.path != NULL;
         case AST_DECLARACION_VARIABLE:
             return node->data_column.present && node->data_column.name != NULL;
+        case AST_AGRUPACION_POR:
+            return node->group_key.present && node->group_key.name != NULL;
         case AST_BLOQUE_EXPORTAR:
             return node->export_result.present &&
                    node->export_result.destination != NULL;
@@ -1702,7 +1706,6 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_BLOQUE_LIMPIAR:
         case AST_BLOQUE_FILTRAR:
         case AST_BLOQUE_AGRUPAR:
-        case AST_AGRUPACION_POR:
         case AST_RESUMEN_METRICA:
         case AST_BLOQUE_RESUMIR:
         case AST_BLOQUE_UNIR:

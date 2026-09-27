@@ -429,6 +429,18 @@ bool ast_set_data_cleanup_action(ASTNode *node, ASTDataCleanupAction action) {
     return true;
 }
 
+bool ast_set_group_key(ASTNode *node, const char *name) {
+    if (!node || node->type != AST_AGRUPACION_POR || !node->value ||
+        !name || !name[0] || strcmp(node->value, name) != 0 ||
+        node->child_count != 0u) return false;
+    char *copy = milena_strdup(name);
+    if (!copy) return false;
+    free(node->group_key.name);
+    node->group_key.name = copy;
+    node->group_key.present = true;
+    return true;
+}
+
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column) {
     if (!node || node->type != AST_RESUMEN_METRICA || !node->value ||
@@ -722,6 +734,21 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
                 "Payload de acción de limpieza sin etiqueta en el AST");
             break;
         }
+        if (node->group_key.present) {
+            if (node->type != AST_AGRUPACION_POR || !node->group_key.name ||
+                !node->group_key.name[0] || !node->value ||
+                strcmp(node->group_key.name, node->value) != 0 ||
+                node->child_count != 0u || !node->has_source_span ||
+                node->end_offset <= node->start_offset) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de clave de agrupación inconsistente en el AST");
+                break;
+            }
+        } else if (node->group_key.name) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de clave de agrupación sin etiqueta en el AST");
+            break;
+        }
         if ((node->join_limits_explicit || node->join_memory_budget_bytes ||
              node->join_max_output_rows) && node->type != AST_BLOQUE_UNIR) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
@@ -968,6 +995,7 @@ void ast_destroy(ASTNode *node) {
     free(node->join_key.name);
     free(node->data_product.left_column);
     free(node->data_product.right_column);
+    free(node->group_key.name);
     if (node->column_selection.names) {
         for (size_t i = 0; i < node->column_selection.count; ++i)
             free(node->column_selection.names[i]);

@@ -1519,14 +1519,38 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         if (parser_match(parser, TOKEN_KW_POR) ||
                             (parser_is_identifier(parser) &&
                              strcmp(parser->current.lexeme, "por") == 0)) {
+                            Token key_start = parser->previous;
                             parser_advance(parser);
                             if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                 if (parser_expect(parser, TOKEN_CADENA, "Se esperaba columna de agrupación")) {
-                                    if (agrupar && !parser_add_child(parser, agrupar,
-                                        ast_create_leaf(AST_AGRUPACION_POR,
-                                                        parser->previous.lexeme),
-                                        "Sin memoria para agrupación")) break;
-                                    parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de por");
+                                    Token key_token = parser->previous;
+                                    ASTNode *key = ast_create_leaf(AST_AGRUPACION_POR,
+                                                                   key_token.lexeme);
+                                    if (!key) {
+                                        parser_error(parser, "Sin memoria para clave de agrupación");
+                                        break;
+                                    }
+                                    if (key_token.lexeme[0] &&
+                                        !ast_set_group_key(key, key_token.lexeme)) {
+                                        ast_destroy(key);
+                                        parser_error(parser,
+                                            "No se pudo estructurar la clave de agrupación");
+                                        break;
+                                    }
+                                    if (!parser_expect(parser, TOKEN_PAR_DER,
+                                                       "Se esperaba ')' después de por")) {
+                                        ast_destroy(key);
+                                        break;
+                                    }
+                                    if (!ast_set_source_span(key, &key_start,
+                                                             &parser->previous)) {
+                                        ast_destroy(key);
+                                        parser_error(parser,
+                                            "No se pudo registrar el span de la clave de agrupación");
+                                        break;
+                                    }
+                                    if (!parser_add_child(parser, agrupar, key,
+                                            "Sin memoria para agrupación")) break;
                                 }
                             }
                         } else if (parser_is_identifier(parser) &&

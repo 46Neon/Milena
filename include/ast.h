@@ -225,6 +225,11 @@ typedef struct {
     bool present;
 } ASTDataCleanupPayload;
 
+typedef struct {
+    char *name;
+    bool present;
+} ASTGroupKeyPayload;
+
 typedef enum {
     AST_FILTER_PREDICATE_OK = 0,
     AST_FILTER_PREDICATE_INVALID,
@@ -262,6 +267,8 @@ typedef struct ASTNode {
     ASTColumnSelectionPayload column_selection;
     /* Enumerated operation for admitted null/duplicate cleanup commands. */
     ASTDataCleanupPayload data_cleanup;
+    /* Owned typed #por key; value remains a validated compatibility mirror. */
+    ASTGroupKeyPayload group_key;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */
     struct ASTNode *left_operand;
     struct ASTNode *right_operand;
@@ -339,6 +346,7 @@ bool ast_set_join_key(ASTNode *node, const char *name);
 bool ast_set_data_product(ASTNode *node, const char *expression);
 bool ast_set_column_selection(ASTNode *node, const char *names);
 bool ast_set_data_cleanup_action(ASTNode *node, ASTDataCleanupAction action);
+bool ast_set_group_key(ASTNode *node, const char *name);
 const char *ast_data_column_type_name(ASTDataColumnType type);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
