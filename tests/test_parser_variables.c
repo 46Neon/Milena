@@ -2,6 +2,22 @@
 #include <assert.h>
 #include <string.h>
 
+static void expect_parse_error_at(const char *source, const char *needle,
+                                  const char *diagnostic) {
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, source);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    const char *position = strstr(source, needle);
+    assert(program == NULL);
+    assert(parser.has_error && parser.error.code == MILENA_ERR_PARSE);
+    assert(position != NULL && parser.error.line == 1u);
+    assert(parser.error.column == (size_t)(position - source) + 1u);
+    assert(strstr(parser.error.message, diagnostic) != NULL);
+    parser_release(&parser);
+}
+
 int main(void) {
     const char *source =
         ". analisis ventas {\n"
@@ -152,5 +168,16 @@ int main(void) {
     assert(strstr(parser.error.message,
                   "Token desconocido en bloque nombrado") != NULL);
     parser_release(&parser);
+
+    /* Other documented analysis blocks must not skip arbitrary body tokens. */
+    expect_parse_error_at(
+        ". analisis ventas { .agrupar dataset { ignorado } }",
+        "ignorado", "Token desconocido en bloque agrupar");
+    expect_parse_error_at(
+        ". analisis ventas { .resumir dataset { ignorado } }",
+        "ignorado", "Token desconocido en bloque resumir");
+    expect_parse_error_at(
+        ". analisis ventas { .exportar { ignorado } }",
+        "ignorado", "Token desconocido en exportar");
     return 0;
 }
