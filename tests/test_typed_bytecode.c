@@ -778,6 +778,7 @@ static MilenaIRModule *make_aot_reference_module(void) {
         MILENA_IR_TYPE_F64, 1u, 2u, 0, 0.0, 0u, 0u));
     assert(append_instruction(function->body, 1u, MILENA_IR_RETURN, 0u,
         MILENA_IR_TYPE_F64, 3u, 0u, 0, 0.0, 0u, 0u));
+    function->body->module_context = module;
     return module;
 }
 
