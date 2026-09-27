@@ -172,7 +172,8 @@ static bool evaluate_verified_subset(const MilenaIRProgram *ir,
     if (!ir || !result || !ir->has_function_signature ||
         ir->signature.return_type != MILENA_IR_TYPE_F64 ||
         ir->signature.parameter_count != 0 || ir->parameter_count != 0 ||
-        ir->block_count != 1 || ir->blocks[0].instruction_count != ir->count ||
+        ir->block_count != 1 || !ir->blocks || !ir->instructions ||
+        ir->blocks[0].instruction_count != ir->count ||
         ir->blocks[0].first_instruction != 0 || ir->edge_argument_count != 0 ||
         ir->count == 0 || ir->count > 100000) {
         (void)snprintf(diagnostic, capacity,
