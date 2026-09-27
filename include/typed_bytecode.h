@@ -10,13 +10,14 @@ extern "C" {
 #endif
 
 #define MILENA_BYTECODE_VERSION_MAJOR 1u
-#define MILENA_BYTECODE_VERSION_MINOR 0u
+#define MILENA_BYTECODE_VERSION_MINOR 1u
 #define MILENA_BYTECODE_MAX_SIZE ((size_t)64u * 1024u * 1024u)
 
 /* Portable, little-endian serialization of a validated canonical typed-IR
- * module. The wire format is versioned and does not serialize C structs,
- * pointers, padding, or host-sized integers. The reader rejects truncated,
- * oversized, unsupported-version, malformed, and semantically invalid data. */
+ * module. Version 1.1 stores instruction source spans; the reader accepts v1.0
+ * modules with empty spans for compatibility. The wire format does not serialize
+ * C structs, pointers, padding, or host-sized integers. The reader rejects
+ * truncated, oversized, unsupported-version, malformed, and invalid data. */
 bool milena_bytecode_encode_module(const MilenaIRModule *module,
                                    uint8_t **bytes_out, size_t *size_out,
                                    char *error, size_t error_capacity);
