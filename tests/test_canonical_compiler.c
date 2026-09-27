@@ -1165,31 +1165,27 @@ int main(void) {
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
         ".limpiar dataset { #nulos(\"rellenar\") } }";
     CHECK(milena_canonical_program_parse(&program, unsupported_cleaning_action,
-                                         &error) == MILENA_OK, error.message);
-    CHECK(program.data_hir == NULL &&
-          milena_canonical_compiler_input(&program, &data_input, &error) ==
-              MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&
-          data_input.data_hir == NULL,
-          "una acción de limpieza no implementada debe fallar cerrado y sin vista parcial");
+                                         &error) == MILENA_ERR_PARSE,
+          "una acción de limpieza distinta de eliminar debe rechazarse en parser");
+    CHECK(program.ast == NULL && program.data_hir == NULL && error.line > 0 &&
+          error.column > 0 && strstr(error.message, "solo admite eliminar") != NULL,
+          "la acción de limpieza inválida debe fallar cerrado sin AST/HIR parcial");
     milena_canonical_program_release(&program);
 
 
-    /* Malformed filter text remains AST-only and cannot be admitted to HIR. */
+    /* Malformed filter text is rejected during parsing rather than leaving an
+       untyped AST node for a later HIR failure. */
     milena_canonical_program_init(&program);
     const char *malformed_filter_source =
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
         ".filtrar { #condicion(\"total =~ 10\") } }";
     CHECK(milena_canonical_program_parse(&program, malformed_filter_source,
-                                         &error) == MILENA_OK, error.message);
-    CHECK(program.data_hir == NULL,
-          "un predicado sin forma tipada no debe producir HIR de datos");
-    MilenaCanonicalCompilerInput rejected_input = {0};
-    CHECK(milena_canonical_compiler_input(&program, &rejected_input, &error) ==
-              MILENA_ERR_UNSUPPORTED &&
-          rejected_input.ast == NULL && rejected_input.data_hir == NULL &&
+                                         &error) == MILENA_ERR_PARSE,
+          "un predicado sin forma tipada debe rechazarse en parser");
+    CHECK(program.ast == NULL && program.data_hir == NULL &&
           error.line > 0 && error.column > 0 &&
-          strstr(error.message, "COMANDO_CONDICION") != NULL,
-          "el HIR debe fallar cerrado con nodo y ubicación, sin vista parcial");
+          strstr(error.message, "Predicado numérico inválido") != NULL,
+          "el predicado inválido debe fallar cerrado sin AST/HIR parcial");
     milena_canonical_program_release(&program);
 
 
