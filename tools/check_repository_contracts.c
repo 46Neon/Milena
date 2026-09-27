@@ -638,10 +638,16 @@ static void check_compiler_boundary(int argc, char **argv)
                 contains(native_aot, "system(") || contains(native_aot, "popen(")) {
                 list_add(&errors, "AOT no debe volver a bajar HIR ni ejecutar un shell");
             }
-            if (!contains(native_aot, "execvp(") ||
+            if (!contains(native_aot, "ET_EXEC") ||
+                !contains(native_aot, "EM_X86_64") ||
                 !contains(native_aot, "mkstemp(") ||
-                !contains(native_aot, "rename(binary_template")) {
-                list_add(&errors, "AOT debe invocar argv/exec y reemplazar la salida atómicamente");
+                !contains(native_aot, "rename(temporary, output)")) {
+                list_add(&errors, "AOT directo debe escribir ELF64 x86-64 y reemplazar la salida atómicamente");
+            }
+            if (contains(native_aot, "execvp(") || contains(native_aot, "fork(") ||
+                contains(native_aot, "MILENA_CC") || contains(native_aot, "system(") ||
+                contains(native_aot, "popen(")) {
+                list_add(&errors, "AOT directo no debe invocar un compilador o shell externo");
             }
         }
         free(native_aot);
