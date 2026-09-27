@@ -3,6 +3,16 @@
 #include <stdio.h>
 #include <string.h>
 
+static const ASTNode *find_data_product(const ASTNode *node) {
+    if (!node) return NULL;
+    if (node->type == AST_COMANDO_TOTAL) return node;
+    for (size_t i = 0; i < node->child_count; ++i) {
+        const ASTNode *found = find_data_product(node->children[i]);
+        if (found) return found;
+    }
+    return NULL;
+}
+
 static const ASTNode *find_aggregate_metric(const ASTNode *node,
                                             ASTAggregateOperation operation) {
     if (!node) return NULL;
@@ -275,6 +285,12 @@ int main(void) {
         "}\n";
     CHECK(milena_canonical_program_parse(&program, data_source, &error) == MILENA_OK,
           error.message);
+    const ASTNode *product_ast = find_data_product(program.ast);
+    CHECK(product_ast && product_ast->data_product.present &&
+          strcmp(product_ast->data_product.left_column, "precio") == 0 &&
+          strcmp(product_ast->data_product.right_column, "cantidad") == 0 &&
+          product_ast->has_source_span,
+          "el parser debe preservar los operandos tipados y el span de #total");
     CHECK(program.data_hir != NULL && program.hir == NULL &&
           strcmp(program.data_hir->source.path, "entrada.csv") == 0 &&
           program.data_hir->source.resolved_dataset_id != 0 &&
@@ -284,6 +300,8 @@ int main(void) {
           program.data_hir->declared_schema[0].declared_type ==
               MILENA_HIR_COLUMN_NUMERIC &&
           program.data_hir->operation_count == 3 &&
+          strcmp(program.data_hir->operations[0].as.product.left.name, "precio") == 0 &&
+          strcmp(program.data_hir->operations[0].as.product.right.name, "cantidad") == 0 &&
           program.data_hir->operations[1].as.filter.operation ==
               AST_OPERATOR_GREATER_EQUAL &&
           program.data_hir->operations[1].as.filter.threshold == 10.0 &&

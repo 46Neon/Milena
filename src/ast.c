@@ -277,6 +277,67 @@ bool ast_set_join_key(ASTNode *node, const char *name) {
     return true;
 }
 
+static bool ast_parse_product_expression(const char *text,
+                                         const char **left_start,
+                                         size_t *left_length,
+                                         const char **right_start,
+                                         size_t *right_length) {
+    if (!text || !left_start || !left_length || !right_start || !right_length)
+        return false;
+    const char *end = text + strlen(text);
+    const char *star = strchr(text, '*');
+    if (!star || strchr(star + 1, '*')) return false;
+    const char *left_begin = text;
+    while (left_begin < star && isspace((unsigned char)*left_begin)) ++left_begin;
+    const char *left_end = star;
+    while (left_end > left_begin && isspace((unsigned char)left_end[-1])) --left_end;
+    const char *right_begin = star + 1;
+    while (right_begin < end && isspace((unsigned char)*right_begin)) ++right_begin;
+    const char *right_end = end;
+    while (right_end > right_begin && isspace((unsigned char)right_end[-1])) --right_end;
+    if (left_begin == left_end || right_begin == right_end) return false;
+    for (const char *p = left_begin; p < left_end; ++p)
+        if (isspace((unsigned char)*p)) return false;
+    for (const char *p = right_begin; p < right_end; ++p)
+        if (isspace((unsigned char)*p)) return false;
+    *left_start = left_begin;
+    *left_length = (size_t)(left_end - left_begin);
+    *right_start = right_begin;
+    *right_length = (size_t)(right_end - right_begin);
+    return true;
+}
+
+static char *ast_copy_slice(const char *start, size_t length) {
+    if (!start || length == SIZE_MAX) return NULL;
+    char *copy = (char *)malloc(length + 1u);
+    if (!copy) return NULL;
+    memcpy(copy, start, length);
+    copy[length] = '\0';
+    return copy;
+}
+
+bool ast_set_data_product(ASTNode *node, const char *expression) {
+    if (!node || node->type != AST_COMANDO_TOTAL || !node->value ||
+        !expression || strcmp(node->value, expression) != 0) return false;
+    const char *left_start = NULL, *right_start = NULL;
+    size_t left_length = 0u, right_length = 0u;
+    if (!ast_parse_product_expression(expression, &left_start, &left_length,
+                                      &right_start, &right_length)) return false;
+    char *left = ast_copy_slice(left_start, left_length);
+    char *right = ast_copy_slice(right_start, right_length);
+    if (!left || !right) {
+        free(left);
+        free(right);
+        return false;
+    }
+    free(node->data_product.left_column);
+    free(node->data_product.right_column);
+    node->data_product.left_column = left;
+    node->data_product.right_column = right;
+    node->data_product.present = true;
+    return true;
+}
+
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column) {
     if (!node || node->type != AST_RESUMEN_METRICA || !node->value ||
@@ -510,6 +571,34 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
         } else if (node->join_key.name) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                 "Payload de clave join sin etiqueta en el AST");
+            break;
+        }
+        if (node->data_product.present) {
+            const char *source_left = NULL, *source_right = NULL;
+            size_t source_left_length = 0u, source_right_length = 0u;
+            if (node->type != AST_COMANDO_TOTAL ||
+                !node->data_product.left_column ||
+                !node->data_product.left_column[0] ||
+                !node->data_product.right_column ||
+                !node->data_product.right_column[0] || !node->value ||
+                node->child_count != 0 || !node->has_source_span ||
+                node->end_offset <= node->start_offset ||
+                !ast_parse_product_expression(node->value, &source_left,
+                    &source_left_length, &source_right, &source_right_length) ||
+                strlen(node->data_product.left_column) != source_left_length ||
+                memcmp(node->data_product.left_column, source_left,
+                       source_left_length) != 0 ||
+                strlen(node->data_product.right_column) != source_right_length ||
+                memcmp(node->data_product.right_column, source_right,
+                       source_right_length) != 0) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de producto de datos inconsistente en el AST");
+                break;
+            }
+        } else if (node->data_product.left_column ||
+                   node->data_product.right_column) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de producto de datos sin etiqueta en el AST");
             break;
         }
         if ((node->join_limits_explicit || node->join_memory_budget_bytes ||
@@ -756,6 +845,8 @@ void ast_destroy(ASTNode *node) {
     free(node->export_result.destination);
     free(node->join_right.path);
     free(node->join_key.name);
+    free(node->data_product.left_column);
+    free(node->data_product.right_column);
     for (size_t i = 0; i < node->child_count; i++) {
         ast_destroy(node->children[i]);
     }

@@ -567,11 +567,6 @@ static bool hir_append_data_operation(MilenaDataHIR *hir,
     return true;
 }
 
-static bool hir_parse_product(const char *text, char left[128], char right[128]) {
-    char extra;
-    return text && sscanf(text, " %127s * %127s %c", left, right, &extra) == 2;
-}
-
 static char *hir_trim(char *text) {
     if (!text) return NULL;
     while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') text++;
@@ -784,18 +779,22 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
         if (node->type == AST_BLOQUE_TRANSFORMAR) {
             for (size_t j = 0; j < node->child_count; ++j) {
                 const ASTNode *command = node->children[j];
-                if (!command || command->type != AST_COMANDO_TOTAL || !command->value) {
-                    data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
-                }
-                char left[128] = {0}, right[128] = {0};
-                if (!hir_parse_product(command->value, left, right)) {
+                if (!command || command->type != AST_COMANDO_TOTAL ||
+                    !command->data_product.present ||
+                    !command->data_product.left_column ||
+                    !command->data_product.left_column[0] ||
+                    !command->data_product.right_column ||
+                    !command->data_product.right_column[0] ||
+                    !command->has_source_span || command->child_count != 0) {
                     data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
                 }
                 MilenaHIRDataOperation op = {0};
                 op.kind = MILENA_HIR_DATA_PRODUCT;
-                hir_source_span(&op.span, command->has_source_span ? command : node);
-                op.as.product.left = hir_unresolved_column(left, command);
-                op.as.product.right = hir_unresolved_column(right, command);
+                hir_source_span(&op.span, command);
+                op.as.product.left = hir_unresolved_column(
+                    command->data_product.left_column, command);
+                op.as.product.right = hir_unresolved_column(
+                    command->data_product.right_column, command);
                 op.as.product.output_name = milena_strdup("total");
                 if (!op.as.product.left.name || !op.as.product.right.name ||
                     !op.as.product.output_name || !hir_append_data_operation(hir, &op)) {

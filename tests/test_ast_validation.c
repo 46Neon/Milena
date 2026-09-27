@@ -318,6 +318,47 @@ int main(void) {
     ast_destroy(program);
     parser_release(&parser);
 
+    /* #total owns typed product operands and spans the whole command. */
+    const char *product_source =
+        ".analisis ventas { .transformar dataset { #total(\"precio * cantidad\") } }";
+    lexer_init(&lexer, product_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program && !parser.has_error);
+    ASTNode *transform = program->children[0]->children[0];
+    ASTNode *product = transform->children[0];
+    const char *product_command = "#total(\"precio * cantidad\")";
+    assert(product->type == AST_COMANDO_TOTAL && product->data_product.present &&
+           product->data_product.left_column && product->data_product.right_column &&
+           product->data_product.left_column != product->value &&
+           product->data_product.right_column != product->value &&
+           strcmp(product->data_product.left_column, "precio") == 0 &&
+           strcmp(product->data_product.right_column, "cantidad") == 0 &&
+           product->has_source_span && product->end_offset - product->start_offset ==
+               strlen(product_command) &&
+           strncmp(product_source + product->start_offset, product_command,
+                   strlen(product_command)) == 0);
+    assert(ast_validate(program, &error));
+    char saved_product_char = product->value[0];
+    product->value[0] = saved_product_char == '#' ? 'X' : '#';
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)product->line);
+    product->value[0] = saved_product_char;
+    bool saved_product_presence = product->data_product.present;
+    product->data_product.present = false;
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)product->line);
+    product->data_product.present = saved_product_presence;
+    assert(ast_validate(program, &error));
+    ast_destroy(program); /* releases the two independently owned product operands */
+    parser_release(&parser);
+
+    ASTNode *owned_product = ast_create_leaf(AST_COMANDO_TOTAL, "left * right");
+    assert(owned_product && ast_set_data_product(owned_product, owned_product->value));
+    assert(owned_product->data_product.left_column != owned_product->value &&
+           owned_product->data_product.right_column != owned_product->value);
+    ast_destroy(owned_product); /* cleanup for both owned operand strings */
+
     assert(!ast_validate(NULL, &error));
     assert(error.code == MILENA_ERR_ARGUMENT);
     return 0;

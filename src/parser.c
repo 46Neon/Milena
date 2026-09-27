@@ -1365,11 +1365,39 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         if (parser_match(parser, TOKEN_NUMERAL)) {
                             parser_advance(parser);
                             if (parser_match(parser, TOKEN_KW_TOTAL)) {
+                                Token command_start = parser->previous;
                                 parser_advance(parser);
-                                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
+                                if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") ) {
                                     if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
-                                        if (!parser_add_child(parser, transformar, ast_create_leaf(AST_COMANDO_TOTAL, parser->previous.lexeme), "Sin memoria para comando total")) break;
-                                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
+                                        Token expression_token = parser->previous;
+                                        ASTNode *total = ast_create_leaf(
+                                            AST_COMANDO_TOTAL, expression_token.lexeme);
+                                        if (!total) {
+                                            parser_error_at(parser, &command_start,
+                                                "Sin memoria para comando total");
+                                            break;
+                                        }
+                                        if (!ast_set_data_product(total,
+                                                                  expression_token.lexeme)) {
+                                            ast_destroy(total);
+                                            parser_error_at(parser, &command_start,
+                                                "No se pudo estructurar el producto tipado de #total");
+                                            break;
+                                        }
+                                        if (!parser_expect(parser, TOKEN_PAR_DER,
+                                                           "Se esperaba ')'")) {
+                                            ast_destroy(total);
+                                            break;
+                                        }
+                                        if (!ast_set_source_span(total, &command_start,
+                                                                 &parser->previous)) {
+                                            ast_destroy(total);
+                                            parser_error_at(parser, &command_start,
+                                                "No se pudo registrar el origen de #total");
+                                            break;
+                                        }
+                                        if (!parser_add_child(parser, transformar, total,
+                                                "Sin memoria para comando total")) break;
                                     }
                                 }
                             } else if (parser_match(parser, TOKEN_KW_PERIODO)) {

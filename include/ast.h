@@ -203,6 +203,12 @@ typedef struct {
     bool present;
 } ASTJoinKeyPayload;
 
+typedef struct {
+    char *left_column;
+    char *right_column;
+    bool present;
+} ASTDataProductPayload;
+
 typedef enum {
     AST_FILTER_PREDICATE_OK = 0,
     AST_FILTER_PREDICATE_INVALID,
@@ -234,6 +240,8 @@ typedef struct ASTNode {
     /* Owned typed join operands; value remains a validated compatibility mirror. */
     ASTJoinRightPayload join_right;
     ASTJoinKeyPayload join_key;
+    /* Owned typed operands for #total; value remains a validated mirror. */
+    ASTDataProductPayload data_product;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */
     struct ASTNode *left_operand;
     struct ASTNode *right_operand;
@@ -308,6 +316,7 @@ bool ast_set_data_column_declaration(ASTNode *node, const char *name,
 bool ast_set_export_destination(ASTNode *node, const char *destination);
 bool ast_set_join_right_source(ASTNode *node, const char *path);
 bool ast_set_join_key(ASTNode *node, const char *name);
+bool ast_set_data_product(ASTNode *node, const char *expression);
 const char *ast_data_column_type_name(ASTDataColumnType type);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
