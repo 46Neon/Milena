@@ -1630,6 +1630,68 @@ int main(void) {
     free(scalar_bytecode);
     milena_canonical_program_release(&program);
 
+    /* Differential runtime failure: both reference interpreter and verified VM
+       reject division by zero; the VM keeps the source expression span. */
+    const char *runtime_error_source =
+        "funcion dividir(x) { retornar 1 / x; }";
+    MilenaCanonicalProgram runtime_error_program;
+    milena_canonical_program_init(&runtime_error_program);
+    CHECK(milena_canonical_program_parse(&runtime_error_program,
+          runtime_error_source, &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&runtime_error_program,
+          &error) == MILENA_OK && runtime_error_program.typed_module,
+          error.message);
+    uint8_t *runtime_error_bytecode = NULL;
+    size_t runtime_error_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(runtime_error_program.typed_module,
+          &runtime_error_bytecode, &runtime_error_bytecode_size,
+          error.message, sizeof(error.message)), error.message);
+    const uint32_t runtime_error_entry =
+        runtime_error_program.typed_module->functions[0].symbol_id;
+    MilenaVMValue zero_argument = {MILENA_IR_TYPE_F64, {.f64 = 0.0}};
+    VirtualMachine runtime_error_vm = {0};
+    CHECK(vm_init_bytecode(&runtime_error_vm, runtime_error_bytecode,
+          runtime_error_bytecode_size, runtime_error_entry, &zero_argument, 1u,
+          NULL), vm_bytecode_error(&runtime_error_vm) ?
+              vm_bytecode_error(&runtime_error_vm) :
+              "no se pudo inicializar la VM de error diferencial");
+    CHECK(!vm_run(&runtime_error_vm),
+          "la VM debe rechazar división por cero en el bytecode verificado");
+    const char *division_expression = strstr(runtime_error_source, "1 / x");
+    CHECK(division_expression != NULL && runtime_error_vm.has_error &&
+          runtime_error_vm.error.code == MILENA_ERR_INTERNAL &&
+          runtime_error_vm.error.category == MILENA_ERROR_EJECUCION &&
+          runtime_error_vm.error.line == 1u &&
+          runtime_error_vm.error.column ==
+              (size_t)(division_expression - runtime_error_source) + 1u,
+          "el error de VM debe conservar categoría y span de la expresión fallida");
+    const char *runtime_error_message = vm_bytecode_error(&runtime_error_vm);
+    CHECK(runtime_error_message != NULL &&
+          strstr(runtime_error_message, "division by zero") != NULL,
+          "el diagnóstico textual anterior de VM debe conservarse");
+    MilenaVMValue failed_result = {0};
+    CHECK(!vm_get_bytecode_result(&runtime_error_vm, &failed_result),
+          "un fallo de VM no debe publicar resultado parcial");
+    vm_destroy(&runtime_error_vm);
+    free(runtime_error_bytecode);
+    milena_canonical_program_release(&runtime_error_program);
+
+    const char *reference_error_source =
+        "funcion dividir(x) { retornar 1 / x; } "
+        "variable salida_error = dividir(0);";
+    MilenaCanonicalProgram reference_error_program;
+    milena_canonical_program_init(&reference_error_program);
+    CHECK(milena_canonical_program_parse(&reference_error_program,
+          reference_error_source, &error) == MILENA_OK, error.message);
+    Interpreter reference_error_interpreter = {0};
+    CHECK(interpreter_init(&reference_error_interpreter,
+          reference_error_program.ast),
+          "no se pudo inicializar el intérprete de errores de referencia");
+    CHECK(!interpreter_run(&reference_error_interpreter),
+          "el intérprete de referencia también debe rechazar división por cero");
+    interpreter_destroy(&reference_error_interpreter);
+    milena_canonical_program_release(&reference_error_program);
+
     /* Arrow's typed contract now owns source, projection, filter, and limits
      * independently of AST storage; strict compiler input still waits for IR
      * lowering and portable bytecode. */
