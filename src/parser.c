@@ -1207,8 +1207,12 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 }
             }
         } else if (parser_match(parser, TOKEN_KW_DATASET)) {
+            Token dataset_start = parser->current;
             parser_advance(parser);
-            if (parser_match(parser, TOKEN_KW_CARGAR)) {
+            if (!parser_match(parser, TOKEN_KW_CARGAR)) {
+                parser_error_at(parser, &dataset_start,
+                                "Se esperaba 'cargar' después de dataset");
+            } else {
                 parser_advance(parser);
                 if (parser_match(parser, TOKEN_KW_DATOS)) {
                     parser_advance(parser);
@@ -1322,6 +1326,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                         if (parser_match(parser, TOKEN_NUMERAL)) {
+                            Token command_start = parser->current;
                             parser_advance(parser);
                             if (parser_match(parser, TOKEN_KW_TOTAL)) {
                                 parser_advance(parser);
@@ -1342,6 +1347,10 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                         parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'" );
                                     }
                                 }
+                            } else {
+                                parser_error_at(parser, &command_start,
+                                                "Comando desconocido en transformar");
+                                break;
                             }
                         } else {
                             parser_error(parser, "Comando desconocido en transformar");

@@ -179,5 +179,13 @@ int main(void) {
     expect_parse_error_at(
         ". analisis ventas { .exportar { ignorado } }",
         "ignorado", "Token desconocido en exportar");
+
+    /* Bare dataset and an empty numbered command must not silently succeed. */
+    expect_parse_error_at(
+        ". analisis ventas { dataset }", "dataset",
+        "Se esperaba 'cargar' después de dataset");
+    expect_parse_error_at(
+        ". analisis ventas { .transformar dataset { # } }", "#",
+        "Comando desconocido en transformar");
     return 0;
 }
