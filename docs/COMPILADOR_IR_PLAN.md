@@ -128,7 +128,7 @@ Límites explícitos que mantienen la fase 2 abierta: el join de este incremento
 
 ### Preparación Fase 3 — guardia de cuarentena (no cierra ni inicia la fase)
 
-`tools/check_architecture.c` ahora impide que `src/ir.c`, `src/assembler.c`, `src/instructions.c`, `src/compiler.c` o `src/vm.c` entren accidentalmente al conjunto `SOURCES` del producto canónico y rechaza referencias a esas APIs desde `src/main.c`. Esta guardia preserva la separación descrita en `IR_OPCODE_ASSEMBLER_CONTRACT.md`; no cambia el comportamiento del producto ni demuestra equivalencia de opcodes. Es una medida preparatoria de aislamiento, no una excepción al gate: Fase 2 sigue abierta y la implementación semántica de Fase 3 permanece bloqueada hasta cerrar sus dependencias.
+`tools/check_architecture.c` ahora impide que `src/ir.c`, `src/assembler.c`, `src/instructions.c`, `src/compiler.c` o `src/vm.c` entren accidentalmente al conjunto `SOURCES` del producto canónico y rechaza referencias a esas APIs desde `src/main.c`. El contrato añade el inventario de los enums heredados y una matriz de los 19 opcodes escalares MLBC; `tests/test_bytecode_compiler.c` amplía la paridad fuente→HIR→VM/AOT para división y comparaciones, y verifica `NEG` mediante un módulo MLBC tipado directo porque el HIR actual no tiene nodo unario. La guardia y estas pruebas preservan/señalan los límites del prototipo, no cambian el comportamiento de producción ni completan la conformance. Son preparación, no una excepción al gate: Fase 2 sigue abierta y la implementación semántica de Fase 3 permanece bloqueada hasta cerrar sus dependencias; el CI del SHA que contiene estas pruebas aún debe confirmarlas.
 
 ### Slice experimental actual de bytecode MLBC v1 (no cierra fase 2 ni las fases 3–8)
 

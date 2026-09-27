@@ -305,6 +305,45 @@ static int check_call_limits(const char *source) {
     return 0;
 }
 
+static int check_neg_opcode(void) {
+    const MilenaBytecodeInstruction code[] = {
+        {MILENA_BC_FUNCTION, 0, 0, 0, 0.0},
+        {MILENA_BC_CONST_F64, 0, 0, 0, 3.5},
+        {MILENA_BC_NEG, 1, 0, 0, 0.0},
+        {MILENA_BC_RETURN, 1, 0, 0, 0.0}
+    };
+    const uint8_t register_types[] = {
+        MILENA_BC_TYPE_NUMBER, MILENA_BC_TYPE_NUMBER
+    };
+    const uint8_t return_types[] = {MILENA_BC_TYPE_NUMBER};
+    uint8_t bytes[256];
+    size_t length = 0;
+    MilenaBytecodeDiagnostic diagnostic;
+    MilenaBytecodeProgram program = {
+        MILENA_BYTECODE_VERSION_MAJOR,
+        MILENA_BYTECODE_VERSION_TYPED_MINOR,
+        2, 4, code,
+        register_types, sizeof(register_types),
+        return_types, sizeof(return_types)
+    };
+    CHECK(milena_bytecode_encode(&program, bytes, sizeof(bytes), &length,
+                                 NULL, &diagnostic) == MILENA_BC_OK,
+          diagnostic.message);
+    CHECK(milena_bytecode_verify(bytes, length, NULL, &diagnostic) == MILENA_BC_OK,
+          diagnostic.message);
+    CHECK(check_native_success(bytes, length, -3.5) == 0,
+          "typed NEG must agree between verifier, VM, and native AOT");
+
+    const uint8_t wrong_types[] = {
+        MILENA_BC_TYPE_NUMBER, MILENA_BC_TYPE_BOOLEAN
+    };
+    program.register_types = wrong_types;
+    CHECK(milena_bytecode_encode(&program, bytes, sizeof(bytes), &length,
+                                 NULL, &diagnostic) == MILENA_BC_BAD_TYPE,
+          "typed NEG must reject a non-numeric destination register");
+    return 0;
+}
+
 static int check_rejected(const char *source, const char *message_fragment) {
     uint8_t *bytes = (uint8_t *)(uintptr_t)1;
     size_t length = 99;
@@ -332,6 +371,35 @@ int main(void) {
     const char *arithmetic_reference =
         "funcion principal() { variable base = 3; "
         "variable total = base * 4 + 2; total = total - 1; retornar total; } "
+        "variable salida = principal();";
+    const char *division = "funcion principal() { retornar 8 / 2; }";
+    const char *division_reference =
+        "funcion principal() { retornar 8 / 2; } variable salida = principal();";
+    const char *numeric_equal =
+        "funcion principal() { si (3 == 3) { retornar 1; } sino { retornar 0; } }";
+    const char *numeric_equal_reference =
+        "funcion principal() { si (3 == 3) { retornar 1; } sino { retornar 0; } } "
+        "variable salida = principal();";
+    const char *boolean_not_equal =
+        "funcion principal() { si (verdadero != falso) { retornar 1; } "
+        "sino { retornar 0; } }";
+    const char *boolean_not_equal_reference =
+        "funcion principal() { si (verdadero != falso) { retornar 1; } "
+        "sino { retornar 0; } } variable salida = principal();";
+    const char *less_than =
+        "funcion principal() { si (2 < 3) { retornar 1; } sino { retornar 0; } }";
+    const char *less_than_reference =
+        "funcion principal() { si (2 < 3) { retornar 1; } sino { retornar 0; } } "
+        "variable salida = principal();";
+    const char *less_equal =
+        "funcion principal() { si (3 <= 3) { retornar 1; } sino { retornar 0; } }";
+    const char *less_equal_reference =
+        "funcion principal() { si (3 <= 3) { retornar 1; } sino { retornar 0; } } "
+        "variable salida = principal();";
+    const char *greater_equal =
+        "funcion principal() { si (3 >= 3) { retornar 1; } sino { retornar 0; } }";
+    const char *greater_equal_reference =
+        "funcion principal() { si (3 >= 3) { retornar 1; } sino { retornar 0; } } "
         "variable salida = principal();";
     const char *branch_true =
         "funcion principal() { variable x = 0; "
@@ -403,6 +471,21 @@ int main(void) {
 
     CHECK(check_end_to_end(arithmetic, arithmetic_reference, 13.0, false, false) == 0,
           "arithmetic source-to-v1.2-bytecode end-to-end test failed");
+    CHECK(check_end_to_end(division, division_reference, 4.0, false, false) == 0,
+          "successful division must agree across interpreter, VM, and native AOT");
+    CHECK(check_end_to_end(numeric_equal, numeric_equal_reference, 1.0, false, true) == 0,
+          "numeric equality opcode must agree across interpreter, VM, and native AOT");
+    CHECK(check_end_to_end(boolean_not_equal, boolean_not_equal_reference, 1.0,
+                           true, true) == 0,
+          "boolean inequality opcode must preserve boolean operand/result types");
+    CHECK(check_end_to_end(less_than, less_than_reference, 1.0, false, true) == 0,
+          "less-than opcode must agree across interpreter, VM, and native AOT");
+    CHECK(check_end_to_end(less_equal, less_equal_reference, 1.0, false, true) == 0,
+          "less-or-equal opcode must agree across interpreter, VM, and native AOT");
+    CHECK(check_end_to_end(greater_equal, greater_equal_reference, 1.0, false, true) == 0,
+          "greater-or-equal opcode must agree across interpreter, VM, and native AOT");
+    CHECK(check_neg_opcode() == 0,
+          "verified low-level NEG must agree across VM and native AOT");
     CHECK(check_end_to_end(branch_true, branch_true_reference, 10.0, false, true) == 0,
           "comparison-driven control-flow source test failed");
     CHECK(check_end_to_end(branch_false, branch_false_reference, 20.0, true, false) == 0,
