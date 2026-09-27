@@ -1639,12 +1639,24 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 /* Los bloques nombrados de análisis conservan la condición
                  * en el AST; no se ejecutan mediante clasificación textual. */
                 if (parser_is_identifier(parser)) {
+                    Token named_block_token = parser->current;
                     char named_block[MAX_TOKEN_LEN];
                     strncpy(named_block, parser->current.lexeme, sizeof(named_block) - 1);
                     named_block[sizeof(named_block) - 1] = '\0';
                     bool selecting = strcmp(named_block, "seleccionar") == 0;
                     bool joining = strcmp(named_block, "unir") == 0;
+                    bool filtering = strcmp(named_block, "filtrar") == 0;
+                    if (!selecting && !joining && !filtering) {
+                        parser_error_at(parser, &named_block_token,
+                                        "Bloque de análisis desconocido");
+                        break;
+                    }
                     parser_advance(parser);
+                    if (!parser_match(parser, TOKEN_LLAVE_IZQ)) {
+                        parser_error_at(parser, &named_block_token,
+                                        "Se esperaba '{' después del nombre del bloque");
+                        break;
+                    }
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
                         Token block_start = parser->previous;
