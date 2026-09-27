@@ -755,7 +755,8 @@ static void test_legacy_vm_fails_closed_for_unavailable_dataset_ops(void) {
     vm_destroy(&vm);
 }
 
-static MilenaIRModule *make_aot_reference_module(void) {
+static MilenaIRModule *make_aot_reference_module(MilenaIROpCode opcode,
+                                                double lhs, double rhs) {
     MilenaIRModule *module = calloc(1u, sizeof(*module));
     assert(module != NULL);
     module->functions = calloc(1u, sizeof(*module->functions));
@@ -771,10 +772,10 @@ static MilenaIRModule *make_aot_reference_module(void) {
                                                      MILENA_IR_TYPE_F64));
     assert(milena_ir_program_add_block(function->body, 1u));
     assert(append_instruction(function->body, 1u, MILENA_IR_CONST_F64, 1u,
-        MILENA_IR_TYPE_F64, 0u, 0u, 0, 19.0, 0u, 0u));
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, lhs, 0u, 0u));
     assert(append_instruction(function->body, 1u, MILENA_IR_CONST_F64, 2u,
-        MILENA_IR_TYPE_F64, 0u, 0u, 0, 23.0, 0u, 0u));
-    assert(append_instruction(function->body, 1u, MILENA_IR_ADD_F64, 3u,
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, rhs, 0u, 0u));
+    assert(append_instruction(function->body, 1u, opcode, 3u,
         MILENA_IR_TYPE_F64, 1u, 2u, 0, 0.0, 0u, 0u));
     assert(append_instruction(function->body, 1u, MILENA_IR_RETURN, 0u,
         MILENA_IR_TYPE_F64, 3u, 0u, 0, 0.0, 0u, 0u));
@@ -782,8 +783,20 @@ static MilenaIRModule *make_aot_reference_module(void) {
     return module;
 }
 
-static int print_aot_reference_result(void) {
-    MilenaIRModule *module = make_aot_reference_module();
+static int print_aot_reference_result(int argc, char **argv) {
+    if (argc != 5) return 2;
+    MilenaIROpCode opcode;
+    if (strcmp(argv[2], "add") == 0) opcode = MILENA_IR_ADD_F64;
+    else if (strcmp(argv[2], "sub") == 0) opcode = MILENA_IR_SUB_F64;
+    else if (strcmp(argv[2], "mul") == 0) opcode = MILENA_IR_MUL_F64;
+    else if (strcmp(argv[2], "div") == 0) opcode = MILENA_IR_DIV_F64;
+    else return 2;
+    char *lhs_end = NULL;
+    char *rhs_end = NULL;
+    double lhs = strtod(argv[3], &lhs_end);
+    double rhs = strtod(argv[4], &rhs_end);
+    if (!lhs_end || *lhs_end || !rhs_end || *rhs_end) return 2;
+    MilenaIRModule *module = make_aot_reference_module(opcode, lhs, rhs);
     uint8_t *bytes = NULL;
     size_t size = 0;
     char error[256] = {0};
@@ -798,8 +811,12 @@ static int print_aot_reference_result(void) {
                                 &result, error, sizeof(error));
     free(bytes);
     milena_ir_module_destroy(module);
-    if (!ok || result.type != MILENA_IR_TYPE_F64) {
-        fprintf(stderr, "%s\n", error[0] ? error : "VM returned a non-F64 value");
+    if (!ok) {
+        fprintf(stderr, "%s\n", error[0] ? error : "VM execution failed");
+        return 70;
+    }
+    if (result.type != MILENA_IR_TYPE_F64) {
+        fprintf(stderr, "VM returned a non-F64 value\n");
         return 1;
     }
     printf("%.17g\n", result.as.f64);
@@ -807,8 +824,8 @@ static int print_aot_reference_result(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc == 2 && strcmp(argv[1], "--aot-reference") == 0)
-        return print_aot_reference_result();
+    if (argc >= 2 && strcmp(argv[1], "--aot-reference") == 0)
+        return print_aot_reference_result(argc, argv);
     test_original_vm_lifecycle();
     test_legacy_vm_fails_closed_for_unavailable_dataset_ops();
     test_roundtrip_module_with_direct_call();

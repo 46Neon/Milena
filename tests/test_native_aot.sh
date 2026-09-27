@@ -16,36 +16,72 @@ cat >"$TEMP_DIR/forbidden-compiler" <<'EOF'
 exit 99
 EOF
 chmod +x "$TEMP_DIR/forbidden-compiler"
-MILENA_AOT_COMPILER_INVOKED="$TEMP_DIR/compiler-invoked" \
-MILENA_CC="$TEMP_DIR/forbidden-compiler" \
-    "$MILENA" build "$FIXTURES/constant_arithmetic.milena" -o "$TEMP_DIR/constant"
-[ ! -e "$TEMP_DIR/compiler-invoked" ]
-[ -x "$TEMP_DIR/constant" ]
-file "$TEMP_DIR/constant" | grep -F 'ELF 64-bit LSB executable, x86-64' >/dev/null
 
-# Differential check against the verified-bytecode reference VM for the same
-# constant typed-IR operations used by the source fixture.
-"$ROOT/tests/test_typed_bytecode" --aot-reference >"$TEMP_DIR/vm.out"
-"$TEMP_DIR/constant" >"$TEMP_DIR/native.out" 2>"$TEMP_DIR/native.err"
-cmp "$TEMP_DIR/vm.out" "$TEMP_DIR/native.out"
-[ "$(cat "$TEMP_DIR/native.out")" = '42' ]
+check_runtime_case() {
+    fixture=$1
+    name=$2
+    opcode_name=$3
+    lhs=$4
+    rhs=$5
+    opcode=$6
+    expected=$7
+    if [ "$name" = add ]; then
+        MILENA_AOT_COMPILER_INVOKED="$TEMP_DIR/compiler-invoked" \
+        MILENA_CC="$TEMP_DIR/forbidden-compiler" \
+            "$MILENA" build "$FIXTURES/$fixture" -o "$TEMP_DIR/$name"
+        [ ! -e "$TEMP_DIR/compiler-invoked" ]
+    else
+        "$MILENA" build "$FIXTURES/$fixture" -o "$TEMP_DIR/$name"
+    fi
+    [ -x "$TEMP_DIR/$name" ]
+    file "$TEMP_DIR/$name" | grep -F 'ELF 64-bit LSB executable, x86-64' >/dev/null
+    # Check the actual generated code section, not constants/data in the ELF.
+    python3 - "$TEMP_DIR/$name" "$opcode" <<'PYCODE'
+import pathlib, sys
+image = pathlib.Path(sys.argv[1]).read_bytes()
+code = image[120:]
+needle = bytes.fromhex(sys.argv[2])
+if needle not in code:
+    raise SystemExit(f'missing emitted arithmetic opcode: {needle.hex()}')
+PYCODE
+    "$ROOT/tests/test_typed_bytecode" --aot-reference "$opcode_name" "$lhs" "$rhs" \
+        >"$TEMP_DIR/$name.vm.out" 2>"$TEMP_DIR/$name.vm.err"
+    "$TEMP_DIR/$name" >"$TEMP_DIR/$name.native.out" 2>"$TEMP_DIR/$name.native.err"
+    cmp "$TEMP_DIR/$name.vm.out" "$TEMP_DIR/$name.native.out"
+    [ "$(cat "$TEMP_DIR/$name.native.out")" = "$expected" ]
+}
 
-# Failure forms have explicit native diagnostics and deterministic exit status.
+# Runtime arithmetic must be in the executable: each opcode is asserted in the
+# RX text bytes, the ELF is run, and its result is compared with verified bytecode VM execution.
+check_runtime_case constant_arithmetic.milena add add 19 23 'f2 0f 58 c1' 42
+check_runtime_case subtraction.milena sub sub 0 42 'f2 0f 5c c1' -42
+check_runtime_case multiplication.milena mul mul 6 7 'f2 0f 59 c1' 42
+check_runtime_case division.milena div div 84 2 'f2 0f 5e c1' 42
+
+# The verifier keeps the supported runtime-error behavior fail-closed and
+# checks its diagnostic against the typed-IR reference VM's error case.
 "$MILENA" build "$FIXTURES/division_by_zero.milena" -o "$TEMP_DIR/division-by-zero"
 set +e
-"$TEMP_DIR/division-by-zero" >"$TEMP_DIR/runtime.out" 2>"$TEMP_DIR/runtime.err"
+"$ROOT/tests/test_typed_bytecode" --aot-reference div 1 0 \
+    >"$TEMP_DIR/division.vm.out" 2>"$TEMP_DIR/division.vm.err"
+VM_DIVISION_STATUS=$?
+"$TEMP_DIR/division-by-zero" >"$TEMP_DIR/division.out" 2>"$TEMP_DIR/division.err"
 DIVISION_STATUS=$?
 set -e
+[ "$VM_DIVISION_STATUS" -eq 70 ]
 [ "$DIVISION_STATUS" -eq 70 ]
-grep -F 'Milena native runtime error: division by zero' "$TEMP_DIR/runtime.err" >/dev/null
+grep -F 'division by zero' "$TEMP_DIR/division.vm.err" >/dev/null
+grep -F 'Milena native runtime error: division by zero' "$TEMP_DIR/division.err" >/dev/null
 
-"$MILENA" build "$FIXTURES/non_finite.milena" -o "$TEMP_DIR/non-finite"
-set +e
-"$TEMP_DIR/non-finite" >"$TEMP_DIR/non-finite.out" 2>"$TEMP_DIR/non-finite.err"
-NON_FINITE_STATUS=$?
-set -e
-[ "$NON_FINITE_STATUS" -eq 70 ]
-grep -F 'Milena native runtime error: non-finite numeric result' "$TEMP_DIR/non-finite.err" >/dev/null
+# Out-of-slice floating arithmetic is rejected without replacing an existing output.
+printf 'keep-existing-output\n' >"$TEMP_DIR/non-finite"
+if "$MILENA" build "$FIXTURES/non_finite.milena" -o "$TEMP_DIR/non-finite" \
+    >"$TEMP_DIR/non-finite.out" 2>"$TEMP_DIR/non-finite.err"; then
+    echo 'AOT unexpectedly accepted non-finite/out-of-range arithmetic' >&2
+    exit 1
+fi
+grep -E 'subconjunto entero exacto|subconjunto ELF directo' "$TEMP_DIR/non-finite.err" >/dev/null
+[ "$(cat "$TEMP_DIR/non-finite")" = 'keep-existing-output' ]
 
 # Control flow/calls outside the small verified slice fail closed and preserve output.
 printf 'keep-existing-output\n' >"$TEMP_DIR/preserved"
