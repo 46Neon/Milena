@@ -28,7 +28,7 @@ Los nombres siguientes representan contratos diferentes y **no se pueden convert
 
 El assembler heredado demuestra por qué no es una traducción válida: `IR_CLEAN_NULLS`, `IR_TRANSFORM_TOTAL`, filtros, agrupación, promedio, mínimo, máximo y exportación se convierten en `OP_LOAD`; `IR_AGGREGATE_SUM` se convierte en `OP_ADD`. Además, `assembler_assemble` escribe `strlen(arg)` en un operando entero y convierte `num_arg1` a `int`; `0.0` se confunde con ausencia. Esas operaciones no preservan valores, strings ni tipos. El VM heredado consume `IRProgram` directamente, no el resultado del assembler; los agregados en su switch solo imprimen un mensaje. Por tanto, no hay hoy un recorrido IR→assembler→VM con paridad semántica.
 
-Los tres prototipos quedan explícitamente en cuarentena para compilación canónica. Se pueden mantener temporalmente para compatibilidad interna, pero no se amplían ni se presentan como backend de Milena. Cualquier migración o retirada física de sus APIs requiere pruebas de consumidores y no forma parte de este documento.
+Los tres prototipos quedan explícitamente en cuarentena para compilación canónica. Se pueden mantener temporalmente para compatibilidad interna, pero no se amplían ni se presentan como backend de Milena. La guardia estática `check-unification-architecture` mantiene sus fuentes fuera del `SOURCES` del producto y bloquea sus includes/llamadas desde `src/main.c`; esto solo demuestra aislamiento, no conformance semántica. Cualquier migración o retirada física de sus APIs requiere pruebas de consumidores y no forma parte de este documento.
 
 ## 3. Contrato escalar de operandos, tipos y control de flujo
 

@@ -802,7 +802,13 @@ static void check_architecture(void)
     };
     static const char *const main_forbidden[] = {
         "lexer_init(", "parser_init(", "parser_parse(", "dataset_load_csv(",
-        "milena_run_dataset_program("
+        "milena_run_dataset_program(", "ir_generate(", "assembler_assemble(",
+        "vm_init(", "vm_run(", "#include \"ir.h\"", "#include \"assembler.h\"",
+        "#include \"instructions.h\"", "#include \"vm.h\""
+    };
+    static const char *const quarantined_backend_sources[] = {
+        "src/ir.c", "src/assembler.c", "src/instructions.c",
+        "src/compiler.c", "src/vm.c"
     };
     static const char *const cli_commands[] = {
         "analyze", "profile", "inspect", "run_script"
@@ -844,6 +850,16 @@ static void check_architecture(void)
     list_init(&legacy_objects);
     source_region = make_sources_span(makefile);
     collect_source_paths(source_region, &sources);
+    for (index = 0U; index < ARRAY_COUNT(quarantined_backend_sources); ++index) {
+        size_t source_index;
+        for (source_index = 0U; source_index < sources.count; ++source_index) {
+            if (strcmp(sources.items[source_index],
+                       quarantined_backend_sources[index]) == 0) {
+                fail("legacy IR/opcode prototype entered canonical product sources: %s",
+                     quarantined_backend_sources[index]);
+            }
+        }
+    }
     for (index = 0U; index < sources.count; ++index) {
         const char *path = sources.items[index];
         const char *base = strrchr(path, '/');
