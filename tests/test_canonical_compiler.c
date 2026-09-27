@@ -23,7 +23,10 @@ static const ASTNode *find_aggregate_metric(const ASTNode *node,
 #define CHECK(condition, message) \
     do { \
         if (!(condition)) { \
-            fprintf(stderr, "FALLO: %s\n", (message)); \
+            const char *check_message = (message); \
+            fprintf(stderr, "FALLO (línea %d; condición: %s): %s\n", \
+                    __LINE__, #condition, \
+                    check_message ? check_message : "(sin diagnóstico)"); \
             return 1; \
         } \
     } while (0)
