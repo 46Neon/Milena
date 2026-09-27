@@ -567,52 +567,6 @@ static bool hir_append_data_operation(MilenaDataHIR *hir,
     return true;
 }
 
-static char *hir_trim(char *text) {
-    if (!text) return NULL;
-    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') text++;
-    size_t length = strlen(text);
-    while (length && (text[length - 1] == ' ' || text[length - 1] == '\t' ||
-                      text[length - 1] == '\r' || text[length - 1] == '\n'))
-        text[--length] = '\0';
-    return text;
-}
-
-static bool hir_parse_selection(const char *text, MilenaHIRDataOperation *op,
-                                const ASTNode *span_node) {
-    if (!text || !op) return false;
-    char *copy = milena_strdup(text);
-    if (!copy) return false;
-    size_t count = 1;
-    for (const char *p = text; *p; ++p) if (*p == ',') count++;
-    if (!count || count > 32 || count > SIZE_MAX / sizeof(*op->as.select.columns)) {
-        free(copy);
-        return false;
-    }
-    op->as.select.columns = (MilenaHIRColumnRef *)calloc(
-        count, sizeof(*op->as.select.columns));
-    if (!op->as.select.columns) { free(copy); return false; }
-    char *cursor = copy;
-    for (size_t i = 0; i < count; ++i) {
-        char *comma = strchr(cursor, ',');
-        if (comma) *comma = '\0';
-        char *name = hir_trim(cursor);
-        if (!name || !*name || strlen(name) >= 128) { free(copy); return false; }
-        for (size_t j = 0; j < i; ++j)
-            if (strcmp(op->as.select.columns[j].name, name) == 0) {
-                free(copy);
-                return false;
-            }
-        op->as.select.columns[i] = hir_unresolved_column(name, span_node);
-        if (!op->as.select.columns[i].name) { free(copy); return false; }
-        op->as.select.count++;
-        if (i + 1 < count && !comma) { free(copy); return false; }
-        if (i + 1 == count && comma) { free(copy); return false; }
-        cursor = comma ? comma + 1 : cursor + strlen(cursor);
-    }
-    free(copy);
-    return true;
-}
-
 static const char *hir_aggregate_legacy_name(ASTAggregateOperation operation) {
     switch (operation) {
         case AST_AGGREGATE_OPERATION_SUM: return "suma";
@@ -1008,20 +962,34 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
         if (node->type == AST_BLOQUE_SELECCIONAR) {
             if (node->child_count != 1 || !node->children[0] ||
                 node->children[0]->type != AST_COMANDO_COLUMNAS ||
-                !node->children[0]->value) {
+                !node->children[0]->column_selection.present ||
+                !node->children[0]->column_selection.names ||
+                node->children[0]->column_selection.count == 0u ||
+                node->children[0]->column_selection.count > 32u) {
                 data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
             }
+            const ASTNode *selection = node->children[0];
             MilenaHIRDataOperation op = {0};
             op.kind = MILENA_HIR_DATA_SELECT_COLUMNS;
-            hir_source_span(&op.span, node->children[0]->has_source_span ?
-                            node->children[0] : node);
-            if (!hir_parse_selection(node->children[0]->value, &op,
-                                     node->children[0])) {
-                for (size_t j = 0; j < op.as.select.count; ++j)
-                    hir_column_ref_release(&op.as.select.columns[j]);
-                free(op.as.select.columns);
+            hir_source_span(&op.span, selection->has_source_span ? selection : node);
+            size_t selection_count = selection->column_selection.count;
+            op.as.select.columns = (MilenaHIRColumnRef *)calloc(
+                selection_count, sizeof(*op.as.select.columns));
+            if (!op.as.select.columns) {
                 data_hir_release(hir);
-                return HIR_BUILD_UNSUPPORTED;
+                return HIR_BUILD_MEMORY;
+            }
+            for (size_t j = 0; j < selection_count; ++j) {
+                op.as.select.columns[j] = hir_unresolved_column(
+                    selection->column_selection.names[j], selection);
+                if (!op.as.select.columns[j].name) {
+                    for (size_t k = 0; k < op.as.select.count; ++k)
+                        hir_column_ref_release(&op.as.select.columns[k]);
+                    free(op.as.select.columns);
+                    data_hir_release(hir);
+                    return HIR_BUILD_MEMORY;
+                }
+                op.as.select.count++;
             }
             if (!hir_append_data_operation(hir, &op)) {
                 for (size_t j = 0; j < op.as.select.count; ++j)

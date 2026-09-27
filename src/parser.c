@@ -1778,14 +1778,36 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                     }
                                 } else if (selecting && parser_is_identifier(parser) &&
                                     strcmp(parser->current.lexeme, "columnas") == 0) {
+                                    Token command_start = parser->previous;
                                     parser_advance(parser);
                                     if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                         if (parser_expect(parser, TOKEN_CADENA, "Se esperaba lista de columnas")) {
+                                            Token value_token = parser->previous;
                                             ASTNode *columns = ast_create_leaf(
-                                                AST_COMANDO_COLUMNAS,
-                                                parser->previous.lexeme);
-                                            if (columns && filtrar && !parser_add_child(parser, filtrar, columns, "Sin memoria para columnas")) break;
-                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de columnas");
+                                                AST_COMANDO_COLUMNAS, value_token.lexeme);
+                                            if (!columns) {
+                                                parser_error(parser, "Sin memoria para selección de columnas");
+                                                break;
+                                            }
+                                            if (!ast_set_column_selection(columns,
+                                                                          value_token.lexeme)) {
+                                                ast_destroy(columns);
+                                                parser_error(parser,
+                                                    "La lista de columnas es inválida o no se pudo reservar");
+                                                break;
+                                            }
+                                            if (!parser_expect(parser, TOKEN_PAR_DER,
+                                                    "Se esperaba ')' después de columnas") ||
+                                                !ast_set_source_span(columns, &command_start,
+                                                                     &parser->previous)) {
+                                                ast_destroy(columns);
+                                                if (!parser->has_error)
+                                                    parser_error(parser,
+                                                        "No se pudo conservar el span de selección");
+                                                break;
+                                            }
+                                            if (!parser_add_child(parser, filtrar, columns,
+                                                    "Sin memoria para selección de columnas")) break;
                                         }
                                     }
                                 } else if (joining && parser_is_identifier(parser) &&

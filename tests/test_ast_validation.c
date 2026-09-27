@@ -1,6 +1,7 @@
 #include "parser.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
 static ASTNode *find_metric(ASTNode *node, ASTAggregateOperation operation) {
@@ -358,6 +359,70 @@ int main(void) {
     assert(owned_product->data_product.left_column != owned_product->value &&
            owned_product->data_product.right_column != owned_product->value);
     ast_destroy(owned_product); /* cleanup for both owned operand strings */
+
+    const char *selection_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".seleccionar { #columnas(\" id, total, ciudad \") } }";
+    lexer_init(&lexer, selection_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program && !parser.has_error);
+    ASTNode *selection = program->children[0]->children[1];
+    ASTNode *columns = selection->children[0];
+    const char *selection_text = "#columnas(\" id, total, ciudad \")";
+    assert(columns->column_selection.present &&
+           columns->column_selection.count == 3u &&
+           strcmp(columns->column_selection.names[0], "id") == 0 &&
+           strcmp(columns->column_selection.names[1], "total") == 0 &&
+           strcmp(columns->column_selection.names[2], "ciudad") == 0 &&
+           columns->has_source_span &&
+           columns->end_offset - columns->start_offset == strlen(selection_text) &&
+           strncmp(selection_source + columns->start_offset, selection_text,
+                   strlen(selection_text)) == 0 && ast_validate(program, &error));
+    char saved_selection_char = columns->value[1];
+    columns->value[1] = 'x';
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)columns->line);
+    columns->value[1] = saved_selection_char;
+    bool saved_selection_presence = columns->column_selection.present;
+    columns->column_selection.present = false;
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT);
+    columns->column_selection.present = saved_selection_presence;
+    assert(ast_validate(program, &error));
+    ast_destroy(program);
+    parser_release(&parser);
+
+    ASTNode *bad_columns = ast_create_leaf(AST_COMANDO_COLUMNAS, "a, a");
+    assert(bad_columns && !ast_set_column_selection(bad_columns, bad_columns->value));
+    ast_destroy(bad_columns);
+    bad_columns = ast_create_leaf(AST_COMANDO_COLUMNAS, "a,");
+    assert(bad_columns && !ast_set_column_selection(bad_columns, bad_columns->value));
+    ast_destroy(bad_columns);
+    char long_column[129];
+    memset(long_column, 'x', sizeof(long_column) - 1u);
+    long_column[sizeof(long_column) - 1u] = '\0';
+    bad_columns = ast_create_leaf(AST_COMANDO_COLUMNAS, long_column);
+    assert(bad_columns && !ast_set_column_selection(bad_columns, bad_columns->value));
+    ast_destroy(bad_columns);
+    char columns_32[512] = {0};
+    size_t used = 0u;
+    for (size_t i = 0u; i < 32u; ++i) {
+        int count_written = snprintf(columns_32 + used, sizeof(columns_32) - used,
+                                     "%scol%zu", i ? "," : "", i);
+        assert(count_written > 0 &&
+               (size_t)count_written < sizeof(columns_32) - used);
+        used += (size_t)count_written;
+    }
+    bad_columns = ast_create_leaf(AST_COMANDO_COLUMNAS, columns_32);
+    assert(bad_columns && ast_set_column_selection(bad_columns, bad_columns->value) &&
+           bad_columns->column_selection.count == 32u);
+    ast_destroy(bad_columns);
+    int count_written = snprintf(columns_32 + used, sizeof(columns_32) - used,
+                                 ",col32");
+    assert(count_written > 0 && (size_t)count_written < sizeof(columns_32) - used);
+    bad_columns = ast_create_leaf(AST_COMANDO_COLUMNAS, columns_32);
+    assert(bad_columns && !ast_set_column_selection(bad_columns, bad_columns->value));
+    ast_destroy(bad_columns);
 
     assert(!ast_validate(NULL, &error));
     assert(error.code == MILENA_ERR_ARGUMENT);

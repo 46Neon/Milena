@@ -338,6 +338,86 @@ bool ast_set_data_product(ASTNode *node, const char *expression) {
     return true;
 }
 
+typedef struct {
+    const char *start;
+    size_t length;
+} ASTColumnNameSlice;
+
+static bool ast_column_selection_space(unsigned char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+static bool ast_parse_column_selection(const char *text,
+                                      ASTColumnNameSlice slices[32],
+                                      size_t *count_out) {
+    if (!text || !slices || !count_out || !text[0]) return false;
+    size_t count = 0u;
+    const char *cursor = text;
+    for (;;) {
+        if (count >= 32u) return false;
+        const char *comma = strchr(cursor, ',');
+        const char *end = comma ? comma : text + strlen(text);
+        const char *start = cursor;
+        while (start < end && ast_column_selection_space((unsigned char)*start)) ++start;
+        while (end > start && ast_column_selection_space((unsigned char)end[-1])) --end;
+        size_t length = (size_t)(end - start);
+        if (length == 0u || length >= 128u) return false;
+        for (size_t i = 0u; i < count; ++i) {
+            if (slices[i].length == length &&
+                memcmp(slices[i].start, start, length) == 0) return false;
+        }
+        slices[count++] = (ASTColumnNameSlice){start, length};
+        if (!comma) break;
+        cursor = comma + 1;
+    }
+    *count_out = count;
+    return true;
+}
+
+static bool ast_column_selection_matches(const ASTNode *node) {
+    if (!node || !node->value || !node->column_selection.names ||
+        node->column_selection.count == 0u ||
+        node->column_selection.count > 32u) return false;
+    ASTColumnNameSlice slices[32];
+    size_t count = 0u;
+    if (!ast_parse_column_selection(node->value, slices, &count) ||
+        count != node->column_selection.count) return false;
+    for (size_t i = 0u; i < count; ++i) {
+        const char *name = node->column_selection.names[i];
+        if (!name || strlen(name) != slices[i].length ||
+            memcmp(name, slices[i].start, slices[i].length) != 0) return false;
+    }
+    return true;
+}
+
+bool ast_set_column_selection(ASTNode *node, const char *names) {
+    if (!node || node->type != AST_COMANDO_COLUMNAS || !node->value ||
+        !names || strcmp(node->value, names) != 0) return false;
+    ASTColumnNameSlice slices[32];
+    size_t count = 0u;
+    if (!ast_parse_column_selection(names, slices, &count) ||
+        count > SIZE_MAX / sizeof(char *)) return false;
+    char **copies = (char **)calloc(count, sizeof(*copies));
+    if (!copies) return false;
+    for (size_t i = 0u; i < count; ++i) {
+        copies[i] = ast_copy_slice(slices[i].start, slices[i].length);
+        if (!copies[i]) {
+            for (size_t j = 0u; j < i; ++j) free(copies[j]);
+            free(copies);
+            return false;
+        }
+    }
+    if (node->column_selection.names) {
+        for (size_t i = 0u; i < node->column_selection.count; ++i)
+            free(node->column_selection.names[i]);
+        free(node->column_selection.names);
+    }
+    node->column_selection.names = copies;
+    node->column_selection.count = count;
+    node->column_selection.present = true;
+    return true;
+}
+
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column) {
     if (!node || node->type != AST_RESUMEN_METRICA || !node->value ||
@@ -601,6 +681,20 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
                 "Payload de producto de datos sin etiqueta en el AST");
             break;
         }
+        if (node->column_selection.present) {
+            if (node->type != AST_COMANDO_COLUMNAS || !node->value ||
+                node->child_count != 0 || !node->has_source_span ||
+                node->end_offset <= node->start_offset ||
+                !ast_column_selection_matches(node)) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de selección de columnas inconsistente en el AST");
+                break;
+            }
+        } else if (node->column_selection.names || node->column_selection.count != 0u) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de selección de columnas sin etiqueta en el AST");
+            break;
+        }
         if ((node->join_limits_explicit || node->join_memory_budget_bytes ||
              node->join_max_output_rows) && node->type != AST_BLOQUE_UNIR) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
@@ -847,6 +941,11 @@ void ast_destroy(ASTNode *node) {
     free(node->join_key.name);
     free(node->data_product.left_column);
     free(node->data_product.right_column);
+    if (node->column_selection.names) {
+        for (size_t i = 0; i < node->column_selection.count; ++i)
+            free(node->column_selection.names[i]);
+        free(node->column_selection.names);
+    }
     for (size_t i = 0; i < node->child_count; i++) {
         ast_destroy(node->children[i]);
     }

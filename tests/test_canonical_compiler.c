@@ -309,6 +309,16 @@ int main(void) {
           program.data_hir->operations[0].resolved_dataset_id ==
               program.data_hir->source.resolved_dataset_id,
           "la HIR debe poseer fuente, transformación, filtro, proyección y destino de exportación");
+    ASTNode *selected_columns_ast = program.ast->children[0]->children[4]->children[0];
+    CHECK(selected_columns_ast->column_selection.present &&
+          selected_columns_ast->column_selection.count == 3u &&
+          strcmp(selected_columns_ast->column_selection.names[0], "id") == 0 &&
+          strcmp(selected_columns_ast->column_selection.names[1], "total") == 0 &&
+          strcmp(selected_columns_ast->column_selection.names[2], "ciudad") == 0 &&
+          program.data_hir->operations[2].as.select.count == 3u &&
+          strcmp(program.data_hir->operations[2].as.select.columns[0].name, "id") == 0 &&
+          strcmp(program.data_hir->operations[2].as.select.columns[2].name, "ciudad") == 0,
+          "el AST y la HIR deben conservar nombres tipados y orden de selección");
     MilenaCanonicalCompilerInput data_input = {0};
     CHECK(milena_canonical_compiler_input(&program, &data_input, &error) == MILENA_ERR_DATA &&
           data_input.ast == NULL && data_input.data_hir == NULL,
