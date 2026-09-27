@@ -548,6 +548,17 @@ int main(void) {
           program.data_hir->operations[0].as.join.right_dataset_id !=
               program.data_hir->source.resolved_dataset_id,
           "el join debe bajar con identidad separada para el dataset derecho");
+    ASTNode *join_ast = program.ast->children[0]->children[1];
+    CHECK(join_ast->children[0]->join_right.present &&
+          strcmp(join_ast->children[0]->join_right.path, "catalogo.csv") == 0 &&
+          join_ast->children[1]->join_key.present &&
+          strcmp(join_ast->children[1]->join_key.name, "id") == 0 &&
+          program.data_hir->operations[0].as.join.right_source &&
+          strcmp(program.data_hir->operations[0].as.join.right_source,
+                 join_ast->children[0]->join_right.path) == 0 &&
+          strcmp(program.data_hir->operations[0].as.join.left_key.name,
+                 join_ast->children[1]->join_key.name) == 0,
+          "la HIR debe usar los payloads AST tipados de fuente y clave de join");
     CHECK(milena_canonical_program_bind_tables(&program, &data_table,
           &catalog_table, &error) == MILENA_OK, error.message);
     CHECK(milena_canonical_compiler_input(&program, &data_input, &error) == MILENA_OK &&

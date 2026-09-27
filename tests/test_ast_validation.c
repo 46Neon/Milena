@@ -272,6 +272,52 @@ int main(void) {
     assert(legacy_source && ast_validate(legacy_source, &error));
     ast_destroy(legacy_source);
 
+    const char *join_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        ".unir { #derecha(\"catalogo.csv\") #clave(\"id\") "
+        "#limites(4096, 20) } }";
+    lexer_init(&lexer, join_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program && !parser.has_error);
+    ASTNode *join = program->children[0]->children[1];
+    assert(join->type == AST_BLOQUE_UNIR && join->join_limits_explicit &&
+           join->join_memory_budget_bytes == 4096 &&
+           join->join_max_output_rows == 20 && join->child_count == 2);
+    ASTNode *right_source = join->children[0];
+    ASTNode *join_key = join->children[1];
+    const char *right_text = "#derecha(\"catalogo.csv\")";
+    const char *key_text = "#clave(\"id\")";
+    assert(right_source->join_right.present && right_source->join_right.path &&
+           right_source->join_right.path != right_source->value &&
+           strcmp(right_source->join_right.path, "catalogo.csv") == 0 &&
+           right_source->has_source_span &&
+           right_source->end_offset - right_source->start_offset ==
+               strlen(right_text) &&
+           strncmp(join_source + right_source->start_offset, right_text,
+                   strlen(right_text)) == 0);
+    assert(join_key->join_key.present && join_key->join_key.name &&
+           join_key->join_key.name != join_key->value &&
+           strcmp(join_key->join_key.name, "id") == 0 &&
+           join_key->has_source_span &&
+           join_key->end_offset - join_key->start_offset == strlen(key_text) &&
+           strncmp(join_source + join_key->start_offset, key_text,
+                   strlen(key_text)) == 0);
+    assert(ast_validate(program, &error));
+    char saved_right_char = right_source->value[0];
+    right_source->value[0] = saved_right_char == 'c' ? 'X' : 'c';
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)right_source->line);
+    right_source->value[0] = saved_right_char;
+    bool saved_key_presence = join_key->join_key.present;
+    join_key->join_key.present = false;
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)join_key->line);
+    join_key->join_key.present = saved_key_presence;
+    assert(ast_validate(program, &error));
+    ast_destroy(program);
+    parser_release(&parser);
+
     assert(!ast_validate(NULL, &error));
     assert(error.code == MILENA_ERR_ARGUMENT);
     return 0;

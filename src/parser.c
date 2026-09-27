@@ -1701,7 +1701,11 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         Token block_start = parser->previous;
                         ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
                                                        (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
-                        if (filtrar && joining) {
+                        if (!filtrar) {
+                            parser_error(parser, "Sin memoria para bloque de unión o filtro");
+                            break;
+                        }
+                        if (joining) {
                             filtrar->join_memory_budget_bytes =
                                 MILENA_TABLE_JOIN_DEFAULT_MEMORY_BYTES;
                             filtrar->join_max_output_rows =
@@ -1759,17 +1763,36 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 } else if (joining && parser_is_identifier(parser) &&
                                            (strcmp(parser->current.lexeme, "derecha") == 0 ||
                                             strcmp(parser->current.lexeme, "clave") == 0)) {
+                                    Token command_start = parser->previous;
                                     ASTNodeType command_type = strcmp(parser->current.lexeme, "derecha") == 0
                                         ? AST_COMANDO_DERECHA : AST_COMANDO_CLAVE;
                                     parser_advance(parser);
                                     if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                         if (parser_expect(parser, TOKEN_CADENA, "Se esperaba valor de unión")) {
+                                            Token value_token = parser->previous;
                                             ASTNode *command = ast_create_leaf(command_type,
-                                                                                parser->previous.lexeme);
-                                            if (command) (void)ast_set_source_span(command,
-                                                &parser->previous, &parser->previous);
-                                            if (command && filtrar && !parser_add_child(parser, filtrar, command, "Sin memoria para unión")) break;
-                                            parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de unión");
+                                                                                value_token.lexeme);
+                                            if (!command) {
+                                                parser_error(parser, "Sin memoria para comando de unión");
+                                                break;
+                                            }
+                                            bool payload_ok = command_type == AST_COMANDO_DERECHA
+                                                ? ast_set_join_right_source(command, value_token.lexeme)
+                                                : ast_set_join_key(command, value_token.lexeme);
+                                            if (!payload_ok ||
+                                                !parser_expect(parser, TOKEN_PAR_DER,
+                                                    "Se esperaba ')' después de unión") ||
+                                                !ast_set_source_span(command, &command_start,
+                                                                     &parser->previous)) {
+                                                ast_destroy(command);
+                                                if (!parser->has_error)
+                                                    parser_error(parser,
+                                                        "No se pudo conservar el payload tipado de unión");
+                                                break;
+                                            }
+                                            if (filtrar && !parser_add_child(parser, filtrar,
+                                                    command, "Sin memoria para unión")) break;
+                                            if (!filtrar) ast_destroy(command);
                                         }
                                     }
                                 } else if (parser_match(parser, TOKEN_KW_CONDICION)) {

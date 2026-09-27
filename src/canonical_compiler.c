@@ -962,9 +962,13 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             for (size_t j = 0; j < node->child_count; ++j) {
                 const ASTNode *child = node->children[j];
                 if (!child) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
-                if (child->type == AST_COMANDO_DERECHA && child->value && !right_node)
+                if (child->type == AST_COMANDO_DERECHA &&
+                    child->join_right.present && child->join_right.path &&
+                    !right_node)
                     right_node = child;
-                else if (child->type == AST_COMANDO_CLAVE && child->value && !key_node)
+                else if (child->type == AST_COMANDO_CLAVE &&
+                         child->join_key.present && child->join_key.name &&
+                         !key_node)
                     key_node = child;
                 else {
                     data_hir_release(hir);
@@ -979,10 +983,12 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             MilenaHIRDataOperation op = {0};
             op.kind = MILENA_HIR_DATA_JOIN;
             hir_source_span(&op.span, node);
-            op.as.join.right_source = milena_strdup(right_node->value);
+            op.as.join.right_source = milena_strdup(right_node->join_right.path);
             op.as.join.right_dataset_id = 2;
-            op.as.join.left_key = hir_unresolved_column(key_node->value, key_node);
-            op.as.join.right_key = hir_unresolved_column(key_node->value, key_node);
+            op.as.join.left_key = hir_unresolved_column(
+                key_node->join_key.name, key_node);
+            op.as.join.right_key = hir_unresolved_column(
+                key_node->join_key.name, key_node);
             op.as.join.join_type = MILENA_JOIN_INNER;
             op.as.join.policy.max_input_rows = SIZE_MAX;
             op.as.join.policy.max_output_rows = node->join_max_output_rows;

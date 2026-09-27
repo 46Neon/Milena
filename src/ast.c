@@ -255,6 +255,28 @@ bool ast_set_export_destination(ASTNode *node, const char *destination) {
     return true;
 }
 
+bool ast_set_join_right_source(ASTNode *node, const char *path) {
+    if (!node || node->type != AST_COMANDO_DERECHA || !node->value ||
+        !path || !path[0] || strcmp(node->value, path) != 0) return false;
+    char *copy = milena_strdup(path);
+    if (!copy) return false;
+    free(node->join_right.path);
+    node->join_right.path = copy;
+    node->join_right.present = true;
+    return true;
+}
+
+bool ast_set_join_key(ASTNode *node, const char *name) {
+    if (!node || node->type != AST_COMANDO_CLAVE || !node->value ||
+        !name || !name[0] || strcmp(node->value, name) != 0) return false;
+    char *copy = milena_strdup(name);
+    if (!copy) return false;
+    free(node->join_key.name);
+    node->join_key.name = copy;
+    node->join_key.present = true;
+    return true;
+}
+
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column) {
     if (!node || node->type != AST_RESUMEN_METRICA || !node->value ||
@@ -458,6 +480,48 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
         } else if (node->export_result.destination) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                 "Payload de exportación sin etiqueta en el AST");
+            break;
+        }
+        if (node->join_right.present) {
+            if (node->type != AST_COMANDO_DERECHA || !node->join_right.path ||
+                !node->join_right.path[0] || !node->value ||
+                strcmp(node->join_right.path, node->value) != 0 ||
+                node->child_count != 0 || !node->has_source_span ||
+                node->end_offset <= node->start_offset) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de fuente derecha inconsistente en el AST");
+                break;
+            }
+        } else if (node->join_right.path) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de fuente derecha sin etiqueta en el AST");
+            break;
+        }
+        if (node->join_key.present) {
+            if (node->type != AST_COMANDO_CLAVE || !node->join_key.name ||
+                !node->join_key.name[0] || !node->value ||
+                strcmp(node->join_key.name, node->value) != 0 ||
+                node->child_count != 0 || !node->has_source_span ||
+                node->end_offset <= node->start_offset) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de clave join inconsistente en el AST");
+                break;
+            }
+        } else if (node->join_key.name) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de clave join sin etiqueta en el AST");
+            break;
+        }
+        if ((node->join_limits_explicit || node->join_memory_budget_bytes ||
+             node->join_max_output_rows) && node->type != AST_BLOQUE_UNIR) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Política de límites join en un nodo que no es unión");
+            break;
+        }
+        if (node->join_limits_explicit &&
+            (!node->join_memory_budget_bytes || !node->join_max_output_rows)) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "La política explícita de límites join está incompleta");
             break;
         }
         if (node->parent != entry.expected_parent) {
@@ -690,6 +754,8 @@ void ast_destroy(ASTNode *node) {
     free(node->data_source.path);
     free(node->data_column.name);
     free(node->export_result.destination);
+    free(node->join_right.path);
+    free(node->join_key.name);
     for (size_t i = 0; i < node->child_count; i++) {
         ast_destroy(node->children[i]);
     }
