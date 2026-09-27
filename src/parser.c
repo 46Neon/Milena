@@ -1025,8 +1025,14 @@ static ASTNode *parse_arrow_projection(Parser *parser) {
     }
     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+        Token field_token = parser->current;
         if (!parser_expect(parser, TOKEN_CADENA,
                            "La proyección Arrow requiere nombres de campo entre comillas")) break;
+        if (!parser->previous.lexeme[0]) {
+            parser_error_at(parser, &field_token,
+                "El campo proyectado Arrow no puede estar vacío");
+            break;
+        }
         ASTNode *field = ast_create_leaf(AST_COLUMNAR_FIELD, parser->previous.lexeme);
         if (!field || !parser_add_child(parser, projection, field,
                                         "Sin memoria para campo proyectado")) {
@@ -1129,8 +1135,14 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 continue;
             }
             parser_advance(parser);
+            Token role_column_token = parser->current;
             if (!parser_expect(parser, TOKEN_CADENA,
                                "Se esperaba nombre de columna entre comillas")) continue;
+            if (!parser->previous.lexeme[0]) {
+                parser_error_at(parser, &role_column_token,
+                    "El nombre de columna del rol no puede estar vacío");
+                continue;
+            }
             char column_name[MAX_TOKEN_LEN];
             strncpy(column_name, parser->previous.lexeme, sizeof(column_name) - 1);
             column_name[sizeof(column_name) - 1] = '\0';
@@ -1287,6 +1299,11 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_advance(parser);
                             if (!parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) break;
                             if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) break;
+                            if (strcmp(parser->previous.lexeme, "eliminar") != 0) {
+                                parser_error_at(parser, &command_start,
+                                    "La acción de limpieza solo admite eliminar");
+                                break;
+                            }
                             ASTNode *command = ast_create_leaf(command_type,
                                                                parser->previous.lexeme);
                             if (!command) {
@@ -1309,7 +1326,11 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     }
                     if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'"))
                         ast_destroy(limpiar);
-                    else if (limpiar && !ast_set_source_span(limpiar,
+                    else if (limpiar && limpiar->child_count == 0) {
+                        ast_destroy(limpiar);
+                        parser_error_at(parser, &cleaning_start,
+                            "El bloque limpiar requiere al menos una orden");
+                    } else if (limpiar && !ast_set_source_span(limpiar,
                                 &cleaning_start, &parser->previous)) {
                         ast_destroy(limpiar);
                         parser_error(parser, "No se pudo registrar el origen del bloque limpiar");
@@ -1343,6 +1364,11 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 if (parser_match(parser, TOKEN_KW_EXTRAER)) parser_advance(parser);
                                 if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") ) {
                                     if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
+                                        if (strcmp(parser->previous.lexeme, "mes de fecha") != 0) {
+                                            parser_error_at(parser, &command_start,
+                                                "#periodo solo admite el payload \"mes de fecha\"");
+                                            break;
+                                        }
                                         if (!parser_add_child(parser, transformar, ast_create_leaf(AST_COMANDO_PERIODO, parser->previous.lexeme), "Sin memoria para comando periodo")) break;
                                         parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'" );
                                     }
@@ -1402,6 +1428,18 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             ast_destroy(condition);
                             parser_error_at(parser, &condition_start,
                                 "Sin memoria para estructurar el predicado numérico");
+                            break;
+                        }
+                        if (predicate_status == AST_FILTER_PREDICATE_INVALID) {
+                            ast_destroy(condition);
+                            parser_error_at(parser, &condition_start,
+                                "Predicado numérico inválido en #condicion");
+                            break;
+                        }
+                        if (filtrar->child_count != 0) {
+                            ast_destroy(condition);
+                            parser_error_at(parser, &condition_start,
+                                "El bloque filtrar admite una sola #condicion");
                             break;
                         }
                         if (!parser_expect(parser, TOKEN_PAR_DER,
@@ -1776,13 +1814,44 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                         }
                                     }
                                 } else if (parser_match(parser, TOKEN_KW_CONDICION)) {
+                                    Token condition_start = parser->current;
+                                    if (filtering && filtrar->child_count != 0) {
+                                        parser_error_at(parser, &condition_start,
+                                            "El bloque filtrar admite una sola #condicion");
+                                        break;
+                                    }
                                     parser_advance(parser);
                                     if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                         if (parser_expect(parser, TOKEN_CADENA, "Se esperaba condición")) {
                                             ASTNode *condition = ast_create_leaf(
                                                 AST_COMANDO_CONDICION,
                                                 parser->previous.lexeme);
-                                            if (condition && filtrar && !parser_add_child(parser, filtrar, condition, "Sin memoria para condición")) break;
+                                            if (condition && filtering) {
+                                                if (!ast_set_source_span(condition,
+                                                        &condition_start, &parser->previous)) {
+                                                    ast_destroy(condition);
+                                                    parser_error_at(parser, &condition_start,
+                                                        "No se pudo registrar el origen de la condición");
+                                                    break;
+                                                }
+                                                ASTFilterPredicateStatus predicate_status =
+                                                    ast_set_filter_predicate(condition,
+                                                        parser->previous.lexeme);
+                                                if (predicate_status != AST_FILTER_PREDICATE_OK) {
+                                                    ast_destroy(condition);
+                                                    parser_error_at(parser, &condition_start,
+                                                        predicate_status == AST_FILTER_PREDICATE_MEMORY
+                                                            ? "Sin memoria para estructurar el predicado numérico"
+                                                            : "Predicado numérico inválido en #condicion");
+                                                    break;
+                                                }
+                                            }
+                                            if (!condition) {
+                                                parser_error(parser, "Sin memoria para condición");
+                                                break;
+                                            }
+                                            if (filtrar && !parser_add_child(parser, filtrar, condition,
+                                                    "Sin memoria para condición")) break;
                                             parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de condición");
                                         }
                                     }
@@ -1802,7 +1871,12 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             block_start.type != TOKEN_EOF &&
                             block_end.type == TOKEN_LLAVE_DER)
                             (void)ast_set_source_span(filtrar, &block_start, &block_end);
-                        if (filtrar && filtrar->child_count > 0) {
+                        if (filtering && !parser->has_error && filtrar &&
+                            filtrar->child_count != 1) {
+                            parser_error_at(parser, &named_block_token,
+                                "El bloque filtrar requiere una sola #condicion válida");
+                        }
+                        if (filtrar && filtrar->child_count > 0 && !parser->has_error) {
                             if (!parser_add_child(parser, node, filtrar, "Sin memoria para bloque de filtro")) break;
                         }
                         else ast_destroy(filtrar);

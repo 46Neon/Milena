@@ -12,10 +12,37 @@ from typing import Any
 
 EXPECTED_VARIANTS = 72
 EXPECTED_CONTRACT_COUNTS = {
-    "documented_syntax_contract": 52,
-    "unresolved_public_contract": 16,
+    "documented_syntax_contract": 68,
+    "unresolved_public_contract": 0,
     "unresolved_enum_only_legacy_status": 4,
 }
+CONTRACT_DOC_VARIANTS = {
+    "AST_BLOQUE_LIMPIAR",
+    "AST_BLOQUE_TRANSFORMAR",
+    "AST_BLOQUE_FILTRAR",
+    "AST_COMANDO_NULOS",
+    "AST_COMANDO_DUPLICADOS",
+    "AST_COMANDO_CONDICION",
+    "AST_COMANDO_TOTAL",
+    "AST_COMANDO_PERIODO",
+    "AST_DECLARACION_ENTRADA",
+    "AST_DECLARACION_SALIDA",
+    "AST_BLOQUE_SELECCIONAR",
+    "AST_COMANDO_COLUMNAS",
+    "AST_COLUMNAR_PROJECT",
+    "AST_COLUMNAR_FIELD",
+    "AST_DECLARACION_DATOS",
+    "AST_DECLARACION_ESTADISTICA",
+}
+CONTRACT_DOC_FIELDS = (
+    "- **Sintaxis:**",
+    "- **Forma AST:**",
+    "- **Semántica:**",
+    "- **Restricciones y errores:**",
+    "- **Recursos:**",
+    "- **Alias/compatibilidad:**",
+    "- **Estado:**",
+)
 EXPECTED_PARTIAL = {
     "AST_DECLARACION_VARIABLE",
     "AST_ASIGNACION_VARIABLE",
@@ -105,8 +132,35 @@ def require(condition: bool, message: str) -> None:
         raise LedgerError(message)
 
 
-def check_ledger(header_path: Path, ledger_path: Path) -> tuple[int, int, int, int]:
+def check_contract_document(contract_doc_path: Path) -> None:
+    try:
+        text = contract_doc_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise LedgerError(f"cannot read normative AST contract document {contract_doc_path}: {exc}") from exc
+    sections = list(re.finditer(r"^### `(AST_[A-Z0-9_]+)`\s*$", text, flags=re.M))
+    names = [match.group(1) for match in sections]
+    relevant = [name for name in names if name in CONTRACT_DOC_VARIANTS]
+    duplicates = sorted(name for name in set(relevant) if relevant.count(name) > 1)
+    require(not duplicates,
+            f"normative AST contract document has duplicate variant section(s): {', '.join(duplicates)}")
+    missing = sorted(CONTRACT_DOC_VARIANTS - set(relevant))
+    require(not missing,
+            f"normative AST contract document is missing variant contract(s): {', '.join(missing)}")
+    for index, match in enumerate(sections):
+        name = match.group(1)
+        if name not in CONTRACT_DOC_VARIANTS:
+            continue
+        end = sections[index + 1].start() if index + 1 < len(sections) else len(text)
+        section = text[match.start():end]
+        missing_fields = [field for field in CONTRACT_DOC_FIELDS if field not in section]
+        require(not missing_fields,
+                f"{name}: normative contract is missing field(s): {', '.join(missing_fields)}")
+
+
+def check_ledger(header_path: Path, ledger_path: Path,
+                 contract_doc_path: Path) -> tuple[int, int, int, int]:
     header_variants = ast_enum_variants(header_path)
+    check_contract_document(contract_doc_path)
     try:
         ledger = json.loads(
             ledger_path.read_text(encoding="utf-8"),
@@ -160,6 +214,11 @@ def check_ledger(header_path: Path, ledger_path: Path) -> tuple[int, int, int, i
             ),
         }[language]
         require(parser == expected_parser, f"{name}: parser status conflicts with contract classification")
+        if name in CONTRACT_DOC_VARIANTS:
+            require(language == "documented_syntax_contract",
+                    f"{name}: normative AST contract must be classified as documented")
+            require("docs/COMPILADOR_IR_CONTRATOS_AST.md" in record.get("inventory_evidence", ""),
+                    f"{name}: inventory_evidence must cite docs/COMPILADOR_IR_CONTRATOS_AST.md")
         semantic_status = record.get("semantic_status")
         testing_status = record.get("testing_status")
         require(
@@ -251,9 +310,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ast-header", type=Path, default=root / "include/ast.h")
     parser.add_argument("--ledger", type=Path, default=root / "docs/AST_TYPED_IR_COVERAGE.json")
+    parser.add_argument("--contract-doc", type=Path,
+                        default=root / "docs/COMPILADOR_IR_CONTRATOS_AST.md")
     args = parser.parse_args()
     try:
-        total, full, partial, not_lowered = check_ledger(args.ast_header, args.ledger)
+        total, full, partial, not_lowered = check_ledger(
+            args.ast_header, args.ledger, args.contract_doc)
     except (LedgerError, OSError) as exc:
         print(f"AST→typed-IR coverage check failed: {exc}", file=sys.stderr)
         return 1

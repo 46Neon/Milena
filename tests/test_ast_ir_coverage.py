@@ -14,6 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "tools" / "check_ast_ir_coverage.py"
 LEDGER = ROOT / "docs" / "AST_TYPED_IR_COVERAGE.json"
+CONTRACT_DOC = ROOT / "docs" / "COMPILADOR_IR_CONTRATOS_AST.md"
 AST_HEADER = ROOT / "include" / "ast.h"
 
 
@@ -25,7 +26,8 @@ class ASTIRCoverageCheckerTests(unittest.TestCase):
         self.ledger = json.loads(LEDGER.read_text(encoding="utf-8"))
 
     def run_checker(self, ledger: dict[str, Any] | None = None,
-                    header_text: str | None = None) -> subprocess.CompletedProcess[str]:
+                    header_text: str | None = None,
+                    contract_doc_text: str | None = None) -> subprocess.CompletedProcess[str]:
         ledger_path = self.temp_path / "ledger.json"
         ledger_path.write_text(
             json.dumps(self.ledger if ledger is None else ledger), encoding="utf-8"
@@ -34,6 +36,10 @@ class ASTIRCoverageCheckerTests(unittest.TestCase):
         if header_text is not None:
             header_path = self.temp_path / "ast.h"
             header_path.write_text(header_text, encoding="utf-8")
+        contract_doc_path = CONTRACT_DOC
+        if contract_doc_text is not None:
+            contract_doc_path = self.temp_path / "contracts.md"
+            contract_doc_path.write_text(contract_doc_text, encoding="utf-8")
         return subprocess.run(
             [
                 sys.executable,
@@ -42,6 +48,8 @@ class ASTIRCoverageCheckerTests(unittest.TestCase):
                 str(header_path),
                 "--ledger",
                 str(ledger_path),
+                "--contract-doc",
+                str(contract_doc_path),
             ],
             cwd=ROOT,
             check=False,
@@ -125,6 +133,42 @@ class ASTIRCoverageCheckerTests(unittest.TestCase):
                 for source in sources:
                     self.assertIn(source, record["inventory_evidence"])
                     self.assertTrue((ROOT / source).is_file())
+
+    def test_all_newly_closed_variants_have_full_contract_sections(self) -> None:
+        text = CONTRACT_DOC.read_text(encoding="utf-8")
+        expected = {
+            "AST_BLOQUE_LIMPIAR", "AST_BLOQUE_TRANSFORMAR", "AST_BLOQUE_FILTRAR",
+            "AST_COMANDO_NULOS", "AST_COMANDO_DUPLICADOS", "AST_COMANDO_CONDICION",
+            "AST_COMANDO_TOTAL", "AST_COMANDO_PERIODO", "AST_DECLARACION_ENTRADA",
+            "AST_DECLARACION_SALIDA", "AST_BLOQUE_SELECCIONAR", "AST_COMANDO_COLUMNAS",
+            "AST_COLUMNAR_PROJECT", "AST_COLUMNAR_FIELD", "AST_DECLARACION_DATOS",
+            "AST_DECLARACION_ESTADISTICA",
+        }
+        for name in expected:
+            with self.subTest(ast_variant=name):
+                self.assertIn(f"### `{name}`", text)
+                record = next(item for item in self.ledger["variants"]
+                              if item["ast_variant"] == name)
+                self.assertEqual(record["language_contract_status"],
+                                 "documented_syntax_contract")
+                self.assertEqual(record["parser_status"],
+                                 "parser_reachable_documented_contract")
+                self.assertIn("docs/COMPILADOR_IR_CONTRATOS_AST.md",
+                              record["inventory_evidence"])
+
+    def test_missing_normative_contract_section_is_rejected(self) -> None:
+        text = CONTRACT_DOC.read_text(encoding="utf-8")
+        text = text.replace("### `AST_COMANDO_PERIODO`", "### `AST_COMMAND_PERIOD_REMOVED`", 1)
+        result = self.run_checker(contract_doc_text=text)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing variant contract(s)", result.stderr)
+
+    def test_incomplete_normative_contract_fields_are_rejected(self) -> None:
+        text = CONTRACT_DOC.read_text(encoding="utf-8")
+        text = text.replace("- **Recursos:**", "- Recursos:", 1)
+        result = self.run_checker(contract_doc_text=text)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("normative contract is missing field(s)", result.stderr)
 
     def test_duplicate_enum_member_is_rejected(self) -> None:
         header = AST_HEADER.read_text(encoding="utf-8")

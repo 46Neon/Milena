@@ -187,5 +187,66 @@ int main(void) {
     expect_parse_error_at(
         ". analisis ventas { .transformar dataset { # } }", "#",
         "Comando desconocido en transformar");
+
+    /* Parser and canonical HIR agree that a cleaning block is not an empty
+       operation and that only the explicitly defined action is accepted. */
+    expect_parse_error_at(
+        ". analisis ventas { .limpiar dataset { } }", "limpiar",
+        "El bloque limpiar requiere al menos una orden");
+    expect_parse_error_at(
+        ". analisis ventas { .limpiar dataset { #nulos(\"rellenar\") } }",
+        "#nulos", "La acción de limpieza solo admite eliminar");
+
+    /* A malformed numeric condition must not leave an untyped condition AST
+       that the parser reports as success. */
+    expect_parse_error_at(
+        ". analisis ventas { .filtrar dataset { #condicion(\"precio ?? 2\") } }",
+        "condicion", "Predicado numérico inválido");
+    expect_parse_error_at(
+        ". analisis ventas { .filtrar { #condicion(\"precio > 1 && precio < 3\") } }",
+        "condicion", "Predicado numérico inválido");
+    expect_parse_error_at(
+        ". analisis ventas { .filtrar { #condicion(\"precio > 1\") #condicion(\"precio < 3\") } }",
+        "condicion(\"precio < 3\")", "una sola #condicion");
+
+    const char *valid_filter_source =
+        ". analisis ventas { .filtrar { #condicion(\"precio >= 2.5\") } }";
+    lexer_init(&lexer, valid_filter_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program != NULL && !parser.has_error);
+    ASTNode *filter_block = program->children[0]->children[0];
+    assert(filter_block->type == AST_BLOQUE_FILTRAR && filter_block->child_count == 1);
+    ASTNode *predicate = filter_block->children[0];
+    assert(predicate->type == AST_COMANDO_CONDICION &&
+           predicate->has_filter_predicate &&
+           strcmp(predicate->filter_column, "precio") == 0 &&
+           predicate->filter_operator == AST_OPERATOR_GREATER_EQUAL &&
+           predicate->filter_threshold == 2.5);
+    ast_destroy(program);
+    parser_release(&parser);
+
+    /* The explicit historical alias normalizes to AST_COMANDO_PERIODO, while
+       an unspecified extraction payload is rejected closed. */
+    expect_parse_error_at(
+        ". analisis ventas { .transformar { #periodo(\"dia de fecha\") } }",
+        "#periodo", "#periodo solo admite el payload");
+    const char *period_alias_source =
+        ". analisis ventas { .transformar { #periodo extraer(\"mes de fecha\") } }";
+    lexer_init(&lexer, period_alias_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program != NULL && !parser.has_error);
+    ASTNode *transform = program->children[0]->children[0];
+    assert(transform->type == AST_BLOQUE_TRANSFORMAR &&
+           transform->children[0]->type == AST_COMANDO_PERIODO &&
+           strcmp(transform->children[0]->value, "mes de fecha") == 0);
+    ast_destroy(program);
+    parser_release(&parser);
+
+    /* Empty quoted schema/projection names are rejected before producing ASTs. */
+    expect_parse_error_at(
+        ". analisis ventas { entrada categorica \"\" }", "\"\"",
+        "no puede estar vacío");
     return 0;
 }
