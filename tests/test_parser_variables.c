@@ -121,5 +121,36 @@ int main(void) {
     assert(parser.error.column == (size_t)(unknown_name - unknown_block_source) + 1u);
     assert(strstr(parser.error.message, "Bloque de análisis desconocido") != NULL);
     parser_release(&parser);
+
+    /* Unknown commands and tokens inside allowlisted blocks also fail closed. */
+    const char *unknown_command_source =
+        ". analisis ventas { .seleccionar { #desconocido(\"base\") } }";
+    lexer_init(&lexer, unknown_command_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    const char *unknown_command = strstr(unknown_command_source, "desconocido");
+    assert(program == NULL && parser.has_error &&
+           parser.error.code == MILENA_ERR_PARSE);
+    assert(unknown_command != NULL && parser.error.line == 1u);
+    assert(parser.error.column ==
+           (size_t)(unknown_command - unknown_command_source) + 1u);
+    assert(strstr(parser.error.message,
+                  "Comando desconocido en bloque nombrado") != NULL);
+    parser_release(&parser);
+
+    const char *unknown_token_source =
+        ". analisis ventas { .unir { ignorado } }";
+    lexer_init(&lexer, unknown_token_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    const char *unknown_token = strstr(unknown_token_source, "ignorado");
+    assert(program == NULL && parser.has_error &&
+           parser.error.code == MILENA_ERR_PARSE);
+    assert(unknown_token != NULL && parser.error.line == 1u);
+    assert(parser.error.column ==
+           (size_t)(unknown_token - unknown_token_source) + 1u);
+    assert(strstr(parser.error.message,
+                  "Token desconocido en bloque nombrado") != NULL);
+    parser_release(&parser);
     return 0;
 }
