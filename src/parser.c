@@ -1662,6 +1662,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         Token block_start = parser->previous;
                         ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
                                                        (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
+                        if (!filtrar) parser_error(parser,
+                            "Sin memoria para bloque nombrado");
                         if (filtrar && joining) {
                             filtrar->join_memory_budget_bytes =
                                 MILENA_TABLE_JOIN_DEFAULT_MEMORY_BYTES;
@@ -1671,7 +1673,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                                !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                             if (parser_match(parser, TOKEN_KW_DATASET) ||
-                                parser_match(parser, TOKEN_COMA)) {
+                                parser_match(parser, TOKEN_COMA) ||
+                                parser_match(parser, TOKEN_PUNTO_Y_COMA)) {
                                 parser_advance(parser);
                             } else if (parser_match(parser, TOKEN_PAR_IZQ)) {
                                 parser_advance(parser);
@@ -1744,14 +1747,20 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                             parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de condición");
                                         }
                                     }
+                                } else {
+                                    parser_error(parser,
+                                        "Comando desconocido en bloque nombrado");
                                 }
                             } else {
-                                parser_advance(parser);
+                                parser_error(parser,
+                                    "Token desconocido en bloque nombrado");
                             }
                         }
-                        parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                        if (!parser->has_error)
+                            parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
                         Token block_end = parser->previous;
-                        if (filtrar && block_start.type != TOKEN_EOF &&
+                        if (!parser->has_error && filtrar &&
+                            block_start.type != TOKEN_EOF &&
                             block_end.type == TOKEN_LLAVE_DER)
                             (void)ast_set_source_span(filtrar, &block_start, &block_end);
                         if (filtrar && filtrar->child_count > 0) {
