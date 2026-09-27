@@ -160,7 +160,6 @@ static MilenaHIRExpression *hir_build_expression(const ASTNode *node,
                 return NULL;
             }
             break;
-        case AST_EXPRESION_FUNCION:
         case AST_EXPRESION_LLAMADA:
             if (node->resolved_symbol_id == 0) {
                 free(expression);
@@ -1843,7 +1842,6 @@ static bool hir_supports_ast_node(const ASTNode *node) {
         case AST_EXPRESION_OPERACION:
         case AST_EXPRESION_LITERAL:
         case AST_EXPRESION_IDENTIFICADOR:
-        case AST_EXPRESION_FUNCION:
         case AST_EXPRESION_LLAMADA:
         case AST_COMANDO_RETORNAR:
         case AST_DECLARACION_VARIABLE:
