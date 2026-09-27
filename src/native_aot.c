@@ -434,6 +434,7 @@ static MilenaStatus write_linux_x86_64_elf(const char *runtime_error,
 }
 #endif
 
+#if defined(__linux__) && defined(__x86_64__)
 typedef struct {
     unsigned char *bytes;
     size_t length;
@@ -694,6 +695,7 @@ static MilenaStatus write_linux_x86_64_runtime_elf(const MilenaIRProgram *ir,
     free(temporary);
     return MILENA_OK;
 }
+#endif
 
 static MilenaStatus build_from_typed_ir(MilenaCanonicalProgram *program,
                                         const char *output_filename,
