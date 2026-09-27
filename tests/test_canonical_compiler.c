@@ -1635,8 +1635,11 @@ int main(void) {
 
     /* Differential runtime failure: both reference interpreter and verified VM
        reject division by zero; the VM keeps the source expression span. */
+    /* A second function selects module lowering; bytecode is encoded from the
+       typed module, while a single function currently lowers to a body only. */
     const char *runtime_error_source =
-        "funcion dividir(x) { retornar 1 / x; }";
+        "funcion dividir(x) { retornar 1 / x; } "
+        "funcion delegar(x) { retornar dividir(x); }";
     MilenaCanonicalProgram runtime_error_program;
     milena_canonical_program_init(&runtime_error_program);
     CHECK(milena_canonical_program_parse(&runtime_error_program,
