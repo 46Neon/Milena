@@ -459,6 +459,23 @@ static void collect_ast_tokens(Span text, StringSet *set)
     }
 }
 
+/* Builder bodies also mention AST_ enums for payload types/operations; count
+ * only names declared by ASTNodeType when auditing handled AST nodes. */
+static void collect_known_ast_node_tokens(Span text, const StringSet *known_nodes,
+                                          StringSet *nodes)
+{
+    StringSet found;
+    size_t index;
+    set_init(&found);
+    collect_ast_tokens(text, &found);
+    for (index = 0U; index < found.count; ++index) {
+        if (set_contains(known_nodes, found.items[index])) {
+            set_add(nodes, found.items[index]);
+        }
+    }
+    set_free(&found);
+}
+
 static void collect_case_labels(Span body, StringSet *set)
 {
     const char *cursor;
@@ -1138,7 +1155,8 @@ static void check_hir_coverage(void)
     data_builder_body = function_body(implementation,
                                       "static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output) {",
                                       "data HIR builder");
-    collect_ast_tokens(data_builder_body, &data_builder_nodes);
+    collect_known_ast_node_tokens(data_builder_body, &ast_nodes,
+                                  &data_builder_nodes);
     require_equal_sets(&data_represented, &data_builder_nodes,
                        "documented data-HIR subset differs from AST nodes handled by the builder");
 

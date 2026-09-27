@@ -217,53 +217,53 @@ int main(void) {
     parser_init(&parser, &lexer);
     program = parser_parse(&parser);
     assert(program && !parser.has_error);
-    ASTNode *analysis = program->children[0];
-    ASTNode *source = analysis->children[0];
-    ASTNode *column = analysis->children[1];
-    ASTNode *export_node = analysis->children[2];
+    ASTNode *typed_analysis = program->children[0];
+    ASTNode *typed_source_node = typed_analysis->children[0];
+    ASTNode *typed_column_node = typed_analysis->children[1];
+    ASTNode *typed_export_node = typed_analysis->children[2];
     const char *source_span_text = "dataset cargar datos(\"entrada.csv\")";
     const char *column_span_text = "variable importe numerica;";
     const char *export_span_text = "exportar { (\"salida.csv\") }";
-    assert(source->data_source.present && source->data_source.path &&
-           source->data_source.path != source->value &&
-           strcmp(source->data_source.path, "entrada.csv") == 0 &&
-           source->has_source_span &&
-           source->end_offset - source->start_offset == strlen(source_span_text) &&
-           strncmp(structured_data_source + source->start_offset,
+    assert(typed_source_node->data_source.present && typed_source_node->data_source.path &&
+           typed_source_node->data_source.path != typed_source_node->value &&
+           strcmp(typed_source_node->data_source.path, "entrada.csv") == 0 &&
+           typed_source_node->has_source_span &&
+           typed_source_node->end_offset - typed_source_node->start_offset == strlen(source_span_text) &&
+           strncmp(structured_data_source + typed_source_node->start_offset,
                    source_span_text, strlen(source_span_text)) == 0);
-    assert(column->data_column.present && column->data_column.name &&
-           column->data_column.name != column->value &&
-           strcmp(column->data_column.name, "importe") == 0 &&
-           column->data_column.type == AST_DATA_COLUMN_TYPE_NUMERIC &&
-           column->has_source_span &&
-           column->end_offset - column->start_offset == strlen(column_span_text) &&
-           strncmp(structured_data_source + column->start_offset,
+    assert(typed_column_node->data_column.present && typed_column_node->data_column.name &&
+           typed_column_node->data_column.name != typed_column_node->value &&
+           strcmp(typed_column_node->data_column.name, "importe") == 0 &&
+           typed_column_node->data_column.type == AST_DATA_COLUMN_TYPE_NUMERIC &&
+           typed_column_node->has_source_span &&
+           typed_column_node->end_offset - typed_column_node->start_offset == strlen(column_span_text) &&
+           strncmp(structured_data_source + typed_column_node->start_offset,
                    column_span_text, strlen(column_span_text)) == 0);
-    assert(export_node->export_result.present &&
-           export_node->export_result.destination &&
-           export_node->export_result.destination != export_node->value &&
-           strcmp(export_node->export_result.destination, "salida.csv") == 0 &&
-           export_node->has_source_span &&
-           export_node->end_offset - export_node->start_offset ==
+    assert(typed_export_node->export_result.present &&
+           typed_export_node->export_result.destination &&
+           typed_export_node->export_result.destination != typed_export_node->value &&
+           strcmp(typed_export_node->export_result.destination, "salida.csv") == 0 &&
+           typed_export_node->has_source_span &&
+           typed_export_node->end_offset - typed_export_node->start_offset ==
                strlen(export_span_text) &&
-           strncmp(structured_data_source + export_node->start_offset,
+           strncmp(structured_data_source + typed_export_node->start_offset,
                    export_span_text, strlen(export_span_text)) == 0);
     assert(ast_validate(program, &error));
 
-    char saved_path_char = source->value[0];
-    source->value[0] = saved_path_char == 'e' ? 'X' : 'e';
+    char saved_path_char = typed_source_node->value[0];
+    typed_source_node->value[0] = saved_path_char == 'e' ? 'X' : 'e';
     assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
-           error.line == (size_t)source->line);
-    source->value[0] = saved_path_char;
-    ASTDataColumnType saved_column_type = column->data_column.type;
-    column->data_column.type = AST_DATA_COLUMN_TYPE_UNSPECIFIED;
+           error.line == (size_t)typed_source_node->line);
+    typed_source_node->value[0] = saved_path_char;
+    ASTDataColumnType saved_column_type = typed_column_node->data_column.type;
+    typed_column_node->data_column.type = AST_DATA_COLUMN_TYPE_UNSPECIFIED;
     assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
-           error.line == (size_t)column->line);
-    column->data_column.type = saved_column_type;
-    export_node->export_result.present = false;
+           error.line == (size_t)typed_column_node->line);
+    typed_column_node->data_column.type = saved_column_type;
+    typed_export_node->export_result.present = false;
     assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
-           error.line == (size_t)export_node->line);
-    export_node->export_result.present = true;
+           error.line == (size_t)typed_export_node->line);
+    typed_export_node->export_result.present = true;
     assert(ast_validate(program, &error));
     ast_destroy(program); /* releases both typed payloads and legacy strings */
     parser_release(&parser);
