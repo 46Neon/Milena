@@ -45,7 +45,7 @@ No se agregará un parser, un IR de lenguaje o un runtime competidor. La compati
 
 **Gate de salida:** matriz opcode por opcode ejecutada y verde; trazabilidad semántica completa para cada operación admitida; ninguna ruta canónica usa los mapeos heredados con pérdida; guardias estáticas y pruebas E2E verdes en el SHA exacto. Un contrato escrito, una cuarentena o una matriz sin recorrido de ejecución no cierran la fase.
 
-El contrato detallado se mantiene en [`IR_OPCODE_ASSEMBLER_CONTRACT.md`](IR_OPCODE_ASSEMBLER_CONTRACT.md). Sus listas de soporte son cerradas y no amplían el lenguaje por inferencia.
+El contrato detallado de fase 3 se mantiene en `IR_OPCODE_ASSEMBLER_CONTRACT.md` dentro de la PR preparatoria de esa fase; sus listas de soporte son cerradas y no amplían el lenguaje por inferencia.
 
 ## Fase 4 — bytecode portable
 
