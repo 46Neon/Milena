@@ -114,6 +114,12 @@ static MilenaIRModule *make_call_module(void) {
     assert(append_instruction(caller->body, 2u, MILENA_IR_RETURN, 0u,
         MILENA_IR_TYPE_F64, 4u, 0u, 0, 0.0, 0u, 0u));
 
+    callee->body->instructions[0].source_span = (MilenaIRSourceSpan){
+        .line = 1u, .column = 3u, .end_line = 1u, .end_column = 7u,
+        .start_offset = 2u, .end_offset = 6u, .has_source_span = true};
+    caller->body->instructions[3].source_span = (MilenaIRSourceSpan){
+        .line = 4u, .column = 8u, .end_line = 4u, .end_column = 19u,
+        .start_offset = 37u, .end_offset = 48u, .has_source_span = true};
     callee->body->module_context = module;
     caller->body->module_context = module;
     return module;
@@ -190,6 +196,8 @@ static void test_roundtrip_module_with_direct_call(void) {
     assert(milena_bytecode_encode_module(module, &encoded, &encoded_size,
                                           error, sizeof(error)));
     assert(encoded != NULL && encoded_size > 16u);
+    assert(encoded[4] == MILENA_BYTECODE_VERSION_MAJOR && encoded[5] == 0u &&
+           encoded[6] == MILENA_BYTECODE_VERSION_MINOR && encoded[7] == 0u);
     assert(milena_bytecode_verify(encoded, encoded_size, error, sizeof(error)));
     assert(milena_bytecode_decode_module(encoded, encoded_size, &decoded,
                                          error, sizeof(error)));
@@ -200,6 +208,18 @@ static void test_roundtrip_module_with_direct_call(void) {
     assert(decoded->functions[0].body->parameters[2].value_id == 3u);
     assert(decoded->functions[1].body->instructions[3].opcode == MILENA_IR_CALL);
     assert(decoded->functions[1].body->instructions[3].integer_immediate == 100);
+    assert(decoded->functions[0].body->instructions[0].source_span.has_source_span);
+    assert(decoded->functions[0].body->instructions[0].source_span.line == 1u);
+    assert(decoded->functions[0].body->instructions[0].source_span.column == 3u);
+    assert(decoded->functions[0].body->instructions[0].source_span.end_column == 7u);
+    assert(decoded->functions[0].body->instructions[0].source_span.start_offset == 2u);
+    assert(decoded->functions[0].body->instructions[0].source_span.end_offset == 6u);
+    assert(decoded->functions[1].body->instructions[3].source_span.has_source_span);
+    assert(decoded->functions[1].body->instructions[3].source_span.line == 4u);
+    assert(decoded->functions[1].body->instructions[3].source_span.column == 8u);
+    assert(decoded->functions[1].body->instructions[3].source_span.end_column == 19u);
+    assert(decoded->functions[1].body->instructions[3].source_span.start_offset == 37u);
+    assert(decoded->functions[1].body->instructions[3].source_span.end_offset == 48u);
     assert(decoded->functions[1].body->instructions[3].call_argument_offset == 0u);
     assert(decoded->functions[1].body->instructions[3].call_argument_count == 3u);
     assert(decoded->functions[1].body->call_argument_count == 3u);
@@ -231,6 +251,29 @@ static void test_roundtrip_module_with_direct_call(void) {
     milena_ir_module_destroy(module);
 }
 
+static void test_v1_0_compatibility_defaults_empty_spans(void) {
+    char error[256] = {0};
+    uint8_t *encoded = NULL;
+    uint8_t *legacy = NULL;
+    size_t encoded_size = 0, legacy_size = 0;
+    MilenaIRModule *module = make_call_module();
+    MilenaIRModule *decoded = NULL;
+    assert(milena_bytecode_encode_module(module, &encoded, &encoded_size,
+                                         error, sizeof(error)));
+    legacy = downgrade_v1_1_to_v1_0(encoded, encoded_size, &legacy_size);
+    assert(legacy_size < encoded_size && legacy[6] == 0u && legacy[7] == 0u);
+    assert(milena_bytecode_decode_module(legacy, legacy_size, &decoded,
+                                         error, sizeof(error)));
+    assert(decoded && decoded->function_count == 2u);
+    assert(!decoded->functions[0].body->instructions[0].source_span.has_source_span);
+    assert(!decoded->functions[1].body->instructions[3].source_span.has_source_span);
+    assert(decoded->functions[0].body->instructions[0].source_span.line == 0u);
+    milena_ir_module_destroy(decoded);
+    milena_ir_module_destroy(module);
+    free(legacy);
+    free(encoded);
+}
+
 static void expect_invalid(const uint8_t *bytes, size_t size) {
     char error[256] = {0};
     MilenaIRModule *module = NULL;
@@ -244,6 +287,91 @@ static void expect_invalid(const uint8_t *bytes, size_t size) {
 static void set_u32_le(uint8_t *bytes, size_t offset, uint32_t value) {
     for (size_t i = 0; i < 4u; ++i)
         bytes[offset + i] = (uint8_t)(value >> (i * 8u));
+}
+
+static uint32_t get_u32_le(const uint8_t *bytes, size_t offset) {
+    return (uint32_t)bytes[offset] |
+           ((uint32_t)bytes[offset + 1u] << 8) |
+           ((uint32_t)bytes[offset + 2u] << 16) |
+           ((uint32_t)bytes[offset + 3u] << 24);
+}
+
+static size_t first_instruction_offset_v1_1(const uint8_t *bytes, size_t size) {
+    size_t cursor = 16u;
+    assert(size >= 20u && get_u32_le(bytes, cursor) > 0u);
+    cursor += 4u;
+    uint32_t name_length = get_u32_le(bytes, cursor + 4u);
+    assert((size_t)name_length <= size - cursor - 8u);
+    cursor += 8u + (size_t)name_length;
+    uint32_t function_parameter_count = get_u32_le(bytes, cursor);
+    assert((size_t)function_parameter_count <= size - cursor - 5u);
+    cursor += 4u + 1u + (size_t)function_parameter_count;
+
+    uint32_t blocks = get_u32_le(bytes, cursor);
+    uint32_t block_parameters = get_u32_le(bytes, cursor + 4u);
+    uint32_t edges = get_u32_le(bytes, cursor + 8u);
+    uint32_t call_arguments = get_u32_le(bytes, cursor + 12u);
+    uint32_t instructions = get_u32_le(bytes, cursor + 16u);
+    cursor += 21u; /* Five counts and the function return type. */
+    uint32_t signature_parameters = get_u32_le(bytes, cursor);
+    cursor += 4u + (size_t)signature_parameters;
+    cursor += (size_t)blocks * 24u +
+              (size_t)block_parameters * 12u +
+              (size_t)edges * 16u +
+              (size_t)call_arguments * 4u;
+    assert((size_t)instructions <= (size - cursor) / 104u);
+    return cursor;
+}
+
+static void set_payload_length(uint8_t *bytes, size_t total_size);
+
+static uint8_t *downgrade_v1_1_to_v1_0(const uint8_t *bytes, size_t size,
+                                       size_t *legacy_size_out) {
+    size_t input = 16u;
+    size_t output = 16u;
+    uint32_t function_count = get_u32_le(bytes, input);
+    uint8_t *legacy = (uint8_t *)malloc(size);
+    assert(legacy != NULL && size >= 20u);
+    memcpy(legacy, bytes, 16u);
+    input += 4u;
+    for (uint32_t function_index = 0; function_index < function_count;
+         ++function_index) {
+        size_t function_start = input;
+        uint32_t name_length = get_u32_le(bytes, input + 4u);
+        input += 8u + (size_t)name_length;
+        uint32_t function_parameter_count = get_u32_le(bytes, input);
+        input += 4u + 1u + (size_t)function_parameter_count;
+
+        uint32_t blocks = get_u32_le(bytes, input);
+        uint32_t block_parameters = get_u32_le(bytes, input + 4u);
+        uint32_t edges = get_u32_le(bytes, input + 8u);
+        uint32_t call_arguments = get_u32_le(bytes, input + 12u);
+        uint32_t instructions = get_u32_le(bytes, input + 16u);
+        input += 21u;
+        uint32_t signature_parameters = get_u32_le(bytes, input);
+        input += 4u + (size_t)signature_parameters;
+        input += (size_t)blocks * 24u +
+                 (size_t)block_parameters * 12u +
+                 (size_t)edges * 16u +
+                 (size_t)call_arguments * 4u;
+        size_t instruction_start = input;
+        assert(instruction_start >= function_start && instruction_start <= size);
+        memcpy(legacy + output, bytes + function_start,
+               instruction_start - function_start);
+        output += instruction_start - function_start;
+        for (uint32_t i = 0; i < instructions; ++i) {
+            assert(input <= size && size - input >= 104u);
+            memcpy(legacy + output, bytes + input, 52u);
+            input += 104u;
+            output += 52u;
+        }
+    }
+    assert(input == size && output <= size);
+    legacy[6] = 0u;
+    legacy[7] = 0u;
+    set_payload_length(legacy, output);
+    *legacy_size_out = output;
+    return legacy;
 }
 
 static void set_payload_length(uint8_t *bytes, size_t total_size) {
@@ -287,6 +415,10 @@ static void test_rejects_bad_headers_and_lengths(void) {
     expect_invalid(mutated, size);
 
     memcpy(mutated, bytes, size);
+    mutated[6] = (uint8_t)(MILENA_BYTECODE_VERSION_MINOR + 1u);
+    expect_invalid(mutated, size);
+
+    memcpy(mutated, bytes, size);
     mutated[8] = 1u; /* unsupported header flags */
     expect_invalid(mutated, size);
 
@@ -323,6 +455,23 @@ static void test_rejects_bad_headers_and_lengths(void) {
         24u + 3u * 12u;
     assert(first_opcode_offset + 1u < size);
     mutated[first_opcode_offset] = 0xffu;
+    expect_invalid(mutated, size);
+
+    const size_t first_instruction_v1_1 =
+        first_instruction_offset_v1_1(bytes, size);
+    const size_t source_span_offset =
+        first_instruction_v1_1 + 52u; /* v1.0 instruction prefix */
+    const size_t source_span_flag_offset = source_span_offset + 48u;
+    memcpy(mutated, bytes, size);
+    mutated[source_span_flag_offset] = 2u;
+    expect_invalid(mutated, size);
+
+    memcpy(mutated, bytes, size);
+    mutated[source_span_offset] = 0u; /* A present span may not have line zero. */
+    expect_invalid(mutated, size);
+
+    memcpy(mutated, bytes, size);
+    mutated[source_span_flag_offset] = 0u; /* Absent spans must be all-zero. */
     expect_invalid(mutated, size);
 
     free(mutated);
@@ -548,6 +697,7 @@ int main(void) {
     test_original_vm_lifecycle();
     test_legacy_vm_fails_closed_for_unavailable_dataset_ops();
     test_roundtrip_module_with_direct_call();
+    test_v1_0_compatibility_defaults_empty_spans();
     test_rejects_bad_headers_and_lengths();
     test_rejects_signature_mismatch_and_invalid_source_module();
     test_vm_branch_ssa_merge();

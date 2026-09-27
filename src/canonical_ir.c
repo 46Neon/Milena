@@ -64,6 +64,19 @@ static bool ir_fail(char *error, size_t capacity, const char *format, ...) {
     return false;
 }
 
+static bool ir_source_span_valid(const MilenaIRSourceSpan *span) {
+    if (!span) return false;
+    if (!span->has_source_span)
+        return span->line == 0 && span->column == 0 && span->end_line == 0 &&
+               span->end_column == 0 && span->start_offset == 0 &&
+               span->end_offset == 0;
+    if (span->line == 0 || span->column == 0 || span->end_line == 0 ||
+        span->end_column == 0 || span->end_line < span->line ||
+        span->end_offset < span->start_offset)
+        return false;
+    return span->end_line != span->line || span->end_column >= span->column;
+}
+
 static bool ir_reserve_instructions(MilenaIRProgram *program) {
     MilenaIRInstruction *grown;
     size_t capacity;
@@ -453,6 +466,8 @@ bool milena_ir_program_validate(const MilenaIRProgram *program, char *error,
             if (ins->block_id != block->id ||
                 ins->opcode < MILENA_IR_CONST_I64 || ins->opcode >= MILENA_IR_OPCODE_COUNT)
                 IR_REJECT("unsupported or malformed opcode/instruction at %zu", ii);
+            if (!ir_source_span_valid(&ins->source_span))
+                IR_REJECT("invalid source span at IR instruction %zu", ii);
             if (ins->opcode != MILENA_IR_CALL &&
                 (ins->call_argument_offset || ins->call_argument_count))
                 IR_REJECT("non-call instruction contains call argument metadata");
@@ -775,6 +790,43 @@ static bool ir_hir_value_type(MilenaHIRValueType source, MilenaIRType *target) {
     }
 }
 
+static bool ir_size_to_u64(size_t value, uint64_t *converted) {
+    uint64_t narrowed;
+    if (!converted) return false;
+    narrowed = (uint64_t)value;
+    if ((size_t)narrowed != value) return false;
+    *converted = narrowed;
+    return true;
+}
+
+static bool ir_hir_source_span_to_ir(const MilenaHIRSourceSpan *source,
+                                     MilenaIRSourceSpan *target) {
+    if (!target) return false;
+    memset(target, 0, sizeof(*target));
+    if (!source || !source->has_source_span) return true;
+    if (!ir_size_to_u64(source->line, &target->line) ||
+        !ir_size_to_u64(source->column, &target->column) ||
+        !ir_size_to_u64(source->end_line, &target->end_line) ||
+        !ir_size_to_u64(source->end_column, &target->end_column) ||
+        !ir_size_to_u64(source->start_offset, &target->start_offset) ||
+        !ir_size_to_u64(source->end_offset, &target->end_offset))
+        return false;
+    target->has_source_span = true;
+    return ir_source_span_valid(target);
+}
+
+static bool ir_scalar_attach_last_span(MilenaIRProgram *program,
+                                      const MilenaHIRSourceSpan *source,
+                                      char *error, size_t error_capacity) {
+    MilenaIRSourceSpan converted;
+    if (!program || !program->count || !program->instructions ||
+        !ir_hir_source_span_to_ir(source, &converted))
+        return ir_fail(error, error_capacity,
+                       "invalid or unrepresentable HIR source span");
+    program->instructions[program->count - 1].source_span = converted;
+    return true;
+}
+
 static size_t ir_scalar_binding_index(const IRScalarBinding *bindings,
                                       size_t count, size_t symbol_id) {
     if (!symbol_id) return SIZE_MAX;
@@ -798,6 +850,7 @@ static bool ir_scalar_append_value(MilenaIRProgram *program, uint32_t block_id,
                                    int64_t integer_immediate,
                                    double float_immediate,
                                    uint32_t *next_value, uint32_t *result,
+                                   const MilenaHIRSourceSpan *source_span,
                                    char *error, size_t error_capacity) {
     if (!ir_scalar_next_value(next_value, result, error, error_capacity))
         return false;
@@ -806,7 +859,7 @@ static bool ir_scalar_append_value(MilenaIRProgram *program, uint32_t block_id,
                                      float_immediate, 0, 0))
         return ir_fail(error, error_capacity,
                        "could not append typed scalar IR instruction");
-    return true;
+    return ir_scalar_attach_last_span(program, source_span, error, error_capacity);
 }
 
 static bool ir_scalar_lower_expression(MilenaIRProgram *program, uint32_t block_id,
@@ -827,11 +880,11 @@ static bool ir_scalar_lower_expression(MilenaIRProgram *program, uint32_t block_
                                    "non-finite scalar literal is not supported");
                 return ir_scalar_append_value(program, block_id, MILENA_IR_CONST_F64, MILENA_IR_TYPE_F64,
                     0, 0, 0, expression->as.number, next_value, result,
-                    error, error_capacity);
+                    &expression->span, error, error_capacity);
             }
             return ir_scalar_append_value(program, block_id, MILENA_IR_CONST_BOOL, MILENA_IR_TYPE_BOOL,
                 0, 0, expression->as.boolean ? 1 : 0, 0.0, next_value, result,
-                error, error_capacity);
+                &expression->span, error, error_capacity);
         case MILENA_HIR_EXPR_VARIABLE: {
             size_t index = ir_scalar_binding_index(bindings, binding_count,
                                                     expression->resolved_symbol_id);
@@ -883,7 +936,7 @@ static bool ir_scalar_lower_expression(MilenaIRProgram *program, uint32_t block_
                                "scalar HIR operator result type is inconsistent");
             return ir_scalar_append_value(program, block_id, opcode,
                 *result_type, left_id, right_id, 0, 0.0, next_value, result,
-                error, error_capacity);
+                &expression->span, error, error_capacity);
         }
         case MILENA_HIR_EXPR_CALL: {
             const MilenaIRModule *module = program->module_context;
@@ -942,6 +995,11 @@ static bool ir_scalar_lower_expression(MilenaIRProgram *program, uint32_t block_
                 return ir_fail(error, error_capacity,
                                "could not append typed direct call");
             }
+            if (!ir_scalar_attach_last_span(program, &expression->span,
+                                            error, error_capacity)) {
+                free(argument_ids);
+                return false;
+            }
             free(argument_ids);
             *result = (*next_value)++;
             *result_type = expected_return;
@@ -974,7 +1032,8 @@ static bool ir_scalar_lower_return_branch(
             value_type, value_id, 0, 0, 0.0, 0, 0))
         return ir_fail(error, error_capacity,
                        "could not append conditional-arm return");
-    return true;
+    return ir_scalar_attach_last_span(program, &statement->span,
+                                      error, error_capacity);
 }
 
 static bool ir_scalar_lower_assignment_sequence(
@@ -1086,10 +1145,14 @@ static bool ir_scalar_lower_assignment_sequence(
             if (!milena_ir_block_append_instruction(program, *current_block_id,
                     MILENA_IR_COND_BRANCH, 0, MILENA_IR_TYPE_VOID, condition_id,
                     0, 0, 0.0, then_block_id, else_block_id) ||
+                !ir_scalar_attach_last_span(program, &statement->span,
+                                            error, error_capacity) ||
                 !milena_ir_program_add_block(program, then_block_id)) {
                 free(then_bindings); free(else_bindings);
-                return ir_fail(error, error_capacity,
-                    "could not create nested typed scalar conditional blocks");
+                if (!error || !error[0])
+                    ir_fail(error, error_capacity,
+                        "could not create nested typed scalar conditional blocks");
+                return false;
             }
             then_end_block_id = then_block_id;
             if (!ir_scalar_lower_assignment_sequence(program,
@@ -1101,6 +1164,8 @@ static bool ir_scalar_lower_assignment_sequence(
                 !milena_ir_block_append_instruction(program, then_end_block_id,
                     MILENA_IR_BRANCH, 0, MILENA_IR_TYPE_VOID, 0, 0, 0, 0.0,
                     merge_block_id, 0) ||
+                !ir_scalar_attach_last_span(program, &statement->span,
+                                            error, error_capacity) ||
                 !milena_ir_program_add_block(program, else_block_id)) {
                 free(then_bindings); free(else_bindings);
                 if (!error || !error[0])
@@ -1118,6 +1183,8 @@ static bool ir_scalar_lower_assignment_sequence(
                 !milena_ir_block_append_instruction(program, else_end_block_id,
                     MILENA_IR_BRANCH, 0, MILENA_IR_TYPE_VOID, 0, 0, 0, 0.0,
                     merge_block_id, 0) ||
+                !ir_scalar_attach_last_span(program, &statement->span,
+                                            error, error_capacity) ||
                 !milena_ir_program_add_block(program, merge_block_id)) {
                 free(then_bindings); free(else_bindings);
                 if (!error || !error[0])
@@ -1374,8 +1441,11 @@ static bool ir_program_lower_scalar_function_body_context(
                     &next_value, &return_value,
                     &lowered_return_type, error, error_capacity)) goto cleanup;
             if (!milena_ir_block_append_instruction(lowered, current_block_id,
-                    MILENA_IR_RETURN, 0, lowered_return_type, return_value, 0, 0, 0.0, 0, 0)) {
-                ir_fail(error, error_capacity, "could not append scalar IR return");
+                    MILENA_IR_RETURN, 0, lowered_return_type, return_value, 0, 0, 0.0, 0, 0) ||
+                !ir_scalar_attach_last_span(lowered, &statement->span,
+                                            error, error_capacity)) {
+                if (!error || !error[0])
+                    ir_fail(error, error_capacity, "could not append scalar IR return");
                 goto cleanup;
             }
             saw_return = true;
@@ -1402,9 +1472,12 @@ static bool ir_program_lower_scalar_function_body_context(
             }
             if (!milena_ir_block_append_instruction(lowered, current_block_id,
                     MILENA_IR_COND_BRANCH, 0, MILENA_IR_TYPE_VOID, condition_id,
-                    0, 0, 0.0, then_block_id, else_block_id)) {
-                ir_fail(error, error_capacity,
-                        "could not append scalar conditional branch");
+                    0, 0, 0.0, then_block_id, else_block_id) ||
+                !ir_scalar_attach_last_span(lowered, &statement->span,
+                                            error, error_capacity)) {
+                if (!error || !error[0])
+                    ir_fail(error, error_capacity,
+                            "could not append scalar conditional branch");
                 goto cleanup;
             }
             if (!milena_ir_program_add_block(lowered, then_block_id) ||
@@ -1483,9 +1556,12 @@ static bool ir_program_lower_scalar_function_body_context(
             if (!milena_ir_block_append_instruction(lowered, current_block_id,
                     MILENA_IR_COND_BRANCH, 0, MILENA_IR_TYPE_VOID, condition_id,
                     0, 0, 0.0, then_block_id, else_block_id) ||
+                !ir_scalar_attach_last_span(lowered, &statement->span,
+                                            error, error_capacity) ||
                 !milena_ir_program_add_block(lowered, then_block_id)) {
                 free(then_bindings); free(else_bindings);
-                ir_fail(error, error_capacity,
+                if (!error || !error[0])
+                    ir_fail(error, error_capacity,
                         "could not create typed scalar conditional branch blocks");
                 goto cleanup;
             }
@@ -1499,6 +1575,8 @@ static bool ir_program_lower_scalar_function_body_context(
                 !milena_ir_block_append_instruction(lowered, then_end_block_id,
                     MILENA_IR_BRANCH, 0, MILENA_IR_TYPE_VOID, 0, 0, 0, 0.0,
                     merge_block_id, 0) ||
+                !ir_scalar_attach_last_span(lowered, &statement->span,
+                                            error, error_capacity) ||
                 !milena_ir_program_add_block(lowered, else_block_id)) {
                 free(then_bindings); free(else_bindings);
                 if (!error || !error[0])
@@ -1516,6 +1594,8 @@ static bool ir_program_lower_scalar_function_body_context(
                 !milena_ir_block_append_instruction(lowered, else_end_block_id,
                     MILENA_IR_BRANCH, 0, MILENA_IR_TYPE_VOID, 0, 0, 0, 0.0,
                     merge_block_id, 0) ||
+                !ir_scalar_attach_last_span(lowered, &statement->span,
+                                            error, error_capacity) ||
                 !milena_ir_program_add_block(lowered, merge_block_id)) {
                 free(then_bindings); free(else_bindings);
                 if (!error || !error[0])

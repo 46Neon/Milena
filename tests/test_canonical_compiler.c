@@ -27,6 +27,22 @@ static const ASTNode *find_aggregate_metric(const ASTNode *node,
         } \
     } while (0)
 
+static bool ir_span_matches_hir(const MilenaIRSourceSpan *ir_span,
+                                const MilenaHIRSourceSpan *hir_span) {
+    if (!ir_span || !hir_span ||
+        ir_span->has_source_span != hir_span->has_source_span) return false;
+    if (!hir_span->has_source_span)
+        return ir_span->line == 0 && ir_span->column == 0 &&
+               ir_span->end_line == 0 && ir_span->end_column == 0 &&
+               ir_span->start_offset == 0 && ir_span->end_offset == 0;
+    return ir_span->line == (uint64_t)hir_span->line &&
+           ir_span->column == (uint64_t)hir_span->column &&
+           ir_span->end_line == (uint64_t)hir_span->end_line &&
+           ir_span->end_column == (uint64_t)hir_span->end_column &&
+           ir_span->start_offset == (uint64_t)hir_span->start_offset &&
+           ir_span->end_offset == (uint64_t)hir_span->end_offset;
+}
+
 static bool run_vm_case(const MilenaCanonicalProgram *program,
                         const uint8_t *bytecode, size_t bytecode_size,
                         const char *function_name, const double *numeric_arguments,
@@ -298,6 +314,26 @@ int main(void) {
           typed_body->instructions[4].operand1_id ==
               typed_body->instructions[2].result_id,
           "reasignación y usos posteriores deben referenciar el valor SSA vigente");
+    {
+        const MilenaHIRFunction *hir_calculate = &program.hir->functions[0];
+        const MilenaHIRExpression *assignment_expression =
+            hir_calculate->body[1]->as.expression;
+        const MilenaHIRExpression *return_expression =
+            hir_calculate->body[2]->as.expression;
+        CHECK(ir_span_matches_hir(&typed_body->instructions[0].source_span,
+                  &hir_calculate->body[0]->as.expression->span) &&
+              ir_span_matches_hir(&typed_body->instructions[1].source_span,
+                  &assignment_expression->as.binary.right->span) &&
+              ir_span_matches_hir(&typed_body->instructions[2].source_span,
+                  &assignment_expression->span) &&
+              ir_span_matches_hir(&typed_body->instructions[3].source_span,
+                  &return_expression->as.binary.right->span) &&
+              ir_span_matches_hir(&typed_body->instructions[4].source_span,
+                  &return_expression->span) &&
+              ir_span_matches_hir(&typed_body->instructions[5].source_span,
+                  &hir_calculate->body[2]->span),
+              "la IR debe conservar spans de literales, operadores y retorno desde HIR");
+    }
     typed_body = NULL; /* The prior pointer is invalidated by successful replacement. */
     CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
               MILENA_OK && program.typed_ir != NULL &&
@@ -346,6 +382,16 @@ int main(void) {
           typed_body->instructions[4].opcode == MILENA_IR_RETURN &&
           typed_body->instructions[6].opcode == MILENA_IR_RETURN,
           "si/sino debe bajar a CFG tipado con retornos en ambas ramas");
+    {
+        const MilenaHIRStatement *hir_if = program.hir->functions[0].body[1];
+        CHECK(ir_span_matches_hir(&typed_body->instructions[3].source_span,
+                  &hir_if->span) &&
+              ir_span_matches_hir(&typed_body->instructions[4].source_span,
+                  &hir_if->as.conditional.then_body[0]->span) &&
+              ir_span_matches_hir(&typed_body->instructions[6].source_span,
+                  &hir_if->as.conditional.else_body[0]->span),
+              "ramas y retornos de IR deben conservar sus spans HIR originales");
+    }
     milena_ir_program_destroy(typed_body);
     milena_canonical_program_release(&program);
 
@@ -1180,7 +1226,9 @@ int main(void) {
               direct_call->call_argument_offset] == 1 &&
           program.typed_module->functions[1].body->call_arguments[
               direct_call->call_argument_offset + 1] == 1 &&
-          direct_call->result_type == MILENA_IR_TYPE_F64,
+          direct_call->result_type == MILENA_IR_TYPE_F64 &&
+          ir_span_matches_hir(&direct_call->source_span,
+              &program.hir->functions[1].body[1]->as.expression->span),
           "una llamada directa debe enlazar symbol ID y todo el vector SSA tipado");
     {
         const int64_t saved_target = direct_call->integer_immediate;

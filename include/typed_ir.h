@@ -42,6 +42,18 @@ typedef enum {
     MILENA_IR_TYPE_VOID
 } MilenaIRType;
 
+/* Value-owned source coordinates; no AST/HIR pointer crosses the IR boundary.
+ * Wire serialization uses six fixed-width u64 fields plus a canonical flag. */
+typedef struct MilenaIRSourceSpan {
+    uint64_t line;
+    uint64_t column;
+    uint64_t end_line;
+    uint64_t end_column;
+    uint64_t start_offset;
+    uint64_t end_offset;
+    bool has_source_span;
+} MilenaIRSourceSpan;
+
 typedef struct MilenaIRInstruction {
     MilenaIROpCode opcode;
     MilenaIRType result_type;
@@ -56,6 +68,7 @@ typedef struct MilenaIRInstruction {
     double float_immediate;
     uint32_t target_true;
     uint32_t target_false;
+    MilenaIRSourceSpan source_span;
 } MilenaIRInstruction;
 
 typedef struct MilenaIRBasicBlock {

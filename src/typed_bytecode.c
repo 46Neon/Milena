@@ -18,7 +18,10 @@
 #define BYTECODE_PARAMETER_RECORD_SIZE 12u
 #define BYTECODE_EDGE_RECORD_SIZE 16u
 #define BYTECODE_CALL_ARGUMENT_RECORD_SIZE 4u
-#define BYTECODE_INSTRUCTION_RECORD_SIZE 52u
+#define BYTECODE_INSTRUCTION_RECORD_SIZE_V1_0 52u
+#define BYTECODE_INSTRUCTION_SPAN_WIRE_SIZE 52u
+#define BYTECODE_INSTRUCTION_RECORD_SIZE_V1_1 \
+    (BYTECODE_INSTRUCTION_RECORD_SIZE_V1_0 + BYTECODE_INSTRUCTION_SPAN_WIRE_SIZE)
 
 static const uint8_t bytecode_magic[4] = {'M', 'L', 'B', 'C'};
 
@@ -290,7 +293,15 @@ static bool encode_program(ByteWriter *writer, const MilenaIRProgram *program) {
             !writer_u64(writer, encode_signed_i64(instruction->integer_immediate)) ||
             !write_float64(writer, instruction->float_immediate) ||
             !writer_u32(writer, instruction->target_true) ||
-            !writer_u32(writer, instruction->target_false)) return false;
+            !writer_u32(writer, instruction->target_false) ||
+            !writer_u64(writer, instruction->source_span.line) ||
+            !writer_u64(writer, instruction->source_span.column) ||
+            !writer_u64(writer, instruction->source_span.end_line) ||
+            !writer_u64(writer, instruction->source_span.end_column) ||
+            !writer_u64(writer, instruction->source_span.start_offset) ||
+            !writer_u64(writer, instruction->source_span.end_offset) ||
+            !writer_u8(writer, instruction->source_span.has_source_span ? 1u : 0u) ||
+            !writer_zeroes(writer, 3u)) return false;
     }
     return true;
 }
@@ -403,8 +414,12 @@ static bool read_name(ByteReader *reader, char **name) {
     return true;
 }
 
-static bool decode_program(ByteReader *reader, MilenaIRProgram *program) {
+static bool decode_program(ByteReader *reader, MilenaIRProgram *program,
+                           uint16_t version_minor) {
     uint32_t block_count, parameter_count, edge_count;
+    const size_t instruction_record_size = version_minor == 0u ?
+        BYTECODE_INSTRUCTION_RECORD_SIZE_V1_0 :
+        BYTECODE_INSTRUCTION_RECORD_SIZE_V1_1;
     uint32_t call_argument_count, instruction_count;
     uint32_t signature_parameter_count;
     MilenaIRType return_type;
@@ -420,7 +435,7 @@ static bool decode_program(ByteReader *reader, MilenaIRProgram *program) {
                       &edge_count, "edge argument") ||
         !reader_count(reader, BYTECODE_MAX_ITEMS, BYTECODE_CALL_ARGUMENT_RECORD_SIZE,
                       &call_argument_count, "call argument") ||
-        !reader_count(reader, BYTECODE_MAX_ITEMS, BYTECODE_INSTRUCTION_RECORD_SIZE,
+        !reader_count(reader, BYTECODE_MAX_ITEMS, instruction_record_size,
                       &instruction_count, "instruction")) return false;
     if (instruction_count == 0)
         return bytecode_error(reader->error, reader->error_capacity,
@@ -460,7 +475,7 @@ static bool decode_program(ByteReader *reader, MilenaIRProgram *program) {
         (size_t)parameter_count * BYTECODE_PARAMETER_RECORD_SIZE +
         (size_t)edge_count * BYTECODE_EDGE_RECORD_SIZE +
         (size_t)call_argument_count * BYTECODE_CALL_ARGUMENT_RECORD_SIZE +
-        (size_t)instruction_count * BYTECODE_INSTRUCTION_RECORD_SIZE;
+        (size_t)instruction_count * instruction_record_size;
     if (encoded_array_bytes > reader->length - reader->position)
         return bytecode_error(reader->error, reader->error_capacity,
                               "typed IR arrays exceed remaining bytecode length");
@@ -531,7 +546,10 @@ static bool decode_program(ByteReader *reader, MilenaIRProgram *program) {
         uint32_t call_argument_offset, instruction_call_argument_count;
         uint16_t opcode;
         uint8_t raw_type, reserved;
+        uint8_t has_source_span;
         uint64_t integer_bits;
+        uint64_t span_line, span_column, span_end_line, span_end_column;
+        uint64_t span_start_offset, span_end_offset;
         if (!reader_u16(reader, &opcode) || !reader_u8(reader, &raw_type) ||
             !reader_u8(reader, &reserved) || !reader_u32(reader, &instruction->result_id) ||
             !reader_u32(reader, &instruction->operand1_id) ||
@@ -543,6 +561,22 @@ static bool decode_program(ByteReader *reader, MilenaIRProgram *program) {
             !read_float64(reader, &instruction->float_immediate) ||
             !reader_u32(reader, &instruction->target_true) ||
             !reader_u32(reader, &instruction->target_false)) return false;
+        if (version_minor >= 1u) {
+            if (!reader_u64(reader, &span_line) ||
+                !reader_u64(reader, &span_column) ||
+                !reader_u64(reader, &span_end_line) ||
+                !reader_u64(reader, &span_end_column) ||
+                !reader_u64(reader, &span_start_offset) ||
+                !reader_u64(reader, &span_end_offset) ||
+                !reader_u8(reader, &has_source_span) ||
+                !reader_reserved_zeroes(reader, 3u)) return false;
+            if (has_source_span > 1u)
+                return bytecode_error(reader->error, reader->error_capacity,
+                                      "invalid source span flag in typed bytecode");
+            instruction->source_span = (MilenaIRSourceSpan){
+                span_line, span_column, span_end_line, span_end_column,
+                span_start_offset, span_end_offset, has_source_span != 0u};
+        }
         if (reserved != 0u || opcode >= MILENA_IR_OPCODE_COUNT ||
             raw_type <= MILENA_IR_TYPE_INVALID || raw_type > MILENA_IR_TYPE_VOID)
             return bytecode_error(reader->error, reader->error_capacity,
@@ -581,7 +615,7 @@ bool milena_bytecode_decode_module(const uint8_t *bytes, size_t size,
         return bytecode_error(error, error_capacity,
                               "invalid or truncated typed bytecode header");
     if (major != MILENA_BYTECODE_VERSION_MAJOR ||
-        minor != MILENA_BYTECODE_VERSION_MINOR || flags != 0u)
+        minor > MILENA_BYTECODE_VERSION_MINOR || flags != 0u)
         return bytecode_error(error, error_capacity,
                               "unsupported typed bytecode version or flags");
     if (payload_size != size - BYTECODE_HEADER_SIZE)
@@ -630,7 +664,7 @@ bool milena_bytecode_decode_module(const uint8_t *bytes, size_t size,
                            "out of memory allocating typed IR function body");
             goto fail;
         }
-        if (!decode_program(&reader, function->body)) goto fail;
+        if (!decode_program(&reader, function->body, minor)) goto fail;
         if (function->body->signature.parameter_count != function->parameter_count ||
             function->body->signature.return_type != function->return_type) {
             bytecode_error(error, error_capacity,
