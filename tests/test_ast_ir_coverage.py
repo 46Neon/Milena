@@ -106,6 +106,26 @@ class ASTIRCoverageCheckerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("full evidence must cover exactly all required stages", result.stderr)
 
+    def test_documented_syntax_evidence_is_classified_as_documented(self) -> None:
+        required_sources = {
+            "AST_COMANDO_SST": ("docs/MILENA_ANALYSIS_LANGUAGE.md",),
+            "AST_STREAM_FILTER": ("docs/MILENA_ANALYSIS_LANGUAGE.md",),
+            "AST_BLOQUE_UNIR": ("docs/JOIN_RESOURCE_LIMITS.md",),
+            "AST_COMANDO_DERECHA": ("docs/JOIN_RESOURCE_LIMITS.md",),
+            "AST_COMANDO_CLAVE": ("docs/JOIN_RESOURCE_LIMITS.md",),
+        }
+        records = {record["ast_variant"]: record for record in self.ledger["variants"]}
+        for name, sources in required_sources.items():
+            with self.subTest(ast_variant=name):
+                record = records[name]
+                self.assertEqual(record["language_contract_status"],
+                                 "documented_syntax_contract")
+                self.assertEqual(record["parser_status"],
+                                 "parser_reachable_documented_contract")
+                for source in sources:
+                    self.assertIn(source, record["inventory_evidence"])
+                    self.assertTrue((ROOT / source).is_file())
+
     def test_duplicate_enum_member_is_rejected(self) -> None:
         header = AST_HEADER.read_text(encoding="utf-8")
         header = header.replace("    AST_BLOQUE_ANALISIS,", "    AST_PROGRAMA,", 1)

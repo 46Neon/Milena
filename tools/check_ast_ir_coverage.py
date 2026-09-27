@@ -12,8 +12,8 @@ from typing import Any
 
 EXPECTED_VARIANTS = 72
 EXPECTED_CONTRACT_COUNTS = {
-    "documented_syntax_contract": 47,
-    "unresolved_public_contract": 21,
+    "documented_syntax_contract": 52,
+    "unresolved_public_contract": 16,
     "unresolved_enum_only_legacy_status": 4,
 }
 EXPECTED_PARTIAL = {
