@@ -1698,6 +1698,69 @@ int main(void) {
     interpreter_destroy(&reference_error_interpreter);
     milena_canonical_program_release(&reference_error_program);
 
+    /* Differential runtime failure for finite inputs whose multiplication
+       overflows: both runtimes reject it, and the VM preserves the span. */
+    const char *overflow_source =
+        "funcion multiplicar(x) { retornar x * 2; } "
+        "funcion delegar(x) { retornar multiplicar(x); }";
+    MilenaCanonicalProgram overflow_program;
+    milena_canonical_program_init(&overflow_program);
+    CHECK(milena_canonical_program_parse(&overflow_program, overflow_source,
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&overflow_program,
+          &error) == MILENA_OK && overflow_program.typed_module,
+          error.message);
+    uint8_t *overflow_bytecode = NULL;
+    size_t overflow_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(overflow_program.typed_module,
+          &overflow_bytecode, &overflow_bytecode_size, error.message,
+          sizeof(error.message)), error.message);
+    const uint32_t overflow_entry =
+        overflow_program.typed_module->functions[0].symbol_id;
+    MilenaVMValue maximum_argument = {
+        MILENA_IR_TYPE_F64, {.f64 = 1.7976931348623157e308}
+    };
+    VirtualMachine overflow_vm = {0};
+    CHECK(vm_init_bytecode(&overflow_vm, overflow_bytecode,
+          overflow_bytecode_size, overflow_entry, &maximum_argument, 1u, NULL),
+          vm_bytecode_error(&overflow_vm) ? vm_bytecode_error(&overflow_vm) :
+          "no se pudo inicializar la VM de overflow diferencial");
+    CHECK(!vm_run(&overflow_vm),
+          "la VM debe rechazar resultados numéricos no finitos");
+    const char *overflow_expression = strstr(overflow_source, "x * 2");
+    CHECK(overflow_expression != NULL && overflow_vm.has_error &&
+          overflow_vm.error.code == MILENA_ERR_INTERNAL &&
+          overflow_vm.error.category == MILENA_ERROR_EJECUCION &&
+          overflow_vm.error.line == 1u &&
+          overflow_vm.error.column ==
+              (size_t)(overflow_expression - overflow_source) + 1u,
+          "el error de overflow debe conservar categoría y span de origen");
+    const char *overflow_message = vm_bytecode_error(&overflow_vm);
+    CHECK(overflow_message != NULL && strstr(overflow_message, "not finite") != NULL,
+          "la VM debe diagnosticar el resultado numérico no finito");
+    MilenaVMValue overflow_result = {0};
+    CHECK(!vm_get_bytecode_result(&overflow_vm, &overflow_result),
+          "el overflow no debe publicar un resultado parcial");
+    vm_destroy(&overflow_vm);
+    free(overflow_bytecode);
+    milena_canonical_program_release(&overflow_program);
+
+    const char *reference_overflow_source =
+        "funcion multiplicar(x) { retornar x * 2; } "
+        "variable desbordamiento = multiplicar(1.7976931348623157e308);";
+    MilenaCanonicalProgram reference_overflow_program;
+    milena_canonical_program_init(&reference_overflow_program);
+    CHECK(milena_canonical_program_parse(&reference_overflow_program,
+          reference_overflow_source, &error) == MILENA_OK, error.message);
+    Interpreter reference_overflow_interpreter = {0};
+    CHECK(interpreter_init(&reference_overflow_interpreter,
+          reference_overflow_program.ast),
+          "no se pudo iniciar el intérprete de overflow diferencial");
+    CHECK(!interpreter_run(&reference_overflow_interpreter),
+          "el intérprete de referencia también debe rechazar overflow no finito");
+    interpreter_destroy(&reference_overflow_interpreter);
+    milena_canonical_program_release(&reference_overflow_program);
+
     /* Arrow's typed contract now owns source, projection, filter, and limits
      * independently of AST storage; strict compiler input still waits for IR
      * lowering and portable bytecode. */
