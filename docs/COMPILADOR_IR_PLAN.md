@@ -1,6 +1,6 @@
 # Historial del plan anterior del compilador de Milena
 
-> **Documento histórico.** Este archivo conserva el análisis y el roadmap anterior de ocho pasos por trazabilidad. No es el plan vigente ni sus estados describen la entrega actual. El contrato normativo actual, en exactamente dos fases, está en [COMPILADOR_DOS_FASES.md](COMPILADOR_DOS_FASES.md).
+> **Registro histórico.** Este archivo conserva análisis, contratos y observaciones de incrementos anteriores. El orden de ocho fases que documentaba se adoptó como roadmap normativo en [COMPILADOR_DOS_FASES.md](COMPILADOR_DOS_FASES.md); sus estados e informes siguen siendo evidencia histórica y no sustituyen los gates ni la validación del SHA actual.
 
 ## Principios y límites
 
