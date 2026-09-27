@@ -597,6 +597,63 @@ static void test_vm_forward_call_and_call_depth_limit(void) {
     milena_ir_module_destroy(module);
 }
 
+static void test_vm_error_source_locations(void) {
+    char error[256] = {0};
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    MilenaIRModule *module = make_division_by_zero_module();
+    module->functions[0].body->instructions[2].source_span =
+        (MilenaIRSourceSpan){
+            .line = 17u, .column = 9u, .end_line = 17u, .end_column = 14u,
+            .start_offset = 120u, .end_offset = 125u,
+            .has_source_span = true};
+    assert(milena_bytecode_encode_module(module, &bytes, &size,
+                                         error, sizeof(error)));
+    VirtualMachine vm = {0};
+    assert(vm_init_bytecode(&vm, bytes, size, 300u, NULL, 0u, NULL));
+    assert(!vm_run(&vm));
+    assert(vm.has_error && vm.error.code == MILENA_ERR_INTERNAL &&
+           vm.error.category == MILENA_ERROR_EJECUCION &&
+           vm.error.line == 17u && vm.error.column == 9u);
+    assert(strstr(vm.error.message, "division by zero") != NULL);
+    assert(strstr(vm_bytecode_error(&vm), "division by zero") != NULL);
+    vm_destroy(&vm);
+    free(bytes);
+    milena_ir_module_destroy(module);
+
+    bytes = NULL;
+    size = 0;
+    module = make_division_by_zero_module();
+    assert(milena_bytecode_encode_module(module, &bytes, &size,
+                                         error, sizeof(error)));
+    vm = (VirtualMachine){0};
+    assert(vm_init_bytecode(&vm, bytes, size, 300u, NULL, 0u, NULL));
+    assert(!vm_run(&vm));
+    assert(vm.has_error && vm.error.code == MILENA_ERR_INTERNAL &&
+           vm.error.line == 0u && vm.error.column == 0u);
+    vm_destroy(&vm);
+    free(bytes);
+    milena_ir_module_destroy(module);
+
+    /* A failure inside a called function reports the callee instruction span,
+       not the caller's call-site span. */
+    bytes = NULL;
+    size = 0;
+    module = make_call_module();
+    module->functions[0].body->instructions[0].opcode = MILENA_IR_DIV_F64;
+    module->functions[1].body->instructions[1].float_immediate = 0.0;
+    assert(milena_bytecode_encode_module(module, &bytes, &size,
+                                         error, sizeof(error)));
+    vm = (VirtualMachine){0};
+    assert(vm_init_bytecode(&vm, bytes, size, 200u, NULL, 0u, NULL));
+    assert(!vm_run(&vm));
+    assert(vm.error.line == 1u && vm.error.column == 3u);
+    assert(strstr(vm.error.message, "division by zero") != NULL);
+    vm_destroy(&vm);
+    free(bytes);
+    milena_ir_module_destroy(module);
+}
+
 static void test_vm_errors_and_limits(void) {
     char error[256] = {0};
     uint8_t *bytes = NULL;
@@ -707,6 +764,7 @@ int main(void) {
     test_rejects_signature_mismatch_and_invalid_source_module();
     test_vm_branch_ssa_merge();
     test_vm_forward_call_and_call_depth_limit();
+    test_vm_error_source_locations();
     test_vm_errors_and_limits();
     puts("typed bytecode verifier and internal reference VM tests passed");
     return 0;

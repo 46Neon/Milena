@@ -31,14 +31,29 @@ typedef struct {
     size_t live_bytes;
     char *error;
     size_t error_capacity;
+    MilenaError *public_error;
+    MilenaIRSourceSpan current_source_span;
 } VMExecution;
 
 static bool vm_error(VMExecution *execution, const char *format, ...) {
-    if (execution && execution->error && execution->error_capacity) {
-        va_list args;
-        va_start(args, format);
-        (void)vsnprintf(execution->error, execution->error_capacity, format, args);
-        va_end(args);
+    char message[MILENA_ERROR_TEXT];
+    size_t line = 0, column = 0;
+    if (!execution) return false;
+    va_list args;
+    va_start(args, format);
+    (void)vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    if (execution->error && execution->error_capacity)
+        (void)snprintf(execution->error, execution->error_capacity, "%s", message);
+    if (execution->public_error) {
+        const MilenaIRSourceSpan *span = &execution->current_source_span;
+        if (span->has_source_span && span->line <= (uint64_t)SIZE_MAX &&
+            span->column <= (uint64_t)SIZE_MAX) {
+            line = (size_t)span->line;
+            column = (size_t)span->column;
+        }
+        milena_error_set(execution->public_error, MILENA_ERR_INTERNAL,
+                         line, column, 0, message);
     }
     return false;
 }
@@ -276,6 +291,7 @@ static bool vm_execute_function(VMExecution *execution,
             const MilenaIRInstruction *ins = &program->instructions[ii];
             MilenaVMValue left = {0}, right = {0}, produced = {0};
             uint32_t target = 0;
+            execution->current_source_span = ins->source_span;
             if (execution->steps >= execution->max_steps) {
                 vm_error(execution, "VM instruction step limit exceeded");
                 goto cleanup;
@@ -699,10 +715,12 @@ static bool vm_run_verified_bytecode(VirtualMachine *vm) {
     MilenaVMValue computed = {0};
     bool ok;
     if (!state || !state->module) return false;
+    milena_error_clear(&vm->error);
     state->error[0] = '\0';
     state->has_result = false;
     execution.error = state->error;
     execution.error_capacity = sizeof(state->error);
+    execution.public_error = &vm->error;
     execution.max_steps = state->options.max_steps ? state->options.max_steps :
                           VM_DEFAULT_STEPS;
     execution.max_depth = state->options.max_call_depth ?
