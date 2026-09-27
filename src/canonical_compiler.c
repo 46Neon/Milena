@@ -730,13 +730,15 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             return HIR_BUILD_UNSUPPORTED;
         }
         if (node->type == AST_LLAMADA_CARGAR) {
-            if (load || !node->value || (node->type_name &&
+            if (load || !node->data_source.present ||
+                !node->data_source.path || !node->data_source.path[0] ||
+                !node->has_source_span || (node->type_name &&
                 strcmp(node->type_name, "flujo") == 0)) {
                 data_hir_release(hir);
                 return HIR_BUILD_UNSUPPORTED;
             }
             load = node;
-            hir->source.path = milena_strdup(node->value);
+            hir->source.path = milena_strdup(node->data_source.path);
             hir->source.resolved_dataset_id = 1;
             hir->source.streaming = false;
             hir->source.chunk_rows = 0;
@@ -745,17 +747,19 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             continue;
         }
         if (node->type == AST_DECLARACION_VARIABLE) {
-            if (!node->value || !node->type_name || node->child_count != 0) {
+            if (!node->data_column.present || !node->data_column.name ||
+                !node->has_source_span || node->child_count != 0) {
                 data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
             }
-            MilenaHIRColumnRef declared = hir_unresolved_column(node->value, node);
-            if (strcmp(node->type_name, "numerica") == 0)
+            MilenaHIRColumnRef declared =
+                hir_unresolved_column(node->data_column.name, node);
+            if (node->data_column.type == AST_DATA_COLUMN_TYPE_NUMERIC)
                 declared.declared_type = MILENA_HIR_COLUMN_NUMERIC;
-            else if (strcmp(node->type_name, "binaria") == 0 ||
-                     strcmp(node->type_name, "categorica") == 0)
+            else if (node->data_column.type == AST_DATA_COLUMN_TYPE_BINARY ||
+                     node->data_column.type == AST_DATA_COLUMN_TYPE_CATEGORICAL)
                 declared.declared_type = MILENA_HIR_COLUMN_CATEGORICAL;
-            else if (strcmp(node->type_name, "texto") == 0 ||
-                     strcmp(node->type_name, "fecha") == 0)
+            else if (node->data_column.type == AST_DATA_COLUMN_TYPE_TEXT ||
+                     node->data_column.type == AST_DATA_COLUMN_TYPE_DATE)
                 declared.declared_type = MILENA_HIR_COLUMN_TEXT;
             else {
                 hir_column_ref_release(&declared);
@@ -1024,9 +1028,13 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             terminal_operation_seen = true;
             continue;
         }
-        if (node->type == AST_BLOQUE_EXPORTAR && node->value) {
-            if (hir->export_path) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
-            hir->export_path = milena_strdup(node->value);
+        if (node->type == AST_BLOQUE_EXPORTAR) {
+            if (!node->export_result.present ||
+                !node->export_result.destination ||
+                !node->has_source_span || hir->export_path) {
+                data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+            }
+            hir->export_path = milena_strdup(node->export_result.destination);
             if (!hir->export_path) { data_hir_release(hir); return HIR_BUILD_MEMORY; }
             export_seen = true;
             continue;
@@ -1702,10 +1710,15 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
     switch (node->type) {
         case AST_COMANDO_CONDICION:
             return node->has_filter_predicate && node->filter_column != NULL;
+        case AST_LLAMADA_CARGAR:
+            return node->data_source.present && node->data_source.path != NULL;
+        case AST_DECLARACION_VARIABLE:
+            return node->data_column.present && node->data_column.name != NULL;
+        case AST_BLOQUE_EXPORTAR:
+            return node->export_result.present &&
+                   node->export_result.destination != NULL;
         case AST_PROGRAMA:
         case AST_BLOQUE_ANALISIS:
-        case AST_LLAMADA_CARGAR:
-        case AST_DECLARACION_VARIABLE:
         case AST_BLOQUE_TRANSFORMAR:
         case AST_COMANDO_TOTAL:
         case AST_BLOQUE_LIMPIAR:
@@ -1721,7 +1734,6 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_COMANDO_CLAVE:
         case AST_BLOQUE_SELECCIONAR:
         case AST_COMANDO_COLUMNAS:
-        case AST_BLOQUE_EXPORTAR:
             return true;
         default:
             return false;

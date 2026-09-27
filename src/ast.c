@@ -195,6 +195,66 @@ ASTFilterPredicateStatus ast_set_filter_predicate(ASTNode *node,
 
 static const char *ast_aggregate_operation_name(ASTAggregateOperation operation);
 
+const char *ast_data_column_type_name(ASTDataColumnType type) {
+    switch (type) {
+        case AST_DATA_COLUMN_TYPE_NUMERIC: return "numerica";
+        case AST_DATA_COLUMN_TYPE_BINARY: return "binaria";
+        case AST_DATA_COLUMN_TYPE_TEXT: return "texto";
+        case AST_DATA_COLUMN_TYPE_DATE: return "fecha";
+        case AST_DATA_COLUMN_TYPE_CATEGORICAL: return "categorica";
+        default: return NULL;
+    }
+}
+
+static ASTDataColumnType ast_data_column_type_from_name(const char *name) {
+    if (!name) return AST_DATA_COLUMN_TYPE_UNSPECIFIED;
+    for (ASTDataColumnType type = AST_DATA_COLUMN_TYPE_NUMERIC;
+         type < AST_DATA_COLUMN_TYPE_COUNT; ++type) {
+        const char *candidate = ast_data_column_type_name(type);
+        if (candidate && strcmp(name, candidate) == 0) return type;
+    }
+    return AST_DATA_COLUMN_TYPE_UNSPECIFIED;
+}
+
+bool ast_set_data_source_declaration(ASTNode *node, const char *path) {
+    if (!node || node->type != AST_LLAMADA_CARGAR || !node->value ||
+        !path || !path[0] || strcmp(node->value, path) != 0) return false;
+    char *copy = milena_strdup(path);
+    if (!copy) return false;
+    free(node->data_source.path);
+    node->data_source.path = copy;
+    node->data_source.present = true;
+    return true;
+}
+
+bool ast_set_data_column_declaration(ASTNode *node, const char *name,
+                                     ASTDataColumnType type) {
+    const char *type_name = ast_data_column_type_name(type);
+    if (!node || node->type != AST_DECLARACION_VARIABLE || !node->value ||
+        !name || !name[0] || strcmp(node->value, name) != 0 ||
+        !type_name || !node->type_name || strcmp(node->type_name, type_name) != 0)
+        return false;
+    char *copy = milena_strdup(name);
+    if (!copy) return false;
+    free(node->data_column.name);
+    node->data_column.name = copy;
+    node->data_column.type = type;
+    node->data_column.present = true;
+    return true;
+}
+
+bool ast_set_export_destination(ASTNode *node, const char *destination) {
+    if (!node || node->type != AST_BLOQUE_EXPORTAR || !node->value ||
+        !destination || !destination[0] || strcmp(node->value, destination) != 0)
+        return false;
+    char *copy = milena_strdup(destination);
+    if (!copy) return false;
+    free(node->export_result.destination);
+    node->export_result.destination = copy;
+    node->export_result.present = true;
+    return true;
+}
+
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column) {
     if (!node || node->type != AST_RESUMEN_METRICA || !node->value ||
@@ -348,6 +408,56 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
              !node->value || !node->value[0])) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                 "Métrica de resumen de flujo inconsistente en el AST");
+            break;
+        }
+        if (node->data_source.present) {
+            if (node->type != AST_LLAMADA_CARGAR || !node->data_source.path ||
+                !node->data_source.path[0] || !node->value ||
+                strcmp(node->data_source.path, node->value) != 0 ||
+                !node->has_source_span || node->end_offset <= node->start_offset) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de fuente de datos inconsistente en el AST");
+                break;
+            }
+        } else if (node->data_source.path) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de fuente de datos sin etiqueta en el AST");
+            break;
+        }
+        if (node->data_column.present) {
+            const char *type_name = ast_data_column_type_name(node->data_column.type);
+            if (node->type != AST_DECLARACION_VARIABLE ||
+                !node->data_column.name || !node->data_column.name[0] ||
+                !node->value || strcmp(node->data_column.name, node->value) != 0 ||
+                !type_name || !node->type_name ||
+                strcmp(type_name, node->type_name) != 0 ||
+                ast_data_column_type_from_name(node->type_name) !=
+                    node->data_column.type || node->child_count != 0 ||
+                !node->has_source_span || node->end_offset <= node->start_offset) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de declaración de columna inconsistente en el AST");
+                break;
+            }
+        } else if (node->data_column.name || node->data_column.type !=
+                   AST_DATA_COLUMN_TYPE_UNSPECIFIED) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de columna sin etiqueta en el AST");
+            break;
+        }
+        if (node->export_result.present) {
+            if (node->type != AST_BLOQUE_EXPORTAR ||
+                !node->export_result.destination ||
+                !node->export_result.destination[0] || !node->value ||
+                strcmp(node->export_result.destination, node->value) != 0 ||
+                node->child_count != 0 || !node->has_source_span ||
+                node->end_offset <= node->start_offset) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de destino de exportación inconsistente en el AST");
+                break;
+            }
+        } else if (node->export_result.destination) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de exportación sin etiqueta en el AST");
             break;
         }
         if (node->parent != entry.expected_parent) {
@@ -577,6 +687,9 @@ void ast_destroy(ASTNode *node) {
     if (!node) return;
     free(node->filter_column);
     free(node->aggregate_column);
+    free(node->data_source.path);
+    free(node->data_column.name);
+    free(node->export_result.destination);
     for (size_t i = 0; i < node->child_count; i++) {
         ast_destroy(node->children[i]);
     }

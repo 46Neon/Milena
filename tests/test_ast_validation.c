@@ -204,6 +204,74 @@ int main(void) {
            ast_validate(stream_metric, &error));
     ast_destroy(stream_metric);
 
+    /* Canonical source, schema column and export nodes carry owned typed data
+     * and exact token-derived spans, while preserving their legacy mirrors. */
+    const char *structured_data_source =
+        ".analisis data {\n"
+        " dataset cargar datos(\"entrada.csv\")\n"
+        " variable importe numerica;\n"
+        " .exportar { (\"salida.csv\") }\n"
+        "}\n";
+    lexer_init(&lexer, structured_data_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program && !parser.has_error);
+    ASTNode *analysis = program->children[0];
+    ASTNode *source = analysis->children[0];
+    ASTNode *column = analysis->children[1];
+    ASTNode *export_node = analysis->children[2];
+    const char *source_span_text = "dataset cargar datos(\"entrada.csv\")";
+    const char *column_span_text = "variable importe numerica;";
+    const char *export_span_text = "exportar { (\"salida.csv\") }";
+    assert(source->data_source.present && source->data_source.path &&
+           source->data_source.path != source->value &&
+           strcmp(source->data_source.path, "entrada.csv") == 0 &&
+           source->has_source_span &&
+           source->end_offset - source->start_offset == strlen(source_span_text) &&
+           strncmp(structured_data_source + source->start_offset,
+                   source_span_text, strlen(source_span_text)) == 0);
+    assert(column->data_column.present && column->data_column.name &&
+           column->data_column.name != column->value &&
+           strcmp(column->data_column.name, "importe") == 0 &&
+           column->data_column.type == AST_DATA_COLUMN_TYPE_NUMERIC &&
+           column->has_source_span &&
+           column->end_offset - column->start_offset == strlen(column_span_text) &&
+           strncmp(structured_data_source + column->start_offset,
+                   column_span_text, strlen(column_span_text)) == 0);
+    assert(export_node->export_result.present &&
+           export_node->export_result.destination &&
+           export_node->export_result.destination != export_node->value &&
+           strcmp(export_node->export_result.destination, "salida.csv") == 0 &&
+           export_node->has_source_span &&
+           export_node->end_offset - export_node->start_offset ==
+               strlen(export_span_text) &&
+           strncmp(structured_data_source + export_node->start_offset,
+                   export_span_text, strlen(export_span_text)) == 0);
+    assert(ast_validate(program, &error));
+
+    char saved_path_char = source->value[0];
+    source->value[0] = saved_path_char == 'e' ? 'X' : 'e';
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)source->line);
+    source->value[0] = saved_path_char;
+    ASTDataColumnType saved_column_type = column->data_column.type;
+    column->data_column.type = AST_DATA_COLUMN_TYPE_UNSPECIFIED;
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)column->line);
+    column->data_column.type = saved_column_type;
+    export_node->export_result.present = false;
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT &&
+           error.line == (size_t)export_node->line);
+    export_node->export_result.present = true;
+    assert(ast_validate(program, &error));
+    ast_destroy(program); /* releases both typed payloads and legacy strings */
+    parser_release(&parser);
+
+    /* Old AST clients may still build an untyped node, but it is not an HIR payload. */
+    ASTNode *legacy_source = ast_create_leaf(AST_LLAMADA_CARGAR, "legacy.csv");
+    assert(legacy_source && ast_validate(legacy_source, &error));
+    ast_destroy(legacy_source);
+
     assert(!ast_validate(NULL, &error));
     assert(error.code == MILENA_ERR_ARGUMENT);
     return 0;

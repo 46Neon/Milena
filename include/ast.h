@@ -168,6 +168,32 @@ typedef enum {
 } ASTAggregateOperation;
 
 typedef enum {
+    AST_DATA_COLUMN_TYPE_UNSPECIFIED = 0,
+    AST_DATA_COLUMN_TYPE_NUMERIC,
+    AST_DATA_COLUMN_TYPE_BINARY,
+    AST_DATA_COLUMN_TYPE_TEXT,
+    AST_DATA_COLUMN_TYPE_DATE,
+    AST_DATA_COLUMN_TYPE_CATEGORICAL,
+    AST_DATA_COLUMN_TYPE_COUNT
+} ASTDataColumnType;
+
+typedef struct {
+    char *path;
+    bool present;
+} ASTDataSourcePayload;
+
+typedef struct {
+    char *name;
+    ASTDataColumnType type;
+    bool present;
+} ASTDataColumnPayload;
+
+typedef struct {
+    char *destination;
+    bool present;
+} ASTExportPayload;
+
+typedef enum {
     AST_FILTER_PREDICATE_OK = 0,
     AST_FILTER_PREDICATE_INVALID,
     AST_FILTER_PREDICATE_MEMORY
@@ -191,6 +217,10 @@ typedef struct ASTNode {
     ASTAggregateOperation aggregate_operation;
     char *aggregate_column;
     bool has_aggregate_metric;
+    /* Owned typed payloads; legacy value/type_name remain compatibility mirrors. */
+    ASTDataSourcePayload data_source;
+    ASTDataColumnPayload data_column;
+    ASTExportPayload export_result;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */
     struct ASTNode *left_operand;
     struct ASTNode *right_operand;
@@ -258,6 +288,12 @@ ASTFilterPredicateStatus ast_set_filter_predicate(ASTNode *node,
 /* Set typed canonical metric data while preserving the legacy value spelling. */
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column);
+/* Typed, independently owned mirrors for the admitted canonical data-summary nodes. */
+bool ast_set_data_source_declaration(ASTNode *node, const char *path);
+bool ast_set_data_column_declaration(ASTNode *node, const char *name,
+                                     ASTDataColumnType type);
+bool ast_set_export_destination(ASTNode *node, const char *destination);
+const char *ast_data_column_type_name(ASTDataColumnType type);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
 ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,

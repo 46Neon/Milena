@@ -320,6 +320,16 @@ static bool parser_is_schema_type(const char *text) {
                     strcmp(text, "fecha") == 0);
 }
 
+static ASTDataColumnType parser_data_column_type(const char *text) {
+    if (!text) return AST_DATA_COLUMN_TYPE_UNSPECIFIED;
+    if (strcmp(text, "numerica") == 0) return AST_DATA_COLUMN_TYPE_NUMERIC;
+    if (strcmp(text, "binaria") == 0) return AST_DATA_COLUMN_TYPE_BINARY;
+    if (strcmp(text, "texto") == 0) return AST_DATA_COLUMN_TYPE_TEXT;
+    if (strcmp(text, "fecha") == 0) return AST_DATA_COLUMN_TYPE_DATE;
+    if (strcmp(text, "categorica") == 0) return AST_DATA_COLUMN_TYPE_CATEGORICAL;
+    return AST_DATA_COLUMN_TYPE_UNSPECIFIED;
+}
+
 static ASTNode *parse_variable_declaration(Parser *parser) {
     Token declaration_start = parser->current;
     parser_advance(parser);
@@ -338,6 +348,7 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
         char type_name[MAX_TOKEN_LEN];
         strncpy(type_name, parser->current.lexeme, sizeof(type_name) - 1);
         type_name[sizeof(type_name) - 1] = '\0';
+        ASTDataColumnType column_type = parser_data_column_type(type_name);
         parser_advance(parser);
         if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
         ASTNode *node = ast_create_leaf(AST_DECLARACION_VARIABLE, name);
@@ -346,15 +357,16 @@ static ASTNode *parse_variable_declaration(Parser *parser) {
             return NULL;
         }
         node->type_name = milena_strdup(type_name);
-        if (!node->type_name ||
-            milena_symbols_declare(&parser->symbols, name, &parser->error) != MILENA_OK) {
+        if (!node->type_name || column_type == AST_DATA_COLUMN_TYPE_UNSPECIFIED ||
+            !ast_set_source_span(node, &declaration_start, &parser->previous) ||
+            !ast_set_data_column_declaration(node, name, column_type)) {
             ast_destroy(node);
-            parser->has_error = true;
+            parser_error(parser, "No se pudo construir la declaración tipada de columna");
             return NULL;
         }
-        if (!ast_set_source_span(node, &declaration_start, &parser->previous)) {
+        if (milena_symbols_declare(&parser->symbols, name, &parser->error) != MILENA_OK) {
             ast_destroy(node);
-            parser_error(parser, "No se pudo conservar el rango de la declaración");
+            parser->has_error = true;
             return NULL;
         }
         return node;
@@ -837,6 +849,7 @@ static ASTNode *parse_stream_group(Parser *parser) {
 }
 
 static ASTNode *parse_human_stream_load(Parser *parser) {
+    Token source_start = parser->current;
     if (!parser_expect(parser, TOKEN_KW_DATOS, "Se esperaba 'datos'")) return NULL;
     if (!parser_expect(parser, TOKEN_KW_DESDE, "Se esperaba 'desde' después de datos")) return NULL;
     if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba la ruta del CSV entre comillas")) return NULL;
@@ -953,6 +966,11 @@ static ASTNode *parse_human_stream_load(Parser *parser) {
         }
     }
     if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+    if (!ast_set_data_source_declaration(load, load->value) ||
+        !ast_set_source_span(load, &source_start, &parser->previous)) {
+        parser_error(parser, "No se pudo conservar la fuente tipada de datos");
+        goto fail;
+    }
     return load;
 fail:
     ast_destroy(load);
@@ -1051,6 +1069,7 @@ static ASTNode *parse_arrow_projection(Parser *parser) {
 }
 
 static ASTNode *parse_human_stream_export(Parser *parser) {
+    Token export_start = parser->current;
     parser_advance(parser);
     if (!parser_expect_word(parser, "resultado", "Se esperaba 'resultado'")) return NULL;
     if (!parser_expect_word(parser, "en", "Se esperaba 'en'")) return NULL;
@@ -1058,6 +1077,13 @@ static ASTNode *parse_human_stream_export(Parser *parser) {
     ASTNode *export_node = ast_create_leaf(AST_BLOQUE_EXPORTAR, parser->previous.lexeme);
     if (!export_node) parser_error(parser, "Sin memoria para guardar resultado");
     if (parser_match(parser, TOKEN_PUNTO_Y_COMA)) parser_advance(parser);
+    if (export_node &&
+        (!ast_set_export_destination(export_node, export_node->value) ||
+         !ast_set_source_span(export_node, &export_start, &parser->previous))) {
+        ast_destroy(export_node);
+        parser_error(parser, "No se pudo conservar el destino tipado de exportación");
+        return NULL;
+    }
     return export_node;
 }
 
@@ -1207,6 +1233,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 }
             }
         } else if (parser_match(parser, TOKEN_KW_DATASET)) {
+            Token source_start = parser->current;
             parser_advance(parser);
             if (parser_match(parser, TOKEN_KW_CARGAR)) {
                 parser_advance(parser);
@@ -1251,9 +1278,23 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 }
                             }
                         }
-                        if (cargar && !parser_add_child(parser, node, cargar,
-                                                        "Sin memoria para cargar")) break;
-                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'");
+                        bool close_ok = parser_expect(parser, TOKEN_PAR_DER,
+                                                      "Se esperaba ')'");
+                        if (!close_ok) {
+                            ast_destroy(cargar);
+                        } else if (cargar) {
+                            if (!ast_set_source_span(cargar, &source_start,
+                                                     &parser->previous) ||
+                                !ast_set_data_source_declaration(cargar,
+                                                                 cargar->value)) {
+                                ast_destroy(cargar);
+                                parser_error(parser,
+                                    "No se pudo conservar la fuente tipada de datos");
+                            } else if (!parser_add_child(parser, node, cargar,
+                                                         "Sin memoria para cargar")) {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -1603,6 +1644,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     else ast_destroy(resumir);
                 }
             } else if (parser_match(parser, TOKEN_KW_EXPORTAR)) {
+                Token export_start = parser->current;
                 parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
                     ASTNode *exportar = NULL;
@@ -1631,8 +1673,17 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
                         ast_destroy(exportar);
                     } else if (exportar) {
-                        if (!parser_add_child(parser, node, exportar,
-                                               "Sin memoria para el AST")) break;
+                        if (!ast_set_source_span(exportar, &export_start,
+                                                 &parser->previous) ||
+                            !ast_set_export_destination(exportar,
+                                                        exportar->value)) {
+                            ast_destroy(exportar);
+                            parser_error(parser,
+                                "No se pudo conservar el destino tipado de exportación");
+                        } else if (!parser_add_child(parser, node, exportar,
+                                                   "Sin memoria para el AST")) {
+                            break;
+                        }
                     }
                 }
             } else {

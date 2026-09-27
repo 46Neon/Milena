@@ -267,6 +267,7 @@ int main(void) {
     const char *data_source =
         ".analisis ventas {\n"
         " dataset cargar datos(\"entrada.csv\")\n"
+        " variable precio numerica;\n"
         " .transformar dataset { #total(\"precio * cantidad\") }\n"
         " .filtrar { #condicion(\"total >= 10\") }\n"
         " .seleccionar { #columnas(\"id,total,ciudad\") }\n"
@@ -278,6 +279,10 @@ int main(void) {
           strcmp(program.data_hir->source.path, "entrada.csv") == 0 &&
           program.data_hir->source.resolved_dataset_id != 0 &&
           strcmp(program.data_hir->export_path, "salida.json") == 0 &&
+          program.data_hir->declared_column_count == 1 &&
+          strcmp(program.data_hir->declared_schema[0].name, "precio") == 0 &&
+          program.data_hir->declared_schema[0].declared_type ==
+              MILENA_HIR_COLUMN_NUMERIC &&
           program.data_hir->operation_count == 3 &&
           program.data_hir->operations[1].as.filter.operation ==
               AST_OPERATOR_GREATER_EQUAL &&
