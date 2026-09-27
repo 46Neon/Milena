@@ -755,7 +755,59 @@ static void test_legacy_vm_fails_closed_for_unavailable_dataset_ops(void) {
     vm_destroy(&vm);
 }
 
-int main(void) {
+static MilenaIRModule *make_aot_reference_module(void) {
+    MilenaIRModule *module = calloc(1u, sizeof(*module));
+    assert(module != NULL);
+    module->functions = calloc(1u, sizeof(*module->functions));
+    assert(module->functions != NULL);
+    module->function_count = 1u;
+    MilenaIRModuleFunction *function = &module->functions[0];
+    function->name = copy_text("principal");
+    function->symbol_id = 700u;
+    function->return_type = MILENA_IR_TYPE_F64;
+    function->body = milena_ir_program_create();
+    assert(function->body != NULL);
+    assert(milena_ir_program_set_function_signature(function->body, NULL, 0u,
+                                                     MILENA_IR_TYPE_F64));
+    assert(milena_ir_program_add_block(function->body, 1u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_CONST_F64, 1u,
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, 19.0, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_CONST_F64, 2u,
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, 23.0, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_ADD_F64, 3u,
+        MILENA_IR_TYPE_F64, 1u, 2u, 0, 0.0, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_RETURN, 0u,
+        MILENA_IR_TYPE_F64, 3u, 0u, 0, 0.0, 0u, 0u));
+    return module;
+}
+
+static int print_aot_reference_result(void) {
+    MilenaIRModule *module = make_aot_reference_module();
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    char error[256] = {0};
+    MilenaVMValue result = {0};
+    if (!milena_bytecode_encode_module(module, &bytes, &size,
+                                       error, sizeof(error))) {
+        fprintf(stderr, "%s\n", error);
+        milena_ir_module_destroy(module);
+        return 1;
+    }
+    bool ok = run_bytecode_case(bytes, size, 700u, NULL, 0u, NULL,
+                                &result, error, sizeof(error));
+    free(bytes);
+    milena_ir_module_destroy(module);
+    if (!ok || result.type != MILENA_IR_TYPE_F64) {
+        fprintf(stderr, "%s\n", error[0] ? error : "VM returned a non-F64 value");
+        return 1;
+    }
+    printf("%.17g\n", result.as.f64);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--aot-reference") == 0)
+        return print_aot_reference_result();
     test_original_vm_lifecycle();
     test_legacy_vm_fails_closed_for_unavailable_dataset_ops();
     test_roundtrip_module_with_direct_call();

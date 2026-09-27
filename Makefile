@@ -343,7 +343,7 @@ check-hir-ast-coverage:
 	$(CC) $(CFLAGS) -std=c17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion tools/check_architecture.c -o tools/check_architecture && ./tools/check_architecture hir
 
 .PHONY: test-native-aot
-test-native-aot: $(TARGET)
+test-native-aot: $(TARGET) tests/test_typed_bytecode
 	sh tests/test_native_aot.sh
 
 test-typed-bytecode: tests/test_typed_bytecode
