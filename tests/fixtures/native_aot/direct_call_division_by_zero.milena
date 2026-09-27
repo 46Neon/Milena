@@ -1,0 +1,6 @@
+funcion dividir(a, b) {
+    retornar a / b;
+}
+funcion principal() {
+    retornar dividir(1, 0);
+}

@@ -695,6 +695,202 @@ static MilenaStatus write_linux_x86_64_runtime_elf(const MilenaIRProgram *ir,
     free(temporary);
     return MILENA_OK;
 }
+/* Direct-call SysV AMD64 lowering for verified straight-line F64 modules. */
+typedef struct { size_t disp; size_t target; } AOTFixup;
+typedef struct { AOTFixup *v; size_t n, cap; bool failed; } AOTFixups;
+
+static size_t aot_find_symbol(const MilenaIRModule *m, uint32_t id) {
+    for (size_t i=0; i<m->function_count; ++i)
+        if (m->functions[i].symbol_id == id) return i;
+    return SIZE_MAX;
+}
+static void aot_fixup(AOTFixups *f, size_t disp, size_t target) {
+    if (f->n == f->cap) {
+        size_t cap=f->cap ? f->cap*2u : 16u;
+        if (cap < f->cap || cap > SIZE_MAX/sizeof(*f->v)) { f->failed=true; return; }
+        AOTFixup *p=realloc(f->v,cap*sizeof(*p));
+        if (!p) { f->failed=true; return; }
+        f->v=p; f->cap=cap;
+    }
+    f->v[f->n++]=(AOTFixup){disp,target};
+}
+
+/* Abstract interpretation is only a safety proof; emitted native operations
+ * still calculate every result at runtime. Each call is checked in its actual
+ * statically-known argument context. */
+static bool aot_eval_fn(const MilenaIRModule *m, size_t fi, const int64_t *args,
+        size_t argc, int64_t *out, const char **runtime_error, bool *reachable,
+        size_t depth, char *diag, size_t dcap) {
+    const int64_t lim=INT64_C(9007199254740992);
+    const MilenaIRModuleFunction *fn=&m->functions[fi];
+    const MilenaIRProgram *ir=fn->body;
+    if (ir->parameter_count > 100000u || ir->count > 100000u) {
+        snprintf(diag,dcap,"La función excede el límite de valores AOT"); return false;
+    }
+    size_t value_limit=0;
+    for (size_t i=0;i<ir->parameter_count;++i)
+        if (ir->parameters[i].value_id>value_limit) value_limit=ir->parameters[i].value_id;
+    for (size_t i=0;i<ir->count;++i)
+        if (ir->instructions[i].result_id>value_limit) value_limit=ir->instructions[i].result_id;
+    if (value_limit>100000u) {
+        snprintf(diag,dcap,"La función excede el límite de valores AOT"); return false;
+    }
+    if (depth > m->function_count || argc != fn->parameter_count || argc > 8u ||
+        ir->block_count != 1u || !ir->blocks || ir->blocks[0].first_instruction != 0u ||
+        ir->blocks[0].instruction_count != ir->count || ir->edge_argument_count ||
+        ir->count == 0u || ir->count > 100000u) {
+        snprintf(diag,dcap,"La función excede el subconjunto AOT de un bloque/F64 con hasta 8 argumentos"); return false;
+    }
+    char v[MILENA_ERROR_TEXT]={0};
+    if (!milena_ir_program_validate(ir,v,sizeof(v))) {
+        snprintf(diag,dcap,"%s",v[0]?v:"El IR de función no pasó su verificador"); return false;
+    }
+    if (fn->return_type != MILENA_IR_TYPE_F64) {
+        snprintf(diag,dcap,"El backend de llamadas directas solo admite retorno F64"); return false;
+    }
+    for (size_t i=0;i<argc;++i) if (fn->parameter_types[i]!=MILENA_IR_TYPE_F64) {
+        snprintf(diag,dcap,"El backend de llamadas directas solo admite parámetros F64"); return false;
+    }
+    int64_t *val=calloc(value_limit+1u,sizeof(*val));
+    bool *def=calloc(value_limit+1u,sizeof(*def));
+    if (!val || !def) { free(val);free(def);snprintf(diag,dcap,"Sin memoria para verificar el módulo AOT");return false; }
+    size_t pi=0; bool ok=false;
+    for (size_t i=0;i<ir->parameter_count;++i) if (ir->parameters[i].block_id==ir->blocks[0].id) {
+        const MilenaIRBlockParameter *p=&ir->parameters[i];
+        if (pi>=argc || p->type!=MILENA_IR_TYPE_F64 || !p->value_id || p->value_id>value_limit) goto bad;
+        val[p->value_id]=args[pi++];def[p->value_id]=true;
+    }
+    if (pi!=argc) goto bad;
+    reachable[fi]=true;
+    for (size_t i=0;i<ir->count;++i) {
+        const MilenaIRInstruction *in=&ir->instructions[i];
+        if (in->opcode==MILENA_IR_RETURN) {
+            if (i+1u!=ir->count || in->result_type!=MILENA_IR_TYPE_F64 || !in->operand1_id ||
+                in->operand1_id>value_limit || !def[in->operand1_id]) goto bad;
+            *out=val[in->operand1_id];ok=true;goto done;
+        }
+        if (!in->result_id || in->result_id>value_limit || in->result_type!=MILENA_IR_TYPE_F64) goto bad;
+        int64_t r=0;
+        if (in->opcode==MILENA_IR_CONST_F64) {
+            double x=in->float_immediate;
+            if (!isfinite(x)||trunc(x)!=x||fabs(x)>(double)lim||(x==0.0&&signbit(x))) goto bad;
+            r=(int64_t)x;
+        } else if (in->opcode==MILENA_IR_CALL) {
+            size_t ci=aot_find_symbol(m,(uint32_t)in->integer_immediate);
+            if (in->call_argument_count>8u) {
+                snprintf(diag,dcap,"AOT directo admite como máximo 8 argumentos F64 por llamada");
+                goto done;
+            }
+            if (ci==SIZE_MAX ||
+                in->call_argument_count!=m->functions[ci].parameter_count ||
+                in->call_argument_offset>ir->call_argument_count ||
+                in->call_argument_count>ir->call_argument_count-in->call_argument_offset) goto bad;
+            int64_t ca[8]={0};
+            for (size_t a=0;a<in->call_argument_count;++a) {
+                uint32_t id=ir->call_arguments[in->call_argument_offset+a];
+                if (!id||id>value_limit||!def[id]) goto bad;
+                ca[a]=val[id];
+            }
+            if (!aot_eval_fn(m,ci,ca,in->call_argument_count,&r,runtime_error,
+                             reachable,depth+1u,diag,dcap)) goto done;
+            if (*runtime_error) { ok=true;goto done; }
+        } else if (in->opcode==MILENA_IR_ADD_F64 || in->opcode==MILENA_IR_SUB_F64 ||
+                   in->opcode==MILENA_IR_MUL_F64 || in->opcode==MILENA_IR_DIV_F64) {
+            if (!in->operand1_id||!in->operand2_id||in->operand1_id>value_limit||
+                in->operand2_id>value_limit||!def[in->operand1_id]||!def[in->operand2_id]) goto bad;
+            int64_t a=val[in->operand1_id], b=val[in->operand2_id];
+            if (in->opcode==MILENA_IR_DIV_F64 && b==0) { *runtime_error="division by zero";ok=true;goto done; }
+            if (in->opcode==MILENA_IR_ADD_F64) r=a+b;
+            else if (in->opcode==MILENA_IR_SUB_F64) r=a-b;
+            else if (in->opcode==MILENA_IR_MUL_F64) {
+                int64_t aa=a<0?-a:a, bb=b<0?-b:b;
+                if (bb && aa>lim/bb) goto bad;
+                r=a*b;
+            } else { if (a%b) goto bad; r=a/b; }
+            if (!r||r < -lim||r > lim) goto bad;
+        } else goto bad;
+        val[in->result_id]=r;def[in->result_id]=true;
+    }
+    goto bad;
+bad:
+    snprintf(diag,dcap,"El opcode, valor o flujo no pertenece al subconjunto entero exacto ELF directo");
+done:
+    free(val);free(def);return ok;
+}
+
+static size_t aot_max_id(const MilenaIRProgram *ir) {
+    size_t max=0;
+    for(size_t i=0;i<ir->count;++i) if(ir->instructions[i].result_id>max) max=ir->instructions[i].result_id;
+    for(size_t i=0;i<ir->parameter_count;++i) if(ir->parameters[i].value_id>max) max=ir->parameters[i].value_id;
+    return max;
+}
+static void aot_xmm(AOTCode *c, unsigned reg, uint32_t id, bool store) {
+    code_u8(c,0xf2);code_u8(c,0x0f);code_u8(c,store?0x11:0x10);
+    code_u8(c,(unsigned char)(0x85u|(reg<<3)));code_disp32(c,stack_slot_displacement(id));
+}
+static bool aot_emit_fn(AOTCode *c,AOTFixups *fx,const MilenaIRModule *m,size_t fi) {
+    const MilenaIRModuleFunction *fn=&m->functions[fi]; const MilenaIRProgram *ir=fn->body;
+    size_t max=aot_max_id(ir); if(max>100000u||max>(size_t)INT32_MAX/8u||fn->parameter_count>8u)return false;
+    uint32_t frame=(uint32_t)(max*8u+64u);frame=(frame+15u)&~UINT32_C(15);
+    code_u8(c,0x55);code_u8(c,0x48);code_u8(c,0x89);code_u8(c,0xe5);
+    code_u8(c,0x48);code_u8(c,0x81);code_u8(c,0xec);code_u32(c,frame);
+    size_t pi=0;
+    for(size_t i=0;i<ir->parameter_count;++i)if(ir->parameters[i].block_id==ir->blocks[0].id)
+        aot_xmm(c,(unsigned)pi++,ir->parameters[i].value_id,true);
+    if(pi!=fn->parameter_count)return false;
+    for(size_t i=0;i<ir->count&&!c->failed;++i){
+        const MilenaIRInstruction *in=&ir->instructions[i];
+        if(in->opcode==MILENA_IR_RETURN){aot_xmm(c,0,in->operand1_id,false);code_u8(c,0xc9);code_u8(c,0xc3);return !c->failed;}
+        if(in->opcode==MILENA_IR_CONST_F64){uint64_t bits;memcpy(&bits,&in->float_immediate,8);code_u8(c,0x48);code_u8(c,0xb8);code_u64(c,bits);code_u8(c,0x48);code_u8(c,0x89);code_u8(c,0x85);code_disp32(c,stack_slot_displacement(in->result_id));}
+        else if(in->opcode==MILENA_IR_CALL){
+            size_t target=aot_find_symbol(m,(uint32_t)in->integer_immediate);if(target==SIZE_MAX||in->call_argument_count>8u)return false;
+            for(size_t a=0;a<in->call_argument_count;++a)aot_xmm(c,(unsigned)a,ir->call_arguments[in->call_argument_offset+a],false);
+            code_u8(c,0xe8);size_t disp=c->length;code_u32(c,0);aot_fixup(fx,disp,target+1u);aot_xmm(c,0,in->result_id,true);
+        } else {
+            aot_xmm(c,0,in->operand1_id,false);aot_xmm(c,1,in->operand2_id,false);
+            code_u8(c,0xf2);code_u8(c,0x0f);
+            if(in->opcode==MILENA_IR_ADD_F64)code_u8(c,0x58);else if(in->opcode==MILENA_IR_SUB_F64)code_u8(c,0x5c);else if(in->opcode==MILENA_IR_MUL_F64)code_u8(c,0x59);else if(in->opcode==MILENA_IR_DIV_F64)code_u8(c,0x5e);else return false;
+            code_u8(c,0xc1);aot_xmm(c,0,in->result_id,true);
+        }
+    }
+    return false;
+}
+
+static MilenaStatus aot_write_module_elf(const MilenaIRModule *m,size_t entry,const char *output,MilenaError *error){
+    AOTCode c={0};AOTFixups fx={0};size_t *offset=calloc(m->function_count+1u,sizeof(*offset));
+    if(!offset){aot_error(error,MILENA_ERR_MEMORY,"Sin memoria para relocalizar las llamadas AOT");return MILENA_ERR_MEMORY;}
+    /* _start has an aligned formatter frame; before CALL, RSP is 16-byte aligned. */
+    code_u8(&c,0x55);code_u8(&c,0x48);code_u8(&c,0x89);code_u8(&c,0xe5);code_u8(&c,0x48);code_u8(&c,0x83);code_u8(&c,0xec);code_u8(&c,72);
+    code_u8(&c,0xe8);size_t d=c.length;code_u32(&c,0);aot_fixup(&fx,d,entry+1u);
+    code_u8(&c,0xf2);code_u8(&c,0x48);code_u8(&c,0x0f);code_u8(&c,0x2c);code_u8(&c,0xc0);
+    emit_linux_formatter(&c,-64);
+    for(size_t i=0;i<m->function_count;++i){offset[i+1u]=c.length;if(!aot_emit_fn(&c,&fx,m,i)){c.failed=true;break;}}
+    if(fx.failed)c.failed=true;
+    for(size_t i=0;i<fx.n&&!c.failed;++i){AOTFixup f=fx.v[i];if(f.target>m->function_count||f.disp>c.length-4u){c.failed=true;break;}int64_t rel=(int64_t)offset[f.target]-(int64_t)(f.disp+4u);if(rel<INT32_MIN||rel>INT32_MAX){c.failed=true;break;}put_u32le(c.bytes+f.disp,(uint32_t)(int32_t)rel);}
+    free(fx.v);free(offset);
+    if(c.failed||c.length>SIZE_MAX-ELF64_CODE_OFFSET){free(c.bytes);aot_error(error,MILENA_ERR_OVERFLOW,"El módulo o las relocalizaciones exceden el límite ELF");return MILENA_ERR_OVERFLOW;}
+    size_t size=ELF64_CODE_OFFSET+c.length;unsigned char h[ELF64_CODE_OFFSET]={0};
+    static const unsigned char ident[16]={0x7f,'E','L','F',2,1,1,0,0,0,0,0,0,0,0,0};memcpy(h,ident,16);put_u16le(h+16,2);put_u16le(h+18,62);put_u32le(h+20,1);put_u64le(h+24,ELF64_LOAD_ADDRESS+ELF64_CODE_OFFSET);put_u64le(h+32,ELF64_HEADER_SIZE);put_u16le(h+52,64);put_u16le(h+54,56);put_u16le(h+56,1);
+    unsigned char *ph=h+64;put_u32le(ph,1);put_u32le(ph+4,5);put_u64le(ph+16,ELF64_LOAD_ADDRESS);put_u64le(ph+24,ELF64_LOAD_ADDRESS);put_u64le(ph+32,size);put_u64le(ph+40,size);put_u64le(ph+48,0x1000);
+    const char *slash=strrchr(output,'/');size_t dn=slash?(size_t)(slash-output+1):0;const char *prefix=".milena-elf-";size_t tn=dn+(dn?0u:2u)+strlen(prefix)+sizeof("XXXXXX");char *tmp=malloc(tn);
+    if(!tmp){free(c.bytes);aot_error(error,MILENA_ERR_MEMORY,"Sin memoria para ELF temporal");return MILENA_ERR_MEMORY;}size_t at=0;if(dn){memcpy(tmp,output,dn);at=dn;}else{tmp[at++]='.';tmp[at++]='/';}memcpy(tmp+at,prefix,strlen(prefix));at+=strlen(prefix);memcpy(tmp+at,"XXXXXX",7);
+    int fd=mkstemp(tmp);if(fd<0){free(c.bytes);free(tmp);aot_error(error,MILENA_ERR_IO,"No se pudo crear ELF temporal");return MILENA_ERR_IO;}FILE *f=fdopen(fd,"wb");if(!f){close(fd);unlink(tmp);free(c.bytes);free(tmp);aot_error(error,MILENA_ERR_IO,"No se pudo abrir ELF temporal");return MILENA_ERR_IO;}
+    bool good=write_all(f,h,sizeof(h))&&write_all(f,c.bytes,c.length)&&fflush(f)==0;if(fclose(f)!=0)good=false;if(good&&chmod(tmp,0755)!=0)good=false;if(good&&rename(tmp,output)!=0)good=false;free(c.bytes);if(!good){unlink(tmp);free(tmp);aot_error(error,MILENA_ERR_IO,"No se pudo instalar ELF AOT atómicamente");return MILENA_ERR_IO;}free(tmp);return MILENA_OK;
+}
+
+static MilenaStatus build_typed_module_aot(MilenaCanonicalProgram *program,const char *output,MilenaError *error){
+    const MilenaIRModule *m=program->typed_module;if(!m||m->function_count<2u||m->function_count>1024u)return aot_unsupported(error,"AOT de llamadas directas requiere principal() y al menos una función auxiliar");
+    char diag[MILENA_ERROR_TEXT]={0};if(!milena_ir_module_validate(m,diag,sizeof(diag)))return aot_unsupported(error,diag[0]?diag:"El módulo IR no pasó el verificador");
+    size_t entry=SIZE_MAX;for(size_t i=0;i<m->function_count;++i)if(!strcmp(m->functions[i].name,"principal"))entry=i;
+    if(entry==SIZE_MAX||m->functions[entry].parameter_count||m->functions[entry].return_type!=MILENA_IR_TYPE_F64)return aot_unsupported(error,"AOT directo requiere principal() sin argumentos y retorno F64");
+    bool *reachable=calloc(m->function_count,sizeof(*reachable));if(!reachable){aot_error(error,MILENA_ERR_MEMORY,"Sin memoria para verificar llamadas AOT");return MILENA_ERR_MEMORY;}
+    int64_t result=0;const char *runtime_error=NULL;bool ok=aot_eval_fn(m,entry,NULL,0,&result,&runtime_error,reachable,0,diag,sizeof(diag));
+    if(ok)for(size_t i=0;i<m->function_count;++i)if(!reachable[i]){snprintf(diag,sizeof(diag),"El módulo contiene una función no alcanzable desde principal()");ok=false;break;}
+    free(reachable);if(!ok)return aot_unsupported(error,diag[0]?diag:"El módulo excede el subconjunto AOT directo");
+    if(runtime_error)return write_linux_x86_64_elf(runtime_error,output,error);
+    return aot_write_module_elf(m,entry,output,error);
+}
+
 #endif
 
 static MilenaStatus build_from_typed_ir(MilenaCanonicalProgram *program,
@@ -706,6 +902,8 @@ static MilenaStatus build_from_typed_ir(MilenaCanonicalProgram *program,
     return aot_unsupported(error,
         "El backend nativo directo solo está implementado para Linux x86-64 ELF");
 #else
+    if (program->typed_module && program->typed_module->function_count > 1u)
+        return build_typed_module_aot(program, output_filename, error);
     const MilenaIRProgram *ir = NULL;
     if (!find_entry_function(program, &ir))
         return aot_unsupported(error,

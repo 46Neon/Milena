@@ -83,14 +83,53 @@ fi
 grep -E 'subconjunto entero exacto|subconjunto ELF directo' "$TEMP_DIR/non-finite.err" >/dev/null
 [ "$(cat "$TEMP_DIR/non-finite")" = 'keep-existing-output' ]
 
-# Control flow/calls outside the small verified slice fail closed and preserve output.
+# Direct helper calls execute as x86-64 CALL rel32 instructions using SysV
+# floating-point arguments/results. Compare the helper-call result to the
+# typed-bytecode reference VM, not to a compile-time folded constant.
+"$MILENA" build "$FIXTURES/direct_calls.milena" -o "$TEMP_DIR/direct-calls"
+[ -x "$TEMP_DIR/direct-calls" ]
+python3 - "$TEMP_DIR/direct-calls" <<'PYCODE'
+import pathlib, sys
+code = pathlib.Path(sys.argv[1]).read_bytes()[120:]
+if code.count(b'\xe8') < 2:
+    raise SystemExit('expected emitted entry/helper direct CALL rel32 instructions')
+PYCODE
+"$ROOT/tests/test_typed_bytecode" --aot-reference-calls >"$TEMP_DIR/calls.vm.out" 2>"$TEMP_DIR/calls.vm.err"
+"$TEMP_DIR/direct-calls" >"$TEMP_DIR/calls.native.out" 2>"$TEMP_DIR/calls.native.err"
+cmp "$TEMP_DIR/calls.vm.out" "$TEMP_DIR/calls.native.out"
+[ "$(cat "$TEMP_DIR/calls.native.out")" = '6' ]
+
+# A helper's native division-by-zero behavior must match the typed-bytecode VM.
+"$MILENA" build "$FIXTURES/direct_call_division_by_zero.milena" -o "$TEMP_DIR/call-div-zero"
+set +e
+"$ROOT/tests/test_typed_bytecode" --aot-reference-call-div-zero >"$TEMP_DIR/call-div.vm.out" 2>"$TEMP_DIR/call-div.vm.err"
+CALL_VM_STATUS=$?
+"$TEMP_DIR/call-div-zero" >"$TEMP_DIR/call-div.native.out" 2>"$TEMP_DIR/call-div.native.err"
+CALL_NATIVE_STATUS=$?
+set -e
+[ "$CALL_VM_STATUS" -eq 70 ]
+[ "$CALL_NATIVE_STATUS" -eq 70 ]
+grep -F 'division by zero' "$TEMP_DIR/call-div.vm.err" >/dev/null
+grep -F 'Milena native runtime error: division by zero' "$TEMP_DIR/call-div.native.err" >/dev/null
+
+# SysV floating-point calls beyond the eight XMM argument registers are rejected.
+printf 'keep-existing-output\n' >"$TEMP_DIR/preserved"
+if "$MILENA" build "$FIXTURES/too_many_arguments.milena" -o "$TEMP_DIR/preserved" \
+    >"$TEMP_DIR/too-many-args.out" 2>"$TEMP_DIR/too-many-args.err"; then
+    echo 'AOT unexpectedly accepted more than eight direct-call arguments' >&2
+    exit 1
+fi
+grep -F 'máximo 8 argumentos F64' "$TEMP_DIR/too-many-args.err" >/dev/null
+[ "$(cat "$TEMP_DIR/preserved")" = 'keep-existing-output' ]
+
+# Control flow outside the small verified slice fails closed and preserves output.
 printf 'keep-existing-output\n' >"$TEMP_DIR/preserved"
 if "$MILENA" build "$FIXTURES/branches_calls.milena" -o "$TEMP_DIR/preserved" \
     >"$TEMP_DIR/reject.out" 2>"$TEMP_DIR/reject.err"; then
     echo 'AOT unexpectedly accepted unsupported control flow/calls' >&2
     exit 1
 fi
-grep -E 'AOT directo requiere|subconjunto ELF directo' "$TEMP_DIR/reject.err" >/dev/null
+grep -E 'subconjunto AOT de un bloque|subconjunto ELF directo|AOT directo requiere' "$TEMP_DIR/reject.err" >/dev/null
 [ "$(cat "$TEMP_DIR/preserved")" = 'keep-existing-output' ]
 
 if "$MILENA" build "$FIXTURES/no_principal.milena" -o "$TEMP_DIR/preserved" \
