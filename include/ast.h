@@ -216,6 +216,16 @@ typedef struct {
 } ASTColumnSelectionPayload;
 
 typedef enum {
+    AST_DATA_CLEANUP_ACTION_NONE = 0,
+    AST_DATA_CLEANUP_ACTION_REMOVE
+} ASTDataCleanupAction;
+
+typedef struct {
+    ASTDataCleanupAction action;
+    bool present;
+} ASTDataCleanupPayload;
+
+typedef enum {
     AST_FILTER_PREDICATE_OK = 0,
     AST_FILTER_PREDICATE_INVALID,
     AST_FILTER_PREDICATE_MEMORY
@@ -250,6 +260,8 @@ typedef struct ASTNode {
     ASTDataProductPayload data_product;
     /* Owned selection names for #columnas; value is a validated mirror. */
     ASTColumnSelectionPayload column_selection;
+    /* Enumerated operation for admitted null/duplicate cleanup commands. */
+    ASTDataCleanupPayload data_cleanup;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */
     struct ASTNode *left_operand;
     struct ASTNode *right_operand;
@@ -326,6 +338,7 @@ bool ast_set_join_right_source(ASTNode *node, const char *path);
 bool ast_set_join_key(ASTNode *node, const char *name);
 bool ast_set_data_product(ASTNode *node, const char *expression);
 bool ast_set_column_selection(ASTNode *node, const char *names);
+bool ast_set_data_cleanup_action(ASTNode *node, ASTDataCleanupAction action);
 const char *ast_data_column_type_name(ASTDataColumnType type);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);

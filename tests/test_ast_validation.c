@@ -424,6 +424,76 @@ int main(void) {
     assert(bad_columns && !ast_set_column_selection(bad_columns, bad_columns->value));
     ast_destroy(bad_columns);
 
+    const char *cleanup_source =
+        ".analisis demo { .limpiar dataset { #nulos(\"eliminar\") "
+        "#duplicados(\"eliminar\") #nulos(\"rellenar\") } }";
+    lexer_init(&lexer, cleanup_source);
+    parser_init(&parser, &lexer);
+    ASTNode *cleanup_program = parser_parse(&parser);
+    assert(cleanup_program && !parser.has_error &&
+           cleanup_program->child_count == 1u &&
+           cleanup_program->children[0]->child_count == 1u);
+    ASTNode *cleanup_block = cleanup_program->children[0]->children[0];
+    assert(cleanup_block->type == AST_BLOQUE_LIMPIAR &&
+           cleanup_block->child_count == 3u);
+    ASTNode *cleanup_nulls = cleanup_block->children[0];
+    ASTNode *cleanup_duplicates = cleanup_block->children[1];
+    ASTNode *cleanup_unsupported = cleanup_block->children[2];
+    const char *nulls_command_text = "#nulos(\"eliminar\")";
+    const char *duplicates_command_text = "#duplicados(\"eliminar\")";
+    const char *unsupported_command_text = "#nulos(\"rellenar\")";
+    assert(cleanup_nulls->data_cleanup.present &&
+           cleanup_nulls->data_cleanup.action == AST_DATA_CLEANUP_ACTION_REMOVE &&
+           cleanup_nulls->has_source_span &&
+           cleanup_nulls->end_offset - cleanup_nulls->start_offset ==
+               strlen(nulls_command_text) &&
+           strncmp(cleanup_source + cleanup_nulls->start_offset,
+                   nulls_command_text, strlen(nulls_command_text)) == 0);
+    assert(cleanup_duplicates->data_cleanup.present &&
+           cleanup_duplicates->data_cleanup.action ==
+               AST_DATA_CLEANUP_ACTION_REMOVE &&
+           cleanup_duplicates->has_source_span &&
+           cleanup_duplicates->end_offset - cleanup_duplicates->start_offset ==
+               strlen(duplicates_command_text) &&
+           strncmp(cleanup_source + cleanup_duplicates->start_offset,
+                   duplicates_command_text, strlen(duplicates_command_text)) == 0);
+    assert(!cleanup_unsupported->data_cleanup.present &&
+           cleanup_unsupported->data_cleanup.action ==
+               AST_DATA_CLEANUP_ACTION_NONE &&
+           strcmp(cleanup_unsupported->value, "rellenar") == 0 &&
+           cleanup_unsupported->has_source_span &&
+           cleanup_unsupported->end_offset - cleanup_unsupported->start_offset ==
+               strlen(unsupported_command_text) &&
+           strncmp(cleanup_source + cleanup_unsupported->start_offset,
+                   unsupported_command_text, strlen(unsupported_command_text)) == 0 &&
+           ast_validate(cleanup_program, &error));
+    char cleanup_mirror = cleanup_nulls->value[0];
+    cleanup_nulls->value[0] = cleanup_mirror == '#' ? 'X' : '#';
+    assert(!ast_validate(cleanup_program, &error) &&
+           error.code == MILENA_ERR_ARGUMENT);
+    cleanup_nulls->value[0] = cleanup_mirror;
+    cleanup_nulls->data_cleanup.present = false;
+    assert(!ast_validate(cleanup_program, &error) &&
+           error.code == MILENA_ERR_ARGUMENT);
+    cleanup_nulls->data_cleanup.action = AST_DATA_CLEANUP_ACTION_NONE;
+    assert(ast_validate(cleanup_program, &error));
+    cleanup_nulls->data_cleanup.present = true;
+    cleanup_nulls->data_cleanup.action = AST_DATA_CLEANUP_ACTION_REMOVE;
+    assert(ast_validate(cleanup_program, &error));
+    ast_destroy(cleanup_program); /* no cleanup payload owns memory */
+    parser_release(&parser);
+
+    ASTNode *unsupported_cleanup = ast_create_leaf(AST_COMANDO_NULOS, "rellenar");
+    assert(unsupported_cleanup &&
+           !ast_set_data_cleanup_action(unsupported_cleanup,
+                                        AST_DATA_CLEANUP_ACTION_REMOVE));
+    ast_destroy(unsupported_cleanup);
+    ASTNode *wrong_kind_cleanup = ast_create_leaf(AST_COMANDO_TOTAL, "eliminar");
+    assert(wrong_kind_cleanup &&
+           !ast_set_data_cleanup_action(wrong_kind_cleanup,
+                                        AST_DATA_CLEANUP_ACTION_REMOVE));
+    ast_destroy(wrong_kind_cleanup);
+
     assert(!ast_validate(NULL, &error));
     assert(error.code == MILENA_ERR_ARGUMENT);
     return 0;

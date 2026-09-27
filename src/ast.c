@@ -418,6 +418,17 @@ bool ast_set_column_selection(ASTNode *node, const char *names) {
     return true;
 }
 
+bool ast_set_data_cleanup_action(ASTNode *node, ASTDataCleanupAction action) {
+    if (!node || (node->type != AST_COMANDO_NULOS &&
+                  node->type != AST_COMANDO_DUPLICADOS) ||
+        action != AST_DATA_CLEANUP_ACTION_REMOVE || !node->value ||
+        strcmp(node->value, "eliminar") != 0 || node->child_count != 0u)
+        return false;
+    node->data_cleanup.action = action;
+    node->data_cleanup.present = true;
+    return true;
+}
+
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column) {
     if (!node || node->type != AST_RESUMEN_METRICA || !node->value ||
@@ -693,6 +704,22 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
         } else if (node->column_selection.names || node->column_selection.count != 0u) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                 "Payload de selección de columnas sin etiqueta en el AST");
+            break;
+        }
+        if (node->data_cleanup.present) {
+            if ((node->type != AST_COMANDO_NULOS &&
+                 node->type != AST_COMANDO_DUPLICADOS) ||
+                node->data_cleanup.action != AST_DATA_CLEANUP_ACTION_REMOVE ||
+                !node->value || strcmp(node->value, "eliminar") != 0 ||
+                node->child_count != 0u || !node->has_source_span ||
+                node->end_offset <= node->start_offset) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de acción de limpieza inconsistente en el AST");
+                break;
+            }
+        } else if (node->data_cleanup.action != AST_DATA_CLEANUP_ACTION_NONE) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Payload de acción de limpieza sin etiqueta en el AST");
             break;
         }
         if ((node->join_limits_explicit || node->join_memory_budget_bytes ||

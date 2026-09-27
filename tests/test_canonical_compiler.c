@@ -682,6 +682,16 @@ int main(void) {
         ".limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") } }";
     CHECK(milena_canonical_program_parse(&program, cleanup_source, &error) ==
           MILENA_OK, error.message);
+    const ASTNode *cleanup_ast_block = program.ast->children[0]->children[1];
+    CHECK(cleanup_ast_block->type == AST_BLOQUE_LIMPIAR &&
+          cleanup_ast_block->child_count == 2 &&
+          cleanup_ast_block->children[0]->data_cleanup.present &&
+          cleanup_ast_block->children[0]->data_cleanup.action ==
+              AST_DATA_CLEANUP_ACTION_REMOVE &&
+          cleanup_ast_block->children[1]->data_cleanup.present &&
+          cleanup_ast_block->children[1]->data_cleanup.action ==
+              AST_DATA_CLEANUP_ACTION_REMOVE,
+          "la limpieza admitida debe estar etiquetada como acción tipada en AST");
     CHECK(program.data_hir && program.data_hir->operation_count == 2 &&
           program.data_hir->operations[0].kind == MILENA_HIR_DATA_DROP_NULLS &&
           program.data_hir->operations[1].kind == MILENA_HIR_DATA_DROP_DUPLICATES &&
@@ -726,6 +736,11 @@ int main(void) {
         ".limpiar dataset { #nulos(\"rellenar\") } }";
     CHECK(milena_canonical_program_parse(&program, unsupported_cleaning_action,
                                          &error) == MILENA_OK, error.message);
+    CHECK(program.ast && program.ast->children[0]->children[1]->children[0]
+              ->data_cleanup.present == false &&
+          program.ast->children[0]->children[1]->children[0]
+              ->data_cleanup.action == AST_DATA_CLEANUP_ACTION_NONE,
+          "una acción no admitida debe seguir sin tipo en el AST de compatibilidad");
     CHECK(program.data_hir == NULL &&
           milena_canonical_compiler_input(&program, &data_input, &error) ==
               MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&

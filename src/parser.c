@@ -1324,10 +1324,16 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_advance(parser);
                             if (!parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) break;
                             if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) break;
+                            Token action_token = parser->previous;
                             ASTNode *command = ast_create_leaf(command_type,
-                                                               parser->previous.lexeme);
+                                                               action_token.lexeme);
                             if (!command) {
                                 parser_error(parser, "Sin memoria para comando de limpieza");
+                                break;
+                            }
+                            if (!parser_expect(parser, TOKEN_PAR_DER,
+                                               "Se esperaba ')'")) {
+                                ast_destroy(command);
                                 break;
                             }
                             if (!ast_set_source_span(command, &command_start,
@@ -1336,10 +1342,18 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 parser_error(parser, "No se pudo registrar el origen del comando de limpieza");
                                 break;
                             }
+                            /* Keep unsupported legacy spellings in the AST, but
+                             * only tag the one action the data HIR implements. */
+                            if (strcmp(action_token.lexeme, "eliminar") == 0 &&
+                                !ast_set_data_cleanup_action(command,
+                                    AST_DATA_CLEANUP_ACTION_REMOVE)) {
+                                ast_destroy(command);
+                                parser_error(parser,
+                                    "No se pudo conservar la acción tipada de limpieza");
+                                break;
+                            }
                             if (!parser_add_child(parser, limpiar, command,
                                                   "Sin memoria para comando de limpieza")) break;
-                            if (!parser_expect(parser, TOKEN_PAR_DER,
-                                               "Se esperaba ')'")) break;
                         } else {
                             parser_error(parser, "Comando desconocido en limpiar");
                         }

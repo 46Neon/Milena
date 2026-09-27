@@ -888,8 +888,9 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             for (size_t j = 0; j < node->child_count; ++j) {
                 const ASTNode *command = node->children[j];
                 MilenaHIRDataOperation op = {0};
-                if (!command || !command->value ||
-                    strcmp(command->value, "eliminar") != 0) {
+                if (!command || !command->data_cleanup.present ||
+                    command->data_cleanup.action !=
+                        AST_DATA_CLEANUP_ACTION_REMOVE) {
                     data_hir_release(hir);
                     return HIR_BUILD_UNSUPPORTED;
                 }
@@ -1683,6 +1684,10 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
     switch (node->type) {
         case AST_COMANDO_CONDICION:
             return node->has_filter_predicate && node->filter_column != NULL;
+        case AST_COMANDO_NULOS:
+        case AST_COMANDO_DUPLICADOS:
+            return node->data_cleanup.present &&
+                   node->data_cleanup.action == AST_DATA_CLEANUP_ACTION_REMOVE;
         case AST_LLAMADA_CARGAR:
             return node->data_source.present && node->data_source.path != NULL;
         case AST_DECLARACION_VARIABLE:
@@ -1695,8 +1700,6 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_BLOQUE_TRANSFORMAR:
         case AST_COMANDO_TOTAL:
         case AST_BLOQUE_LIMPIAR:
-        case AST_COMANDO_NULOS:
-        case AST_COMANDO_DUPLICADOS:
         case AST_BLOQUE_FILTRAR:
         case AST_BLOQUE_AGRUPAR:
         case AST_AGRUPACION_POR:
