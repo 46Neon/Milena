@@ -2,6 +2,7 @@
 #include "typed_ir.h"
 #include "typed_bytecode.h"
 #include "vm.h"
+#include "interpreter.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1480,7 +1481,7 @@ int main(void) {
 
     /* Exercise every currently lowered scalar arithmetic/comparison operator,
        assignment merges with and without sino, nested conditionals, and terminal
-       returns through the canonical source -> typed IR -> MLBC -> verified VM path. */
+       returns through the verified VM; compare all results with the legacy interpreter. */
     milena_canonical_program_init(&program);
     const char *scalar_vm_source =
         "funcion sumar(a, b) { retornar a + b; } "
@@ -1551,13 +1552,80 @@ int main(void) {
         {"booleano_local", {1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 1.0, false},
         {"booleano_local", {-1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false}
     };
+    const size_t scalar_case_count = sizeof(scalar_cases) / sizeof(scalar_cases[0]);
+    size_t oracle_capacity = strlen(scalar_vm_source) + scalar_case_count * 128u + 1u;
+    char *oracle_source = (char *)malloc(oracle_capacity);
+    CHECK(oracle_source != NULL, "no se pudo crear la fuente de referencia diferencial");
+    size_t oracle_length = strlen(scalar_vm_source);
+    memcpy(oracle_source, scalar_vm_source, oracle_length + 1u);
+    for (size_t i = 0; i < scalar_case_count; ++i) {
+        int written = snprintf(oracle_source + oracle_length,
+                               oracle_capacity - oracle_length,
+                               " variable resultado_diferencial_%zu = %s(",
+                               i, scalar_cases[i].name);
+        CHECK(written > 0 && (size_t)written < oracle_capacity - oracle_length,
+              "se desbordó la fuente de referencia diferencial");
+        oracle_length += (size_t)written;
+        for (size_t a = 0; a < scalar_cases[i].argument_count; ++a) {
+            if (a) {
+                written = snprintf(oracle_source + oracle_length,
+                                   oracle_capacity - oracle_length, ", ");
+                CHECK(written > 0 &&
+                      (size_t)written < oracle_capacity - oracle_length,
+                      "se desbordó la lista de argumentos diferencial");
+                oracle_length += (size_t)written;
+            }
+            double argument = scalar_cases[i].arguments[a];
+            written = argument < 0.0 ?
+                snprintf(oracle_source + oracle_length,
+                         oracle_capacity - oracle_length, "0 - %.17g", -argument) :
+                snprintf(oracle_source + oracle_length,
+                         oracle_capacity - oracle_length, "%.17g", argument);
+            CHECK(written > 0 && (size_t)written < oracle_capacity - oracle_length,
+                  "se desbordó un argumento diferencial");
+            oracle_length += (size_t)written;
+        }
+        written = snprintf(oracle_source + oracle_length,
+                           oracle_capacity - oracle_length, "); ");
+        CHECK(written > 0 && (size_t)written < oracle_capacity - oracle_length,
+              "se desbordó una llamada diferencial");
+        oracle_length += (size_t)written;
+    }
+
+    MilenaCanonicalProgram reference_program;
+    milena_canonical_program_init(&reference_program);
+    CHECK(milena_canonical_program_parse(&reference_program, oracle_source,
+                                         &error) == MILENA_OK, error.message);
+    Interpreter reference_interpreter = {0};
+    CHECK(interpreter_init(&reference_interpreter, reference_program.ast),
+          "no se pudo inicializar el intérprete de referencia");
+    CHECK(interpreter_run(&reference_interpreter),
+          reference_interpreter.error.message[0] ?
+              reference_interpreter.error.message :
+              "falló el intérprete de referencia escalar");
+
     char scalar_vm_error[256] = {0};
-    for (size_t i = 0; i < sizeof(scalar_cases) / sizeof(scalar_cases[0]); ++i)
+    for (size_t i = 0; i < scalar_case_count; ++i) {
+        char oracle_name[48];
+        double reference_result = 0.0;
+        int name_length = snprintf(oracle_name, sizeof(oracle_name),
+                                   "resultado_diferencial_%zu", i);
+        CHECK(name_length > 0 && (size_t)name_length < sizeof(oracle_name),
+              "el nombre temporal diferencial no cabe");
+        CHECK(interpreter_get_number(&reference_interpreter, oracle_name,
+                                     &reference_result),
+              "el intérprete de referencia no publicó un resultado");
+        CHECK(reference_result == scalar_cases[i].expected_number,
+              "el fixture del intérprete no coincide con el resultado esperado");
         CHECK(run_vm_case(&program, scalar_bytecode, scalar_bytecode_size,
               scalar_cases[i].name, scalar_cases[i].arguments,
               scalar_cases[i].argument_count, scalar_cases[i].result_type,
-              scalar_cases[i].expected_number, scalar_cases[i].expected_boolean,
+              reference_result, scalar_cases[i].expected_boolean,
               scalar_vm_error, sizeof(scalar_vm_error)), scalar_vm_error);
+    }
+    interpreter_destroy(&reference_interpreter);
+    milena_canonical_program_release(&reference_program);
+    free(oracle_source);
     free(scalar_bytecode);
     milena_canonical_program_release(&program);
 
