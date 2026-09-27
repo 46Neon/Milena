@@ -251,6 +251,9 @@ static void test_roundtrip_module_with_direct_call(void) {
     milena_ir_module_destroy(module);
 }
 
+static uint8_t *downgrade_v1_1_to_v1_0(const uint8_t *bytes, size_t size,
+                                       size_t *legacy_size_out);
+
 static void test_v1_0_compatibility_defaults_empty_spans(void) {
     char error[256] = {0};
     uint8_t *encoded = NULL;
