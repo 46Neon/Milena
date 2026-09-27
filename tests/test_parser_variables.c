@@ -107,5 +107,19 @@ int main(void) {
     assert(output->children[0]->child_count == 1);
     ast_destroy(program);
     parser_release(&parser);
+
+    /* Unknown dotted analysis blocks are not silently reinterpreted as filters. */
+    const char *unknown_block_source =
+        ". analisis ventas { .desconocido { #condicion(\"base > 0\") } }";
+    lexer_init(&lexer, unknown_block_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    const char *unknown_name = strstr(unknown_block_source, "desconocido");
+    assert(program == NULL);
+    assert(parser.has_error && parser.error.code == MILENA_ERR_PARSE);
+    assert(unknown_name != NULL && parser.error.line == 1u);
+    assert(parser.error.column == (size_t)(unknown_name - unknown_block_source) + 1u);
+    assert(strstr(parser.error.message, "Bloque de análisis desconocido") != NULL);
+    parser_release(&parser);
     return 0;
 }
