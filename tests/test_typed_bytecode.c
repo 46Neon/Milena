@@ -333,13 +333,12 @@ static void set_payload_length(uint8_t *bytes, size_t total_size);
 
 static uint8_t *downgrade_v1_1_to_v1_0(const uint8_t *bytes, size_t size,
                                        size_t *legacy_size_out) {
-    size_t input = 16u;
-    size_t output = 16u;
-    uint32_t function_count = get_u32_le(bytes, input);
     uint8_t *legacy = (uint8_t *)malloc(size);
     assert(legacy != NULL && size >= 20u);
-    memcpy(legacy, bytes, 16u);
-    input += 4u;
+    size_t input = 20u;
+    size_t output = 20u;
+    uint32_t function_count = get_u32_le(bytes, 16u);
+    memcpy(legacy, bytes, 20u);
     for (uint32_t function_index = 0; function_index < function_count;
          ++function_index) {
         size_t function_start = input;
