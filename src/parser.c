@@ -1046,10 +1046,19 @@ static ASTNode *parse_arrow_projection(Parser *parser) {
             break;
         }
     }
+    if (parser->has_error) {
+        ast_destroy(projection);
+        return NULL;
+    }
+    if (projection->child_count == 0) {
+        Token empty_projection = parser->current;
+        parser_error_at(parser, &empty_projection,
+                        "La proyección Arrow no puede estar vacía");
+        ast_destroy(projection);
+        return NULL;
+    }
     if (!parser_expect(parser, TOKEN_LLAVE_DER,
-                       "Se esperaba '}' después de la proyección") ||
-        projection->child_count == 0) {
-        if (!parser->has_error) parser_error(parser, "La proyección Arrow no puede estar vacía");
+                       "Se esperaba '}' después de la proyección")) {
         ast_destroy(projection);
         return NULL;
     }
@@ -1324,9 +1333,11 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_error(parser, "Comando desconocido en limpiar");
                         }
                     }
-                    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'"))
+                    if (parser->has_error) {
                         ast_destroy(limpiar);
-                    else if (limpiar && limpiar->child_count == 0) {
+                    } else if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
+                        ast_destroy(limpiar);
+                    } else if (limpiar && limpiar->child_count == 0) {
                         ast_destroy(limpiar);
                         parser_error_at(parser, &cleaning_start,
                             "El bloque limpiar requiere al menos una orden");
@@ -1382,9 +1393,15 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_error(parser, "Comando desconocido en transformar");
                         }
                     }
-                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-                    if (transformar) parser_add_child(parser, node, transformar,
-                                                       "Sin memoria para el AST");
+                    if (parser->has_error) {
+                        ast_destroy(transformar);
+                    } else if (!parser_expect(parser, TOKEN_LLAVE_DER,
+                                              "Se esperaba '}'")) {
+                        ast_destroy(transformar);
+                    } else if (transformar) {
+                        parser_add_child(parser, node, transformar,
+                                         "Sin memoria para el AST");
+                    }
                 }
             } else if (parser_match(parser, TOKEN_KW_FILTRAR)) {
                 Token filter_start = parser->previous;
@@ -1815,7 +1832,12 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                     }
                                 } else if (parser_match(parser, TOKEN_KW_CONDICION)) {
                                     Token condition_start = parser->current;
-                                    if (filtering && filtrar->child_count != 0) {
+                                    if (!filtering) {
+                                        parser_error_at(parser, &condition_start,
+                                            "#condicion solo se admite dentro de .filtrar");
+                                        break;
+                                    }
+                                    if (filtrar->child_count != 0) {
                                         parser_error_at(parser, &condition_start,
                                             "El bloque filtrar admite una sola #condicion");
                                         break;

@@ -208,6 +208,9 @@ int main(void) {
     expect_parse_error_at(
         ". analisis ventas { .filtrar { #condicion(\"precio > 1\") #condicion(\"precio < 3\") } }",
         "condicion(\"precio < 3\")", "una sola #condicion");
+    expect_parse_error_at(
+        ". analisis ventas { .unir { #derecha(\"r.csv\") #clave(\"id\") #condicion(\"id > 0\") } }",
+        "condicion", "solo se admite dentro de .filtrar");
 
     const char *valid_filter_source =
         ". analisis ventas { .filtrar { #condicion(\"precio >= 2.5\") } }";
