@@ -59,7 +59,10 @@ assert sb['New, York\nMetro']['suma']['valor']==3.75
 assert sb['A']['suma']['valor'] is None
 assert sb['A']['suma']['valores_nulos']==1 and sb['A']['suma']['valores_invalidos']==1
 assert sb['A']['media']['valores_nulos']==1 and sb['A']['media']['valores_invalidos']==1
-assert sb['A']['conteo']['valor']==1 and sb['A']['conteo']['valores_nulos']==1
+assert sb['A']['conteo']['valor']==0
+assert sb['A']['conteo']['valores_validos']==0
+assert sb['A']['conteo']['valores_nulos']==1
+assert sb['A']['conteo']['valores_invalidos']==1
 assert [r['clave'] for r in b['resultados']]==sorted(sb, key=lambda x:x.encode())
 assert b['grupos']==len(sb)
 assert b['limite_salida_bytes']==1048576

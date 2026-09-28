@@ -1,0 +1,6 @@
+funcion sumar_tres(a, b, c) {
+    retornar a + b + c;
+}
+funcion principal() {
+    retornar sumar_tres(1, 2, 3);
+}

@@ -751,6 +751,8 @@ int main(void) {
     const char *data_source =
         ".analisis ventas {\n"
         " dataset cargar datos(\"entrada.csv\")\n"
+        " entrada categorica \"ciudad\"\n"
+        " salida binaria \"id\"\n"
         " .transformar dataset { #total(\"precio * cantidad\") }\n"
         " .filtrar { #condicion(\"total >= 10\") }\n"
         " .seleccionar { #columnas(\"id,total,ciudad\") }\n"
@@ -763,6 +765,13 @@ int main(void) {
           program.data_hir->source.resolved_dataset_id != 0 &&
           strcmp(program.data_hir->export_path, "salida.json") == 0 &&
           program.data_hir->operation_count == 3 &&
+          program.data_hir->role_declaration_count == 2 &&
+          program.data_hir->role_declarations[0].role ==
+              MILENA_HIR_DATA_ROLE_CATEGORICAL_INPUT &&
+          strcmp(program.data_hir->role_declarations[0].column.name, "ciudad") == 0 &&
+          program.data_hir->role_declarations[1].role ==
+              MILENA_HIR_DATA_ROLE_BINARY_OUTPUT &&
+          strcmp(program.data_hir->role_declarations[1].column.name, "id") == 0 &&
           program.data_hir->operations[1].as.filter.operation ==
               AST_OPERATOR_GREATER_EQUAL &&
           program.data_hir->operations[1].as.filter.threshold == 10.0 &&
@@ -801,6 +810,11 @@ int main(void) {
     CHECK(program.data_hir->schema_bound &&
           program.data_hir->operations[0].as.product.left.resolved_column_index == 1 &&
           program.data_hir->operations[0].as.product.left.type == MILENA_HIR_COLUMN_NUMERIC &&
+          program.data_hir->role_declarations[0].column.resolved_column_index == 3 &&
+          program.data_hir->role_declarations[0].column.type == MILENA_HIR_COLUMN_TEXT &&
+          program.data_hir->role_declarations[0].column.rank == 1 &&
+          program.data_hir->role_declarations[0].column.shape[0] == data_table.row_count &&
+          program.data_hir->role_declarations[1].column.resolved_column_index == 0 &&
           program.data_hir->operations[2].as.select.columns[1].resolved_column_index == 4 &&
           program.data_hir->operations[2].as.select.columns[2].type == MILENA_HIR_COLUMN_TEXT,
           "el binder debe resolver columnas, tipos, formas e identidades estables");
@@ -837,11 +851,169 @@ int main(void) {
           milena_table_column_index(&sentinel, "total") >= 0,
           "el límite de filas debe fallar sin publicar ni filtrar parcialmente la salida previa");
 
+    /* Role declarations are typed schema metadata, not column creation or
+       value conversion; invalid duplicates/conflicts never reach legacy input. */
+    MilenaCanonicalProgram roles_program;
+    MilenaCanonicalCompilerInput roles_input = {0};
+    milena_canonical_program_init(&roles_program);
+    const char *duplicate_role_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        "entrada categorica \"ciudad\" entrada categorica \"ciudad\" }";
+    CHECK(milena_canonical_program_parse(&roles_program, duplicate_role_source,
+          &error) == MILENA_OK && roles_program.data_hir == NULL &&
+          milena_canonical_hir_input(&roles_program, &roles_input, &error) ==
+              MILENA_ERR_UNSUPPORTED && roles_input.ast == NULL &&
+          roles_input.data_hir == NULL,
+          "una declaración de rol duplicada debe fallar cerrada sin fallback legado");
+    milena_canonical_program_release(&roles_program);
+
+    milena_canonical_program_init(&roles_program);
+    const char *conflicting_role_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        "entrada categorica \"id\" salida binaria \"id\" }";
+    CHECK(milena_canonical_program_parse(&roles_program, conflicting_role_source,
+          &error) == MILENA_OK && roles_program.data_hir == NULL &&
+          milena_canonical_hir_input(&roles_program, &roles_input, &error) ==
+              MILENA_ERR_UNSUPPORTED && roles_input.ast == NULL,
+          "roles de entrada/salida en una misma columna deben rechazarse sin fallback");
+    milena_canonical_program_release(&roles_program);
+
+    milena_canonical_program_init(&roles_program);
+    const char *variable_role_conflict_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        "variable ciudad texto entrada categorica \"ciudad\" }";
+    CHECK(milena_canonical_program_parse(&roles_program,
+          variable_role_conflict_source, &error) == MILENA_OK &&
+          roles_program.data_hir == NULL &&
+          milena_canonical_hir_input(&roles_program, &roles_input, &error) ==
+              MILENA_ERR_UNSUPPORTED && roles_input.ast == NULL,
+          "un rol que duplica una declaración de esquema debe fallar cerrada");
+    milena_canonical_program_release(&roles_program);
+
+    milena_canonical_program_init(&roles_program);
+    CHECK(milena_canonical_program_parse(&roles_program,
+          ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+          "entrada numerica \"ciudad\" }", &error) != MILENA_OK &&
+          roles_program.ast == NULL,
+          "el tipo de rol distinto del literal categórica debe rechazarse en parser");
+    milena_canonical_program_release(&roles_program);
+
+    milena_canonical_program_init(&roles_program);
+    CHECK(milena_canonical_program_parse(&roles_program,
+          ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+          "salida binaria \"ausente\" }", &error) == MILENA_OK &&
+          roles_program.data_hir != NULL &&
+          milena_canonical_program_bind_table(&roles_program, &data_table,
+          &error) == MILENA_ERR_TYPE && error.line > 0 &&
+          !roles_program.data_hir->schema_bound,
+          "la columna de rol ausente debe fallar con ubicación durante el bind");
+    milena_canonical_program_release(&roles_program);
+
     milena_canonical_program_release(&program);
     CHECK(milena_table_validate(&data_table, &error) == MILENA_OK,
           "liberar la HIR no debe destruir la tabla prestada");
     milena_table_destroy(&sentinel);
     milena_table_destroy(&data_output);
+
+    /* Typed HIR lowering and reference execution for #periodo, including
+       Gregorian leap-year validation, null propagation and transactional error. */
+    milena_canonical_program_init(&program);
+    const char *period_source =
+        ".analisis fechas { dataset cargar datos(\"fechas.csv\") "
+        ".transformar dataset { #periodo(\"mes de fecha\") } }";
+    CHECK(milena_canonical_program_parse(&program, period_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(program.data_hir && program.data_hir->operation_count == 1 &&
+          program.data_hir->operations[0].kind == MILENA_HIR_DATA_PERIOD &&
+          program.data_hir->operations[0].as.period.operation ==
+              AST_PERIOD_MONTH_FROM_DATE &&
+          strcmp(program.data_hir->operations[0].as.period.date_column.name, "fecha") == 0 &&
+          strcmp(program.data_hir->operations[0].as.period.output_name, "periodo") == 0 &&
+          program.data_hir->operations[0].span.has_source_span,
+          "#periodo debe bajar a una operación HIR tipada y con span");
+    const char *period_values[] = {"2024-02-29", "2023-12-31", NULL};
+    bool period_validity[] = {true, true, false};
+    MilenaTable period_table;
+    milena_table_init(&period_table);
+    CHECK(milena_table_add_string_column_copy(&period_table, "fecha", period_values, 3,
+                                               period_validity, &error) == MILENA_OK &&
+          milena_table_set_metadata(&period_table, MILENA_HIR_DATASET_PATH_METADATA,
+                                   "fechas.csv", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &period_table, &error) == MILENA_OK &&
+          program.data_hir->schema_bound &&
+          program.data_hir->operations[0].as.period.date_column.type ==
+              MILENA_HIR_COLUMN_TEXT &&
+          program.data_hir->operations[0].as.period.date_column.resolved_column_index == 0 &&
+          program.data_hir->resource_policy.max_columns == 2,
+          "el binder debe resolver fecha como texto y contar la columna derivada");
+    MilenaTable period_output;
+    milena_table_init(&period_output);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &period_output,
+                                                 &error) == MILENA_OK,
+          error.message);
+    CHECK(period_output.row_count == 3 && period_output.column_count == 2 &&
+          milena_table_column_index(&period_output, "periodo") == 1,
+          "el ejecutor debe agregar exactamente una columna periodo");
+    const char *period_cell = NULL;
+    CHECK(milena_table_get_string(&period_output, 1, 0, &period_cell, &error) == MILENA_OK &&
+          strcmp(period_cell, "2024-02") == 0 &&
+          milena_table_get_string(&period_output, 1, 1, &period_cell, &error) == MILENA_OK &&
+          strcmp(period_cell, "2023-12") == 0 &&
+          milena_table_is_null(&period_output, 1, 2),
+          "periodo debe extraer año-mes, admitir año bisiesto y propagar nulos");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&period_output);
+    milena_table_destroy(&period_table);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, period_source, &error) == MILENA_OK,
+          error.message);
+    const char *invalid_date_values[] = {"2023-02-29"};
+    MilenaTable invalid_dates;
+    milena_table_init(&invalid_dates);
+    CHECK(milena_table_add_string_column_copy(&invalid_dates, "fecha",
+          invalid_date_values, 1, NULL, &error) == MILENA_OK &&
+          milena_table_set_metadata(&invalid_dates, MILENA_HIR_DATASET_PATH_METADATA,
+                                    "fechas.csv", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &invalid_dates, &error) == MILENA_OK,
+          error.message);
+    MilenaTable period_sentinel;
+    milena_table_init(&period_sentinel);
+    const char *sentinel_value[] = {"conservar"};
+    CHECK(milena_table_add_string_column_copy(&period_sentinel, "marcador",
+          sentinel_value, 1, NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &period_sentinel,
+          &error) == MILENA_ERR_TYPE && error.line > 0 &&
+          period_sentinel.row_count == 1 && period_sentinel.column_count == 1 &&
+          milena_table_column_index(&period_sentinel, "periodo") < 0 &&
+          milena_table_column_index(&period_sentinel, "marcador") == 0,
+          "una fecha inválida debe reportar el span y no publicar salida parcial");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&invalid_dates);
+    milena_table_destroy(&period_sentinel);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, period_source, &error) == MILENA_OK,
+          error.message);
+    const char *duplicate_date_values[] = {"2024-01-01"};
+    const char *duplicate_period_values[] = {"existente"};
+    MilenaTable duplicate_period;
+    milena_table_init(&duplicate_period);
+    CHECK(milena_table_add_string_column_copy(&duplicate_period, "fecha",
+          duplicate_date_values, 1, NULL, &error) == MILENA_OK &&
+          milena_table_add_string_column_copy(&duplicate_period, "periodo",
+          duplicate_period_values, 1, NULL, &error) == MILENA_OK &&
+          milena_table_set_metadata(&duplicate_period, MILENA_HIR_DATASET_PATH_METADATA,
+                                    "fechas.csv", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &duplicate_period, &error) ==
+          MILENA_ERR_TYPE && !program.data_hir->schema_bound,
+          "el binder debe rechazar una columna de salida periodo ya existente");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&duplicate_period);
 
     /* Schema binding rejects unknown columns and type mismatches with spans. */
     milena_canonical_program_init(&program);
@@ -1187,7 +1359,6 @@ int main(void) {
           strstr(error.message, "Predicado numérico inválido") != NULL,
           "el predicado inválido debe fallar cerrado sin AST/HIR parcial");
     milena_canonical_program_release(&program);
-
 
     /* A source module with a direct scalar call lowers only on the canonical
        Spanish lexer/parser/semantic -> HIR -> typed-IR path. Calls are

@@ -48,6 +48,32 @@ MILENA
 "$ROOT/tests/test_arrow_ipc" --verify-wide "$TMP_DIR/wide-output.stream"
 grep -q 'Filas leídas: 5 | Filas escritas: 2' "$TMP_DIR/wide.stdout"
 
+# The runtime must derive the shared logical plan and use filter-scoped UTF-8
+# validation: malformed text in a nonmatching row and unprojected columns is
+# ignored, but source and projected order remain stable.
+"$ROOT/tests/test_arrow_ipc" --write-shared-fixture "$TMP_DIR/shared.stream"
+cat > "$TMP_DIR/shared-text.milena" <<'MILENA'
+.analisis shared_text_filter {
+  variable tag texto
+  variable selected texto
+  variable unused texto
+  datos desde "shared.stream" formato arrow_stream
+    procesar por lotes de 8 filas
+    con lote hasta 1024 bytes
+    con columnas de 3
+    con filas hasta 10
+    con tiempo hasta 30000 ms
+    con bytes hasta 65536
+    con salida hasta 65536 bytes
+  filtrar "tag" == "keep";
+  proyectar { "selected", "tag" }
+  guardar resultado en "shared-output.stream"
+}
+MILENA
+(cd "$TMP_DIR" && "$ROOT/milena" run shared-text.milena > shared-text.stdout)
+"$ROOT/tests/test_arrow_ipc" --verify-shared-text "$TMP_DIR/shared-output.stream"
+grep -q 'Filas leídas: 3 | Filas escritas: 2' "$TMP_DIR/shared-text.stdout"
+
 # A failure after staging begins must leave the previous destination intact and
 # remove the exclusive same-directory .part file.
 cat > "$TMP_DIR/output-limit.milena" <<'MILENA'

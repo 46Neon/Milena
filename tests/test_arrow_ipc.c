@@ -269,6 +269,132 @@ static bool is_sentinel(const char *path) {
     return ok;
 }
 
+static bool write_shared_text_fixture(const char *path) {
+    static const char malformed[] = {(char)0xc0, (char)0xaf};
+    FILE *file = fopen(path, "wb");
+    struct ArrowIpcOutputStream output = {0};
+    struct ArrowIpcWriter writer = {0};
+    struct ArrowSchema schema = {0};
+    struct ArrowArray array = {0};
+    struct ArrowArrayView view = {0};
+    struct ArrowError arrow_error;
+    bool output_live = false, writer_live = false;
+    bool schema_live = false, array_live = false, view_live = false;
+    bool ok = false;
+    if (!file) return false;
+    ArrowSchemaInit(&schema);
+    schema_live = true;
+    if (ArrowSchemaSetTypeStruct(&schema, 3) != NANOARROW_OK ||
+        ArrowSchemaSetName(schema.children[0], "tag") != NANOARROW_OK ||
+        ArrowSchemaSetType(schema.children[0], NANOARROW_TYPE_STRING) != NANOARROW_OK ||
+        ArrowSchemaSetName(schema.children[1], "selected") != NANOARROW_OK ||
+        ArrowSchemaSetType(schema.children[1], NANOARROW_TYPE_STRING) != NANOARROW_OK ||
+        ArrowSchemaSetName(schema.children[2], "unused") != NANOARROW_OK ||
+        ArrowSchemaSetType(schema.children[2], NANOARROW_TYPE_STRING) != NANOARROW_OK)
+        goto cleanup;
+    if (ArrowArrayInitFromSchema(&array, &schema, &arrow_error) != NANOARROW_OK)
+        goto cleanup;
+    array_live = true;
+    if (ArrowArrayStartAppending(&array) != NANOARROW_OK) goto cleanup;
+    const struct ArrowStringView malformed_view = {
+        malformed, (int64_t)sizeof(malformed)};
+    if (ArrowArrayAppendString(array.children[0], ArrowCharView("keep")) != NANOARROW_OK ||
+        ArrowArrayAppendString(array.children[1], ArrowCharView("first")) != NANOARROW_OK ||
+        ArrowArrayAppendString(array.children[2], malformed_view) != NANOARROW_OK ||
+        ArrowArrayFinishElement(&array) != NANOARROW_OK ||
+        ArrowArrayAppendString(array.children[0], malformed_view) != NANOARROW_OK ||
+        ArrowArrayAppendString(array.children[1], malformed_view) != NANOARROW_OK ||
+        ArrowArrayAppendString(array.children[2], malformed_view) != NANOARROW_OK ||
+        ArrowArrayFinishElement(&array) != NANOARROW_OK ||
+        ArrowArrayAppendString(array.children[0], ArrowCharView("keep")) != NANOARROW_OK ||
+        ArrowArrayAppendString(array.children[1], ArrowCharView("last")) != NANOARROW_OK ||
+        ArrowArrayAppendString(array.children[2], malformed_view) != NANOARROW_OK ||
+        ArrowArrayFinishElement(&array) != NANOARROW_OK ||
+        ArrowArrayFinishBuildingDefault(&array, &arrow_error) != NANOARROW_OK)
+        goto cleanup;
+    if (ArrowArrayViewInitFromSchema(&view, &schema, &arrow_error) != NANOARROW_OK)
+        goto cleanup;
+    view_live = true;
+    if (ArrowArrayViewSetArray(&view, &array, &arrow_error) != NANOARROW_OK ||
+        ArrowIpcOutputStreamInitFile(&output, file, 1) != NANOARROW_OK)
+        goto cleanup;
+    output_live = true;
+    file = NULL;
+    if (ArrowIpcWriterInit(&writer, &output) != NANOARROW_OK) goto cleanup;
+    writer_live = true;
+    output_live = false; /* writer owns the output stream */
+    if (ArrowIpcWriterWriteSchema(&writer, &schema, &arrow_error) != NANOARROW_OK ||
+        ArrowIpcWriterWriteArrayView(&writer, &view, &arrow_error) != NANOARROW_OK ||
+        ArrowIpcWriterWriteArrayView(&writer, NULL, &arrow_error) != NANOARROW_OK)
+        goto cleanup;
+    ok = true;
+cleanup:
+    if (view_live) ArrowArrayViewReset(&view);
+    if (array_live && array.release) array.release(&array);
+    if (schema_live && schema.release) schema.release(&schema);
+    if (writer_live) ArrowIpcWriterReset(&writer);
+    else if (output_live && output.release) output.release(&output);
+    if (file && fclose(file) != 0) ok = false;
+    return ok;
+}
+
+static bool verify_shared_text_output(const char *path) {
+    FILE *file = fopen(path, "rb");
+    struct ArrowIpcInputStream input = {0};
+    struct ArrowArrayStream reader = {0};
+    struct ArrowSchema schema = {0};
+    struct ArrowArrayView view = {0};
+    struct ArrowError arrow_error;
+    struct ArrowIpcArrayStreamReaderOptions reader_options = {0};
+    bool reader_live = false, schema_live = false, view_live = false;
+    bool ok = false;
+    if (!file) return false;
+    reader_options.field_index = -1;
+    input.read = test_read;
+    input.release = test_input_release;
+    input.private_data = file;
+    if (ArrowIpcArrayStreamReaderInit(&reader, &input, &reader_options) != NANOARROW_OK)
+        goto cleanup;
+    reader_live = true;
+    if (!reader.get_schema || reader.get_schema(&reader, &schema) != NANOARROW_OK)
+        goto cleanup;
+    schema_live = schema.release != NULL;
+    if (schema.n_children != 2 ||
+        strcmp(schema.children[0]->name, "selected") != 0 ||
+        strcmp(schema.children[1]->name, "tag") != 0 ||
+        ArrowArrayViewInitFromSchema(&view, &schema, &arrow_error) != NANOARROW_OK)
+        goto cleanup;
+    view_live = true;
+    struct ArrowArray batch = {0};
+    if (reader.get_next(&reader, &batch) != NANOARROW_OK || !batch.release ||
+        batch.length != 2 ||
+        ArrowArrayViewSetArray(&view, &batch, &arrow_error) != NANOARROW_OK)
+        goto cleanup_batch;
+    {
+        struct ArrowStringView first = ArrowArrayViewGetStringUnsafe(view.children[0], 0);
+        struct ArrowStringView second = ArrowArrayViewGetStringUnsafe(view.children[0], 1);
+        struct ArrowStringView first_tag = ArrowArrayViewGetStringUnsafe(view.children[1], 0);
+        struct ArrowStringView second_tag = ArrowArrayViewGetStringUnsafe(view.children[1], 1);
+        if (first.size_bytes != 5 || memcmp(first.data, "first", 5u) != 0 ||
+            second.size_bytes != 4 || memcmp(second.data, "last", 4u) != 0 ||
+            first_tag.size_bytes != 4 || memcmp(first_tag.data, "keep", 4u) != 0 ||
+            second_tag.size_bytes != 4 || memcmp(second_tag.data, "keep", 4u) != 0)
+            goto cleanup_batch;
+    }
+    batch.release(&batch);
+    if (reader.get_next(&reader, &batch) != NANOARROW_OK || batch.release)
+        goto cleanup_batch;
+    ok = true;
+cleanup_batch:
+    if (batch.release) batch.release(&batch);
+cleanup:
+    if (view_live) ArrowArrayViewReset(&view);
+    if (schema_live && schema.release) schema.release(&schema);
+    if (reader_live && reader.release) reader.release(&reader);
+    if (fclose(file) != 0) ok = false;
+    return ok;
+}
+
 static MilenaArrowIpcOptions default_options(
     const char *input, const char *output,
     const char *const *projection, const MilenaArrowValueType *types,
@@ -489,6 +615,48 @@ static bool expect_failure_preserves(MilenaArrowIpcOptions options,
     return true;
 }
 
+static bool test_shared_text_utf8_semantics(void) {
+    static const char *const selected_projection[] = {"selected", "tag"};
+    static const char *const unused_projection[] = {"unused"};
+    static const MilenaArrowValueType text_types[] = {
+        MILENA_ARROW_VALUE_TEXTO, MILENA_ARROW_VALUE_TEXTO
+    };
+    const char *input = "tests/arrow-shared-text-input.stream";
+    const char *output = "tests/arrow-shared-text-output.stream";
+    const char *failure = "tests/arrow-shared-text-failure.stream";
+    CHECK(write_shared_text_fixture(input), "could not construct invalid-UTF8 test STREAM");
+
+    MilenaArrowIpcOptions options = default_options(input, output,
+        selected_projection, text_types, 2u);
+    options.filter_kind = MILENA_ARROW_FILTER_TEXT_EQUAL;
+    options.filter_column = "tag";
+    options.filter_column_type = MILENA_ARROW_VALUE_TEXTO;
+    options.filter_text = "keep";
+    options.utf8_validation_policy = MILENA_ARROW_UTF8_VALIDATE_PROJECTED_RESULTS;
+    CHECK(run_transform(&options),
+          "shared text filter rejected invalid UTF-8 in filtered/unprojected source rows");
+    CHECK(verify_shared_text_output(output),
+          "shared Arrow result lost projection order or source row order");
+    (void)remove(output);
+
+    options.utf8_validation_policy = MILENA_ARROW_UTF8_VALIDATE_ALL_INPUT;
+    options.output_path = failure;
+    CHECK(expect_failure_preserves(options, MILENA_ERR_DATA,
+          "standalone strict Arrow UTF-8 mode accepted invalid source text"),
+          "standalone strict UTF-8 regression failed");
+
+    options.projection = unused_projection;
+    options.projection_count = 1u;
+    options.utf8_validation_policy = MILENA_ARROW_UTF8_VALIDATE_PROJECTED_RESULTS;
+    CHECK(expect_failure_preserves(options, MILENA_ERR_DATA,
+          "shared Arrow mode returned invalid projected text"),
+          "returned-projection UTF-8 regression failed");
+    (void)remove(input);
+    (void)remove(output);
+    (void)remove(failure);
+    return true;
+}
+
 static bool cancellation_after_rows(void *context) {
     unsigned int *calls = (unsigned int *)context;
     (*calls)++;
@@ -691,8 +859,12 @@ int main(int argc, char **argv) {
         return verify_output(argv[2], VERIFY_BINARY_TEXT) ? 0 : 1;
     if (argc == 3 && strcmp(argv[1], "--verify-wide") == 0)
         return verify_output(argv[2], VERIFY_WIDE_INT64) ? 0 : 1;
+    if (argc == 3 && strcmp(argv[1], "--write-shared-fixture") == 0)
+        return write_shared_text_fixture(argv[2]) ? 0 : 1;
+    if (argc == 3 && strcmp(argv[1], "--verify-shared-text") == 0)
+        return verify_shared_text_output(argv[2]) ? 0 : 1;
     if (argc != 1) {
-        fprintf(stderr, "usage: %s [--verify-primitive|--verify-text|--verify-wide FILE]\n", argv[0]);
+        fprintf(stderr, "usage: %s [--verify-primitive|--verify-text|--verify-wide|--verify-shared-text FILE|--write-shared-fixture FILE]\n", argv[0]);
         return 2;
     }
     remove("tests/arrow-primitive-output.stream");
@@ -701,6 +873,7 @@ int main(int argc, char **argv) {
     if (!test_primitive_backend("tests/arrow-primitive-output.stream")) return 1;
     if (!test_text_backend("tests/arrow-text-output.stream")) return 1;
     if (!test_exact_int64_backend("tests/arrow-wide-output.stream")) return 1;
+    if (!test_shared_text_utf8_semantics()) return 1;
     if (!test_failures()) return 1;
     remove("tests/arrow-primitive-output.stream");
     remove("tests/arrow-text-output.stream");

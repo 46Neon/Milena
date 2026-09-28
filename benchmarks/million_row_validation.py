@@ -93,7 +93,8 @@ def validate_spill_report(report: dict[str, Any], malformed_expected: int,
     expected = expected_spill_groups()
     if report.get("modo") != "flujo_agrupado_spill":
         raise AssertionError(f"expected grouped spill mode, got {report.get('modo')!r}")
-    for field, value in {"filas": ROWS, "filas_validas": ROWS,
+    for field, value in {"filas": ROWS,
+                         "filas_validas": ROWS - malformed_expected,
                          "filas_malformadas": malformed_expected, "grupos": 128,
                          "limite_grupos": 128, "limite_salida_bytes": 16777216,
                          "bytes_entrada": input_bytes}.items():
@@ -126,10 +127,12 @@ def validate_spill_report(report: dict[str, Any], malformed_expected: int,
         total = values["ticks"] / 10.0
         expected_values = {"suma": total,
                            "media": total / values["valid"] if values["valid"] else None,
-                           "conteo": values["rows"]}
+                           # The explicitly declared numeric COUNT in this
+                           # common typed overlap counts valid numeric cells.
+                           "conteo": values["valid"]}
         for operation, metric in by_operation.items():
-            valid = values["rows"] if operation == "conteo" else values["valid"]
-            invalid = 0 if operation == "conteo" else values["invalid"]
+            valid = values["valid"]
+            invalid = values["invalid"]
             target = expected_values[operation]
             if (metric.get("valores_validos") != valid or
                     metric.get("valores_invalidos") != invalid or

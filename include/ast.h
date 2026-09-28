@@ -168,6 +168,11 @@ typedef enum {
 } ASTAggregateOperation;
 
 typedef enum {
+    AST_PERIOD_OPERATION_NONE = 0,
+    AST_PERIOD_MONTH_FROM_DATE
+} ASTPeriodOperation;
+
+typedef enum {
     AST_FILTER_PREDICATE_OK = 0,
     AST_FILTER_PREDICATE_INVALID,
     AST_FILTER_PREDICATE_MEMORY
@@ -191,6 +196,9 @@ typedef struct ASTNode {
     ASTAggregateOperation aggregate_operation;
     char *aggregate_column;
     bool has_aggregate_metric;
+    /* Typed operation for the closed #periodo payload; `value` is legacy spelling. */
+    ASTPeriodOperation period_operation;
+    bool has_period_operation;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */
     struct ASTNode *left_operand;
     struct ASTNode *right_operand;
@@ -213,6 +221,15 @@ typedef struct ASTNode {
     size_t stream_input_limit_bytes;
     size_t stream_output_limit_bytes;
     double stream_time_limit_ms;
+    /* Optional resource policy for materialized CSV sources; zero selects the
+     * established loader default. Retained memory and raw source bytes are
+     * independent budgets and stay separate from streaming limits. */
+    size_t source_max_rows;
+    size_t source_max_columns;
+    size_t source_max_record_bytes;
+    size_t source_max_memory_bytes;
+    size_t source_max_input_bytes;
+    double source_max_elapsed_milliseconds;
     /* Explicit resource policy for canonical #agrupar spill-to-disk. */
     size_t group_memory_budget_bytes;
     size_t group_spill_quota_bytes;
@@ -258,6 +275,7 @@ ASTFilterPredicateStatus ast_set_filter_predicate(ASTNode *node,
 /* Set typed canonical metric data while preserving the legacy value spelling. */
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column);
+bool ast_set_period_operation(ASTNode *node, ASTPeriodOperation operation);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
 ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,

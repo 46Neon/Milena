@@ -755,7 +755,253 @@ static void test_legacy_vm_fails_closed_for_unavailable_dataset_ops(void) {
     vm_destroy(&vm);
 }
 
-int main(void) {
+static MilenaIRModule *make_aot_reference_module(MilenaIROpCode opcode,
+                                                double lhs, double rhs) {
+    MilenaIRModule *module = calloc(1u, sizeof(*module));
+    assert(module != NULL);
+    module->functions = calloc(1u, sizeof(*module->functions));
+    assert(module->functions != NULL);
+    module->function_count = 1u;
+    MilenaIRModuleFunction *function = &module->functions[0];
+    function->name = copy_text("principal");
+    function->symbol_id = 700u;
+    function->return_type = MILENA_IR_TYPE_F64;
+    function->body = milena_ir_program_create();
+    assert(function->body != NULL);
+    assert(milena_ir_program_set_function_signature(function->body, NULL, 0u,
+                                                     MILENA_IR_TYPE_F64));
+    assert(milena_ir_program_add_block(function->body, 1u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_CONST_F64, 1u,
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, lhs, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_CONST_F64, 2u,
+        MILENA_IR_TYPE_F64, 0u, 0u, 0, rhs, 0u, 0u));
+    assert(append_instruction(function->body, 1u, opcode, 3u,
+        MILENA_IR_TYPE_F64, 1u, 2u, 0, 0.0, 0u, 0u));
+    assert(append_instruction(function->body, 1u, MILENA_IR_RETURN, 0u,
+        MILENA_IR_TYPE_F64, 3u, 0u, 0, 0.0, 0u, 0u));
+    function->body->module_context = module;
+    return module;
+}
+
+static MilenaIRModule *make_aot_call_division_module(void) {
+    MilenaIRModule *module = calloc(1u, sizeof(*module));
+    assert(module != NULL);
+    module->functions = calloc(2u, sizeof(*module->functions));
+    assert(module->functions != NULL);
+    module->function_count = 2u;
+    MilenaIRType params[] = {MILENA_IR_TYPE_F64, MILENA_IR_TYPE_F64};
+    MilenaIRModuleFunction *helper = &module->functions[0];
+    helper->name = copy_text("dividir"); helper->symbol_id = 701u;
+    helper->parameter_types = malloc(sizeof(params)); assert(helper->parameter_types);
+    memcpy(helper->parameter_types, params, sizeof(params)); helper->parameter_count = 2u;
+    helper->return_type = MILENA_IR_TYPE_F64; helper->body = milena_ir_program_create();
+    assert(helper->body != NULL);
+    assert(milena_ir_program_set_function_signature(helper->body, params, 2u, MILENA_IR_TYPE_F64));
+    assert(milena_ir_program_add_block(helper->body, 1u));
+    assert(milena_ir_program_add_block_parameter(helper->body, 1u, 1u, MILENA_IR_TYPE_F64));
+    assert(milena_ir_program_add_block_parameter(helper->body, 1u, 2u, MILENA_IR_TYPE_F64));
+    assert(append_instruction(helper->body, 1u, MILENA_IR_DIV_F64, 3u, MILENA_IR_TYPE_F64,
+        1u, 2u, 0, 0.0, 0u, 0u));
+    assert(append_instruction(helper->body, 1u, MILENA_IR_RETURN, 0u, MILENA_IR_TYPE_F64,
+        3u, 0u, 0, 0.0, 0u, 0u));
+    MilenaIRModuleFunction *entry = &module->functions[1];
+    entry->name = copy_text("principal"); entry->symbol_id = 700u;
+    entry->return_type = MILENA_IR_TYPE_F64; entry->body = milena_ir_program_create();
+    assert(entry->body != NULL);
+    assert(milena_ir_program_set_function_signature(entry->body, NULL, 0u, MILENA_IR_TYPE_F64));
+    assert(milena_ir_program_add_block(entry->body, 2u));
+    assert(append_instruction(entry->body, 2u, MILENA_IR_CONST_F64, 1u, MILENA_IR_TYPE_F64,
+        0u, 0u, 0, 1.0, 0u, 0u));
+    assert(append_instruction(entry->body, 2u, MILENA_IR_CONST_F64, 2u, MILENA_IR_TYPE_F64,
+        0u, 0u, 0, 0.0, 0u, 0u));
+    uint32_t call_args[] = {1u, 2u};
+    assert(milena_ir_block_append_call(entry->body, 2u, 3u, MILENA_IR_TYPE_F64,
+        701u, call_args, 2u));
+    assert(append_instruction(entry->body, 2u, MILENA_IR_RETURN, 0u, MILENA_IR_TYPE_F64,
+        3u, 0u, 0, 0.0, 0u, 0u));
+    helper->body->module_context = module; entry->body->module_context = module;
+    return module;
+}
+
+static MilenaIRModule *make_aot_branch_module(bool condition, bool division_error) {
+    MilenaIRModule *module = (MilenaIRModule *)calloc(1, sizeof(*module));
+    assert(module != NULL);
+    module->functions = (MilenaIRModuleFunction *)calloc(1u, sizeof(*module->functions));
+    assert(module->functions != NULL);
+    module->function_count = 1u;
+    MilenaIRModuleFunction *fn = &module->functions[0];
+    fn->name = copy_text("principal");
+    fn->symbol_id = 700u;
+    fn->return_type = MILENA_IR_TYPE_F64;
+    fn->body = milena_ir_program_create();
+    assert(fn->body != NULL);
+    assert(milena_ir_program_set_function_signature(fn->body, NULL, 0u,
+                                                     MILENA_IR_TYPE_F64));
+    MilenaIRProgram *ir = fn->body;
+    assert(milena_ir_program_add_block(ir, 1u));
+    assert(append_instruction(ir, 1u, MILENA_IR_CONST_F64, 1u, MILENA_IR_TYPE_F64,
+        0u, 0u, 0, condition ? 1.0 : 2.0, 0u, 0u));
+    assert(append_instruction(ir, 1u, MILENA_IR_CONST_F64, 2u, MILENA_IR_TYPE_F64,
+        0u, 0u, 0, condition ? 2.0 : 1.0, 0u, 0u));
+    assert(append_instruction(ir, 1u, MILENA_IR_LT_F64, 3u, MILENA_IR_TYPE_BOOL,
+        1u, 2u, 0, 0.0, 0u, 0u));
+    assert(append_instruction(ir, 1u, MILENA_IR_COND_BRANCH, 0u, MILENA_IR_TYPE_VOID,
+        3u, 0u, 0, 0.0, 2u, 3u));
+    assert(milena_ir_program_add_block(ir, 2u));
+    uint32_t true_value = 4u;
+    if (division_error) {
+        assert(append_instruction(ir, 2u, MILENA_IR_CONST_F64, 4u, MILENA_IR_TYPE_F64,
+            0u, 0u, 0, 1.0, 0u, 0u));
+        assert(append_instruction(ir, 2u, MILENA_IR_CONST_F64, 5u, MILENA_IR_TYPE_F64,
+            0u, 0u, 0, 0.0, 0u, 0u));
+        assert(append_instruction(ir, 2u, MILENA_IR_DIV_F64, 6u, MILENA_IR_TYPE_F64,
+            4u, 5u, 0, 0.0, 0u, 0u));
+        true_value = 6u;
+    } else {
+        assert(append_instruction(ir, 2u, MILENA_IR_CONST_F64, 4u, MILENA_IR_TYPE_F64,
+            0u, 0u, 0, 41.0, 0u, 0u));
+    }
+    assert(append_instruction(ir, 2u, MILENA_IR_BRANCH, 0u, MILENA_IR_TYPE_VOID,
+        0u, 0u, 0, 0.0, 4u, 0u));
+    assert(milena_ir_program_add_block(ir, 3u));
+    assert(append_instruction(ir, 3u, MILENA_IR_CONST_F64, 7u, MILENA_IR_TYPE_F64,
+        0u, 0u, 0, 42.0, 0u, 0u));
+    assert(append_instruction(ir, 3u, MILENA_IR_BRANCH, 0u, MILENA_IR_TYPE_VOID,
+        0u, 0u, 0, 0.0, 4u, 0u));
+    assert(milena_ir_program_add_block(ir, 4u));
+    assert(milena_ir_program_add_block_parameter(ir, 4u, 8u, MILENA_IR_TYPE_F64));
+    assert(milena_ir_block_add_edge_argument(ir, 2u, 4u, 0u, true_value));
+    assert(milena_ir_block_add_edge_argument(ir, 3u, 4u, 0u, 7u));
+    assert(append_instruction(ir, 4u, MILENA_IR_RETURN, 0u, MILENA_IR_TYPE_F64,
+        8u, 0u, 0, 0.0, 0u, 0u));
+    ir->module_context = module;
+    return module;
+}
+
+static int print_aot_reference_branch(bool condition, bool division_error) {
+    MilenaIRModule *module=make_aot_branch_module(condition,division_error);
+    uint8_t *bytes=NULL;size_t size=0;char error[256]={0};MilenaVMValue result={0};
+    if(!milena_ir_module_validate(module,error,sizeof(error)) ||
+       !milena_bytecode_encode_module(module,&bytes,&size,error,sizeof(error))){
+        fprintf(stderr,"%s\n",error);milena_ir_module_destroy(module);return 1;}
+    bool ok=run_bytecode_case(bytes,size,700u,NULL,0u,NULL,&result,error,sizeof(error));
+    free(bytes);milena_ir_module_destroy(module);
+    if(!ok){fprintf(stderr,"%s\n",error[0]?error:"VM execution failed");return 70;}
+    if(result.type!=MILENA_IR_TYPE_F64){fprintf(stderr,"VM returned a non-F64 value\n");return 1;}
+    printf("%.17g\n",result.as.f64);return 0;
+}
+
+static int print_aot_reference_branch_parallel(void) {
+    MilenaIRModule *module=(MilenaIRModule *)calloc(1,sizeof(*module));assert(module);
+    module->functions=(MilenaIRModuleFunction *)calloc(1u,sizeof(*module->functions));assert(module->functions);
+    module->function_count=1u;MilenaIRModuleFunction *fn=&module->functions[0];
+    fn->name=copy_text("principal");fn->symbol_id=700u;fn->return_type=MILENA_IR_TYPE_F64;
+    fn->body=milena_ir_program_create();assert(fn->body);
+    assert(milena_ir_program_set_function_signature(fn->body,NULL,0u,MILENA_IR_TYPE_F64));
+    MilenaIRProgram *ir=fn->body;assert(milena_ir_program_add_block(ir,1u));
+    assert(append_instruction(ir,1u,MILENA_IR_CONST_F64,1u,MILENA_IR_TYPE_F64,0u,0u,0,1.0,0u,0u));
+    assert(append_instruction(ir,1u,MILENA_IR_CONST_F64,2u,MILENA_IR_TYPE_F64,0u,0u,0,2.0,0u,0u));
+    assert(append_instruction(ir,1u,MILENA_IR_LT_F64,3u,MILENA_IR_TYPE_BOOL,1u,2u,0,0.0,0u,0u));
+    assert(append_instruction(ir,1u,MILENA_IR_COND_BRANCH,0u,MILENA_IR_TYPE_VOID,3u,0u,0,0.0,2u,3u));
+    assert(milena_ir_program_add_block(ir,2u));
+    assert(append_instruction(ir,2u,MILENA_IR_CONST_F64,4u,MILENA_IR_TYPE_F64,0u,0u,0,11.0,0u,0u));
+    assert(append_instruction(ir,2u,MILENA_IR_CONST_F64,5u,MILENA_IR_TYPE_F64,0u,0u,0,22.0,0u,0u));
+    assert(append_instruction(ir,2u,MILENA_IR_BRANCH,0u,MILENA_IR_TYPE_VOID,0u,0u,0,0.0,4u,0u));
+    assert(milena_ir_program_add_block(ir,3u));
+    assert(append_instruction(ir,3u,MILENA_IR_CONST_F64,6u,MILENA_IR_TYPE_F64,0u,0u,0,33.0,0u,0u));
+    assert(append_instruction(ir,3u,MILENA_IR_CONST_F64,7u,MILENA_IR_TYPE_F64,0u,0u,0,44.0,0u,0u));
+    assert(append_instruction(ir,3u,MILENA_IR_BRANCH,0u,MILENA_IR_TYPE_VOID,0u,0u,0,0.0,4u,0u));
+    assert(milena_ir_program_add_block(ir,4u));
+    assert(milena_ir_program_add_block_parameter(ir,4u,8u,MILENA_IR_TYPE_F64));
+    assert(milena_ir_program_add_block_parameter(ir,4u,9u,MILENA_IR_TYPE_F64));
+    assert(milena_ir_block_add_edge_argument(ir,2u,4u,0u,4u));
+    assert(milena_ir_block_add_edge_argument(ir,2u,4u,1u,5u));
+    assert(milena_ir_block_add_edge_argument(ir,3u,4u,0u,6u));
+    assert(milena_ir_block_add_edge_argument(ir,3u,4u,1u,7u));
+    assert(append_instruction(ir,4u,MILENA_IR_ADD_F64,10u,MILENA_IR_TYPE_F64,8u,9u,0,0.0,0u,0u));
+    assert(append_instruction(ir,4u,MILENA_IR_RETURN,0u,MILENA_IR_TYPE_F64,10u,0u,0,0.0,0u,0u));
+    ir->module_context=module;
+    uint8_t *bytes=NULL;size_t size=0;char error[256]={0};MilenaVMValue result={0};
+    if(!milena_ir_module_validate(module,error,sizeof(error))||!milena_bytecode_encode_module(module,&bytes,&size,error,sizeof(error))){fprintf(stderr,"%s\n",error);milena_ir_module_destroy(module);return 1;}
+    bool ok=run_bytecode_case(bytes,size,700u,NULL,0u,NULL,&result,error,sizeof(error));
+    free(bytes);milena_ir_module_destroy(module);
+    if(!ok){fprintf(stderr,"%s\n",error[0]?error:"VM execution failed");return 70;}
+    printf("%.17g\n",result.as.f64);return 0;
+}
+
+static int print_aot_reference_module(bool division_error) {
+    MilenaIRModule *module = division_error ? make_aot_call_division_module() : make_call_module();
+    uint8_t *bytes = NULL; size_t size = 0; char error[256] = {0};
+    uint32_t entry = division_error ? 700u : 200u;
+    MilenaVMValue result = {0};
+    if (!milena_bytecode_encode_module(module, &bytes, &size, error, sizeof(error))) {
+        fprintf(stderr, "%s\n", error); milena_ir_module_destroy(module); return 1;
+    }
+    bool ok = run_bytecode_case(bytes, size, entry, NULL, 0u, NULL, &result, error, sizeof(error));
+    free(bytes); milena_ir_module_destroy(module);
+    if (!ok) { fprintf(stderr, "%s\n", error[0] ? error : "VM execution failed"); return 70; }
+    if (result.type != MILENA_IR_TYPE_F64) { fprintf(stderr, "VM returned a non-F64 value\n"); return 1; }
+    printf("%.17g\n", result.as.f64); return 0;
+}
+
+static int print_aot_reference_result(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--aot-reference-calls") == 0)
+        return print_aot_reference_module(false);
+    if (argc == 2 && strcmp(argv[1], "--aot-reference-call-div-zero") == 0)
+        return print_aot_reference_module(true);
+    if (argc == 3 && strcmp(argv[1], "--aot-reference-branch") == 0)
+        return print_aot_reference_branch(strcmp(argv[2], "true") == 0, false);
+    if (argc == 2 && strcmp(argv[1], "--aot-reference-branch-div-zero") == 0)
+        return print_aot_reference_branch(true, true);
+    if (argc == 2 && strcmp(argv[1], "--aot-reference-branch-parallel") == 0)
+        return print_aot_reference_branch_parallel();
+    if (argc != 5) return 2;
+    MilenaIROpCode opcode;
+    if (strcmp(argv[2], "add") == 0) opcode = MILENA_IR_ADD_F64;
+    else if (strcmp(argv[2], "sub") == 0) opcode = MILENA_IR_SUB_F64;
+    else if (strcmp(argv[2], "mul") == 0) opcode = MILENA_IR_MUL_F64;
+    else if (strcmp(argv[2], "div") == 0) opcode = MILENA_IR_DIV_F64;
+    else return 2;
+    char *lhs_end = NULL;
+    char *rhs_end = NULL;
+    double lhs = strtod(argv[3], &lhs_end);
+    double rhs = strtod(argv[4], &rhs_end);
+    if (!lhs_end || *lhs_end || !rhs_end || *rhs_end) return 2;
+    MilenaIRModule *module = make_aot_reference_module(opcode, lhs, rhs);
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+    char error[256] = {0};
+    MilenaVMValue result = {0};
+    if (!milena_bytecode_encode_module(module, &bytes, &size,
+                                       error, sizeof(error))) {
+        fprintf(stderr, "%s\n", error);
+        milena_ir_module_destroy(module);
+        return 1;
+    }
+    bool ok = run_bytecode_case(bytes, size, 700u, NULL, 0u, NULL,
+                                &result, error, sizeof(error));
+    free(bytes);
+    milena_ir_module_destroy(module);
+    if (!ok) {
+        fprintf(stderr, "%s\n", error[0] ? error : "VM execution failed");
+        return 70;
+    }
+    if (result.type != MILENA_IR_TYPE_F64) {
+        fprintf(stderr, "VM returned a non-F64 value\n");
+        return 1;
+    }
+    printf("%.17g\n", result.as.f64);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 2 && (strcmp(argv[1], "--aot-reference") == 0 ||
+                      strcmp(argv[1], "--aot-reference-calls") == 0 ||
+                      strcmp(argv[1], "--aot-reference-call-div-zero") == 0 ||
+                      strcmp(argv[1], "--aot-reference-branch") == 0 ||
+                      strcmp(argv[1], "--aot-reference-branch-div-zero") == 0 ||
+                      strcmp(argv[1], "--aot-reference-branch-parallel") == 0))
+        return print_aot_reference_result(argc, argv);
     test_original_vm_lifecycle();
     test_legacy_vm_fails_closed_for_unavailable_dataset_ops();
     test_roundtrip_module_with_direct_call();

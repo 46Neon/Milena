@@ -66,10 +66,10 @@ int main(void) {
     const char *output = "tests/.stream_report.json";
     write_fixture(input);
     MilenaStreamMetric metrics[] = {
-        {"importe", "importe_suma", MILENA_STREAM_SUM},
-        {"importe", "importe_media", MILENA_STREAM_MEAN},
-        {"importe", "importe_varianza", MILENA_STREAM_VARIANCE},
-        {"importe", "importe_conteo", MILENA_STREAM_COUNT}
+        {"importe", "importe_suma", MILENA_STREAM_SUM, false},
+        {"importe", "importe_media", MILENA_STREAM_MEAN, false},
+        {"importe", "importe_varianza", MILENA_STREAM_VARIANCE, false},
+        {"importe", "importe_conteo", MILENA_STREAM_COUNT, false}
     };
     MilenaStreamReport report = {0};
     MilenaError error;
@@ -179,8 +179,9 @@ int main(void) {
           group_file);
     assert(fclose(group_file) == 0);
     MilenaStreamMetric grouped_metrics[] = {
-        {"importe", "importe_suma", MILENA_STREAM_SUM},
-        {"referencia", "referencia_conteo", MILENA_STREAM_COUNT}
+        {"importe", "importe_suma", MILENA_STREAM_SUM, false},
+        {"referencia", "referencia_conteo", MILENA_STREAM_COUNT, false},
+        {"importe", "importe_conteo_numerico", MILENA_STREAM_COUNT, true}
     };
     MilenaStreamOptions grouped_options = milena_stream_options_default();
     grouped_options.max_groups = 10;
@@ -188,7 +189,7 @@ int main(void) {
     MilenaError grouped_error;
     milena_error_clear(&grouped_error);
     assert(milena_stream_csv_grouped_with_options(group_input, group_output,
-        "zona", grouped_metrics, 2, &grouped_options, &grouped_report,
+        "zona", grouped_metrics, 3, &grouped_options, &grouped_report,
         &grouped_error) == MILENA_OK);
     assert(grouped_report.rows_read == 4);
     assert(grouped_report.rows_with_valid_values == 4);
@@ -207,6 +208,10 @@ int main(void) {
     assert(alpha != NULL && zeta != NULL && alpha < zeta);
     assert(strstr(buffer,
         "\"nombre\":\"importe_suma\",\"valores_validos\":1,\"valores_nulos\":0,\"valores_invalidos\":1,\"valor\":7") != NULL);
+    assert(strstr(buffer,
+        "\"nombre\":\"importe_conteo_numerico\",\"valores_validos\":1,\"valores_nulos\":0,\"valores_invalidos\":1,\"valor\":1") != NULL);
+    assert(strstr(buffer,
+        "\"nombre\":\"importe_conteo_numerico\",\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":2") != NULL);
     assert(strstr(buffer,
         "\"nombre\":\"referencia_conteo\",\"valores_validos\":2,\"valores_nulos\":0,\"valores_invalidos\":0,\"valor\":2") != NULL);
     /* Z's last row has an empty final field; it counts as one null value. */
@@ -269,7 +274,7 @@ int main(void) {
     for (size_t i = 0; i < 200; ++i)
         fprintf(spill_fixture, "g%03zu,1\n", i);
     assert(fclose(spill_fixture) == 0);
-    MilenaStreamMetric spill_metric = {"importe", "importe_suma", MILENA_STREAM_SUM};
+    MilenaStreamMetric spill_metric = {"importe", "importe_suma", MILENA_STREAM_SUM, false};
     MilenaStreamOptions spill_options = milena_stream_options_default();
     spill_options.max_groups = 256;
     MilenaStreamSpillPolicy spill_policy = {spill_scratch, 4096, 1048576,
@@ -312,8 +317,8 @@ int main(void) {
         {"subzona", MILENA_STREAM_GROUP_KEY_TEXT}
     };
     MilenaStreamMetric pair_metrics[] = {
-        {"importe", "importe_suma", MILENA_STREAM_SUM},
-        {"importe", "filas", MILENA_STREAM_COUNT}
+        {"importe", "importe_suma", MILENA_STREAM_SUM, false},
+        {"importe", "filas", MILENA_STREAM_COUNT, false}
     };
     MilenaStreamSpillPolicy pair_policy = {pair_scratch, 4096, 1048576,
         128, 16, 2097152, 4096};
@@ -381,7 +386,7 @@ int main(void) {
     for (size_t i = 0; i < sizeof(cancel_values) / sizeof(cancel_values[0]); ++i)
         fprintf(cancel_file, "target,%.17g\n", cancel_values[i]);
     assert(fclose(cancel_file) == 0);
-    MilenaStreamMetric cancel_metric = {"importe", "cancel_suma", MILENA_STREAM_SUM};
+    MilenaStreamMetric cancel_metric = {"importe", "cancel_suma", MILENA_STREAM_SUM, false};
     MilenaStreamOptions cancel_options = milena_stream_options_default();
     cancel_options.max_groups = 4;
     MilenaStreamReport cancel_report = {0};

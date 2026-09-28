@@ -8,43 +8,186 @@ TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/milena-native-aot-XXXXXX")
 trap 'rm -rf "$TEMP_DIR"' EXIT HUP INT TERM
 
 "$MILENA" --help | grep -F 'build <archivo.milena> -o <ejecutable>' >/dev/null
-"$MILENA" build "$FIXTURES/branches_calls.milena" -o "$TEMP_DIR/branches"
-[ -x "$TEMP_DIR/branches" ]
-[ "$("$TEMP_DIR/branches")" = '42' ]
 
+# The compiler must not delegate AOT to MILENA_CC (or any other C compiler).
+cat >"$TEMP_DIR/forbidden-compiler" <<'EOF'
+#!/bin/sh
+: >"$MILENA_AOT_COMPILER_INVOKED"
+exit 99
+EOF
+chmod +x "$TEMP_DIR/forbidden-compiler"
+
+check_runtime_case() {
+    fixture=$1
+    name=$2
+    opcode_name=$3
+    lhs=$4
+    rhs=$5
+    opcode=$6
+    expected=$7
+    if [ "$name" = add ]; then
+        MILENA_AOT_COMPILER_INVOKED="$TEMP_DIR/compiler-invoked" \
+        MILENA_CC="$TEMP_DIR/forbidden-compiler" \
+            "$MILENA" build "$FIXTURES/$fixture" -o "$TEMP_DIR/$name"
+        [ ! -e "$TEMP_DIR/compiler-invoked" ]
+    else
+        "$MILENA" build "$FIXTURES/$fixture" -o "$TEMP_DIR/$name"
+    fi
+    [ -x "$TEMP_DIR/$name" ]
+    file "$TEMP_DIR/$name" | grep -F 'ELF 64-bit LSB executable, x86-64' >/dev/null
+    # Check the actual generated code section, not constants/data in the ELF.
+    python3 - "$TEMP_DIR/$name" "$opcode" <<'PYCODE'
+import pathlib, sys
+image = pathlib.Path(sys.argv[1]).read_bytes()
+code = image[120:]
+needle = bytes.fromhex(sys.argv[2])
+if needle not in code:
+    raise SystemExit(f'missing emitted arithmetic opcode: {needle.hex()}')
+PYCODE
+    "$ROOT/tests/test_typed_bytecode" --aot-reference "$opcode_name" "$lhs" "$rhs" \
+        >"$TEMP_DIR/$name.vm.out" 2>"$TEMP_DIR/$name.vm.err"
+    "$TEMP_DIR/$name" >"$TEMP_DIR/$name.native.out" 2>"$TEMP_DIR/$name.native.err"
+    cmp "$TEMP_DIR/$name.vm.out" "$TEMP_DIR/$name.native.out"
+    [ "$(cat "$TEMP_DIR/$name.native.out")" = "$expected" ]
+}
+
+# Runtime arithmetic must be in the executable: each opcode is asserted in the
+# RX text bytes, the ELF is run, and its result is compared with verified bytecode VM execution.
+check_runtime_case constant_arithmetic.milena add add 19 23 'f2 0f 58 c1' 42
+check_runtime_case subtraction.milena sub sub 0 42 'f2 0f 5c c1' -42
+check_runtime_case multiplication.milena mul mul 6 7 'f2 0f 59 c1' 42
+check_runtime_case division.milena div div 84 2 'f2 0f 5e c1' 42
+
+# The verifier keeps the supported runtime-error behavior fail-closed and
+# checks its diagnostic against the typed-IR reference VM's error case.
 "$MILENA" build "$FIXTURES/division_by_zero.milena" -o "$TEMP_DIR/division-by-zero"
 set +e
-"$TEMP_DIR/division-by-zero" >"$TEMP_DIR/runtime.out" 2>"$TEMP_DIR/runtime.err"
-RUNTIME_STATUS=$?
+"$ROOT/tests/test_typed_bytecode" --aot-reference div 1 0 \
+    >"$TEMP_DIR/division.vm.out" 2>"$TEMP_DIR/division.vm.err"
+VM_DIVISION_STATUS=$?
+"$TEMP_DIR/division-by-zero" >"$TEMP_DIR/division.out" 2>"$TEMP_DIR/division.err"
+DIVISION_STATUS=$?
 set -e
-[ "$RUNTIME_STATUS" -eq 70 ]
-grep -F 'division by zero' "$TEMP_DIR/runtime.err" >/dev/null
+[ "$VM_DIVISION_STATUS" -eq 70 ]
+[ "$DIVISION_STATUS" -eq 70 ]
+grep -F 'division by zero' "$TEMP_DIR/division.vm.err" >/dev/null
+grep -F 'Milena native runtime error: division by zero' "$TEMP_DIR/division.err" >/dev/null
 
-"$MILENA" build "$FIXTURES/non_finite.milena" -o "$TEMP_DIR/non-finite"
-set +e
-"$TEMP_DIR/non-finite" >"$TEMP_DIR/non-finite.out" 2>"$TEMP_DIR/non-finite.err"
-NON_FINITE_STATUS=$?
-set -e
-[ "$NON_FINITE_STATUS" -eq 70 ]
-grep -F 'non-finite numeric result' "$TEMP_DIR/non-finite.err" >/dev/null
-
-printf 'keep-existing-output\n' >"$TEMP_DIR/preserved"
-if MILENA_CC=/milena-test-no-such-c-compiler \
-    "$MILENA" build "$FIXTURES/branches_calls.milena" -o "$TEMP_DIR/preserved" \
-    >"$TEMP_DIR/compiler.out" 2>"$TEMP_DIR/compiler.err"; then
-    echo 'AOT unexpectedly succeeded without a C compiler' >&2
+# Out-of-slice floating arithmetic is rejected without replacing an existing output.
+printf 'keep-existing-output\n' >"$TEMP_DIR/non-finite"
+if "$MILENA" build "$FIXTURES/non_finite.milena" -o "$TEMP_DIR/non-finite" \
+    >"$TEMP_DIR/non-finite.out" 2>"$TEMP_DIR/non-finite.err"; then
+    echo 'AOT unexpectedly accepted non-finite/out-of-range arithmetic' >&2
     exit 1
 fi
+grep -E 'subconjunto entero exacto|subconjunto ELF directo' "$TEMP_DIR/non-finite.err" >/dev/null
+[ "$(cat "$TEMP_DIR/non-finite")" = 'keep-existing-output' ]
+
+# Direct helper calls execute as x86-64 CALL rel32 instructions using SysV
+# floating-point arguments/results. Compare the helper-call result to the
+# typed-bytecode reference VM, not to a compile-time folded constant.
+"$MILENA" build "$FIXTURES/direct_calls.milena" -o "$TEMP_DIR/direct-calls"
+[ -x "$TEMP_DIR/direct-calls" ]
+python3 - "$TEMP_DIR/direct-calls" <<'PYCODE'
+import pathlib, sys
+code = pathlib.Path(sys.argv[1]).read_bytes()[120:]
+if code.count(b'\xe8') < 2:
+    raise SystemExit('expected emitted entry/helper direct CALL rel32 instructions')
+PYCODE
+"$ROOT/tests/test_typed_bytecode" --aot-reference-calls >"$TEMP_DIR/calls.vm.out" 2>"$TEMP_DIR/calls.vm.err"
+"$TEMP_DIR/direct-calls" >"$TEMP_DIR/calls.native.out" 2>"$TEMP_DIR/calls.native.err"
+if ! cmp -s "$TEMP_DIR/calls.vm.out" "$TEMP_DIR/calls.native.out"; then
+    printf 'typed-bytecode output: '; cat "$TEMP_DIR/calls.vm.out"
+    printf 'native output: '; cat "$TEMP_DIR/calls.native.out"
+    echo 'direct-call output differs from the typed-bytecode reference VM' >&2
+    exit 1
+fi
+[ "$(cat "$TEMP_DIR/calls.native.out")" = '6' ]
+
+# A helper's native division-by-zero behavior must match the typed-bytecode VM.
+"$MILENA" build "$FIXTURES/direct_call_division_by_zero.milena" -o "$TEMP_DIR/call-div-zero"
+set +e
+"$ROOT/tests/test_typed_bytecode" --aot-reference-call-div-zero >"$TEMP_DIR/call-div.vm.out" 2>"$TEMP_DIR/call-div.vm.err"
+CALL_VM_STATUS=$?
+"$TEMP_DIR/call-div-zero" >"$TEMP_DIR/call-div.native.out" 2>"$TEMP_DIR/call-div.native.err"
+CALL_NATIVE_STATUS=$?
+set -e
+[ "$CALL_VM_STATUS" -eq 70 ]
+[ "$CALL_NATIVE_STATUS" -eq 70 ]
+grep -F 'division by zero' "$TEMP_DIR/call-div.vm.err" >/dev/null
+grep -F 'Milena native runtime error: division by zero' "$TEMP_DIR/call-div.native.err" >/dev/null
+
+# SysV floating-point calls beyond the eight XMM argument registers are rejected.
+printf 'keep-existing-output\n' >"$TEMP_DIR/preserved"
+if "$MILENA" build "$FIXTURES/too_many_arguments.milena" -o "$TEMP_DIR/preserved" \
+    >"$TEMP_DIR/too-many-args.out" 2>"$TEMP_DIR/too-many-args.err"; then
+    echo 'AOT unexpectedly accepted more than eight direct-call arguments' >&2
+    exit 1
+fi
+grep -F 'máximo 8 argumentos F64' "$TEMP_DIR/too-many-args.err" >/dev/null
 [ "$(cat "$TEMP_DIR/preserved")" = 'keep-existing-output' ]
 
+# Verified acyclic conditionals execute native Jcc/JMP code and transfer the
+# selected edge value into a block parameter. Compare both outcomes with VM IR.
+check_branch_case() {
+    fixture=$1; outcome=$2; expected=$3; name=$4
+    "$MILENA" build "$FIXTURES/$fixture" -o "$TEMP_DIR/$name"
+    [ -x "$TEMP_DIR/$name" ]
+    python3 - "$TEMP_DIR/$name" <<'PYCODE'
+import pathlib, sys
+code = pathlib.Path(sys.argv[1]).read_bytes()[120:]
+if (b'\x0f\x85' not in code or b'\xe9' not in code or
+        bytes.fromhex('66 0f 2e c1') not in code):
+    raise SystemExit('expected emitted F64 comparison and conditional/unconditional branch instructions')
+PYCODE
+    "$ROOT/tests/test_typed_bytecode" --aot-reference-branch "$outcome" \
+        >"$TEMP_DIR/$name.vm.out" 2>"$TEMP_DIR/$name.vm.err"
+    "$TEMP_DIR/$name" >"$TEMP_DIR/$name.native.out" 2>"$TEMP_DIR/$name.native.err"
+    cmp "$TEMP_DIR/$name.vm.out" "$TEMP_DIR/$name.native.out"
+    [ "$(cat "$TEMP_DIR/$name.native.out")" = "$expected" ]
+}
+check_branch_case branch_true_block_parameter.milena true 41 branch-true
+check_branch_case branch_false_block_parameter.milena false 42 branch-false
+
+# Two block parameters on each edge are copied as one parallel transfer.
+"$MILENA" build "$FIXTURES/branch_parallel_parameters.milena" -o "$TEMP_DIR/branch-parallel"
+"$ROOT/tests/test_typed_bytecode" --aot-reference-branch-parallel >"$TEMP_DIR/branch-parallel.vm.out" 2>"$TEMP_DIR/branch-parallel.vm.err"
+"$TEMP_DIR/branch-parallel" >"$TEMP_DIR/branch-parallel.native.out" 2>"$TEMP_DIR/branch-parallel.native.err"
+cmp "$TEMP_DIR/branch-parallel.vm.out" "$TEMP_DIR/branch-parallel.native.out"
+[ "$(cat "$TEMP_DIR/branch-parallel.native.out")" = '33' ]
+
+# Existing direct helper calls remain supported across an acyclic branch.
+"$MILENA" build "$FIXTURES/branches_calls.milena" -o "$TEMP_DIR/branches-calls"
+python3 - "$TEMP_DIR/branches-calls" <<'PYCODE'
+import pathlib, sys
+code = pathlib.Path(sys.argv[1]).read_bytes()[120:]
+if code.count(b'\xe8') < 2:
+    raise SystemExit('expected the branch-containing module to retain direct CALL rel32')
+PYCODE
+"$TEMP_DIR/branches-calls" >"$TEMP_DIR/branches-calls.native.out" 2>"$TEMP_DIR/branches-calls.native.err"
+[ "$(cat "$TEMP_DIR/branches-calls.native.out")" = '42' ]
+
+# A division-by-zero reached through a native branch matches the verified VM.
+"$MILENA" build "$FIXTURES/branch_division_by_zero.milena" -o "$TEMP_DIR/branch-div-zero"
+set +e
+"$ROOT/tests/test_typed_bytecode" --aot-reference-branch-div-zero >"$TEMP_DIR/branch-div.vm.out" 2>"$TEMP_DIR/branch-div.vm.err"
+BRANCH_VM_STATUS=$?
+"$TEMP_DIR/branch-div-zero" >"$TEMP_DIR/branch-div.native.out" 2>"$TEMP_DIR/branch-div.native.err"
+BRANCH_NATIVE_STATUS=$?
+set -e
+[ "$BRANCH_VM_STATUS" -eq 70 ]
+[ "$BRANCH_NATIVE_STATUS" -eq 70 ]
+grep -F 'division by zero' "$TEMP_DIR/branch-div.vm.err" >/dev/null
+grep -F 'Milena native runtime error: division by zero' "$TEMP_DIR/branch-div.native.err" >/dev/null
+
 if "$MILENA" build "$FIXTURES/no_principal.milena" -o "$TEMP_DIR/preserved" \
-    >"$TEMP_DIR/reject.out" 2>"$TEMP_DIR/reject.err"; then
+    >"$TEMP_DIR/no-entry.out" 2>"$TEMP_DIR/no-entry.err"; then
     echo 'AOT unexpectedly accepted a source without principal()' >&2
     exit 1
 fi
 [ "$(cat "$TEMP_DIR/preserved")" = 'keep-existing-output' ]
 
-cp "$FIXTURES/branches_calls.milena" "$TEMP_DIR/alias.milena"
+cp "$FIXTURES/constant_arithmetic.milena" "$TEMP_DIR/alias.milena"
 cp "$TEMP_DIR/alias.milena" "$TEMP_DIR/alias.expected"
 if "$MILENA" build "$TEMP_DIR/alias.milena" -o "$TEMP_DIR/alias.milena" \
     >"$TEMP_DIR/alias.out" 2>"$TEMP_DIR/alias.err"; then
@@ -65,9 +208,9 @@ if "$MILENA" build "$TEMP_DIR/alias.milena" -o "$TEMP_DIR/alias.symlink" \
     exit 1
 fi
 cmp "$TEMP_DIR/alias.expected" "$TEMP_DIR/alias.milena"
-if find "$TEMP_DIR" -name '.milena-aot-*' -print | grep .; then
+if find "$TEMP_DIR" -name '.milena-elf-*' -print | grep .; then
     echo 'AOT left temporary files behind' >&2
     exit 1
 fi
 
-echo 'Native AOT CLI tests passed.'
+echo 'Direct native ELF AOT tests passed.'

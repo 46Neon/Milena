@@ -3,6 +3,155 @@
 
 #include "ast.h"
 #include "common.h"
+#include "table.h"
+
+/* Canonical logical contract for the current, intentionally narrow overlap
+ * between materialized table HIR and CSV record-streaming execution. Strings
+ * are borrowed from the validated source plans. This is not an engine-neutral
+ * physical plan, and it does not imply Arrow/SQLite support. */
+#define MILENA_DATA_PLAN_MAX_METRICS 64u
+#define MILENA_DATA_PLAN_MAX_OPERATORS 4u
+#define MILENA_DATA_PLAN_MAX_SCHEMA_REFS (MILENA_DATA_PLAN_MAX_METRICS + 2u)
+
+typedef enum {
+    MILENA_DATA_OPERATOR_CSV_SCAN = 1,
+    MILENA_DATA_OPERATOR_NUMERIC_GREATER_FILTER,
+    MILENA_DATA_OPERATOR_GROUP_AGGREGATE,
+    MILENA_DATA_OPERATOR_JSON_SINK
+} MilenaDataOperatorKind;
+
+typedef enum {
+    MILENA_DATA_AGGREGATE_SUM = 1,
+    MILENA_DATA_AGGREGATE_MEAN,
+    MILENA_DATA_AGGREGATE_COUNT
+} MilenaDataAggregateKind;
+
+typedef enum {
+    MILENA_DATA_EXECUTION_MATERIALIZED_TABLE = 1,
+    MILENA_DATA_EXECUTION_CSV_RECORD_STREAM
+} MilenaDataExecutionMode;
+
+typedef struct {
+    const char *input_column;
+    MilenaDataAggregateKind operation;
+} MilenaDataPlanMetric;
+
+typedef struct {
+    const char *name;
+    size_t declaration_index;
+    unsigned declared_type;
+} MilenaDataPlanSchemaRef;
+
+typedef struct {
+    const char *source_path;
+    const char *sink_path;
+    MilenaDataExecutionMode execution_mode;
+    MilenaDataOperatorKind operators[MILENA_DATA_PLAN_MAX_OPERATORS];
+    size_t operator_count;
+    bool has_numeric_greater_filter;
+    const char *filter_column;
+    double filter_threshold;
+    const char *group_key;
+    MilenaDataPlanMetric metrics[MILENA_DATA_PLAN_MAX_METRICS];
+    size_t metric_count;
+    /* Materialized preflight identity, populated only by the typed-HIR
+     * preflight builder. Column types are MilenaHIRColumnType identities. */
+    bool has_preflight_identity;
+    size_t source_dataset_id;
+    size_t source_max_rows;
+    size_t source_max_columns;
+    size_t source_max_record_bytes;
+    size_t source_max_memory_bytes;
+    size_t source_max_input_bytes;
+    double source_max_elapsed_milliseconds;
+    size_t group_limit_input_rows;
+    size_t group_limit_output_rows;
+    size_t group_limit_columns;
+    MilenaDataPlanSchemaRef schema_refs[MILENA_DATA_PLAN_MAX_SCHEMA_REFS];
+    size_t schema_ref_count;
+} MilenaDataOperatorPlan;
+
+struct MilenaDataHIR;
+struct MilenaStreamExecutionPlan;
+MilenaStatus milena_data_operator_plan_from_hir(
+    const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
+    MilenaError *error);
+/* Builds the common materialized subset from the already parsed typed HIR and
+ * explicit source declarations, without binding or opening the input file. */
+MilenaStatus milena_data_operator_plan_preflight_from_hir(
+    const struct MilenaDataHIR *hir, MilenaDataOperatorPlan *plan,
+    MilenaError *error);
+/* Checks typed numeric transforms already represented in the source HIR before
+ * a materialized input is opened; it does not extend the common operator set. */
+MilenaStatus milena_data_operator_hir_transform_preflight(
+    const struct MilenaDataHIR *hir, MilenaError *error);
+/* Rebuilds the post-bind plan and verifies that it retains the preflighted
+ * source, schema identities, operation graph, and declared limits. */
+MilenaStatus milena_data_operator_plan_check_bound_hir(
+    const MilenaDataOperatorPlan *preflight,
+    const struct MilenaDataHIR *bound_hir, MilenaError *error);
+MilenaStatus milena_data_operator_plan_from_stream(
+    const ASTNode *analysis, const struct MilenaStreamExecutionPlan *stream_plan,
+    MilenaDataOperatorPlan *plan, MilenaError *error);
+MilenaStatus milena_data_operator_plan_validate(
+    const MilenaDataOperatorPlan *plan, MilenaError *error);
+/* Executes only the validated materialized overlap by following the common
+ * operator sequence. Input is borrowed; output is replaced transactionally. */
+MilenaStatus milena_data_operator_plan_execute_materialized(
+    const MilenaDataOperatorPlan *plan, const MilenaTable *input,
+    size_t max_input_rows, size_t max_output_rows, size_t max_columns,
+    MilenaTable *output, MilenaError *error);
+bool milena_data_operator_plans_same_logic(
+    const MilenaDataOperatorPlan *left,
+    const MilenaDataOperatorPlan *right);
+
+/* Deliberately narrow logical descriptor for the actual Arrow IPC STREAM /
+ * typed SQLite SELECT overlap. It carries no physical operators or SQL text;
+ * raw SQL is explicitly outside this interface. Projection array order and
+ * source row sequence are logical result semantics. */
+#define MILENA_SHARED_QUERY_MAX_COLUMNS 128u
+#define MILENA_SHARED_QUERY_MAX_OPERATORS 4u
+typedef enum {
+    MILENA_SHARED_QUERY_SCAN = 1,
+    MILENA_SHARED_QUERY_TEXT_EQUAL_FILTER,
+    MILENA_SHARED_QUERY_PROJECT,
+    MILENA_SHARED_QUERY_RESULT
+} MilenaSharedQueryOperator;
+typedef enum {
+    MILENA_SHARED_QUERY_VALUE_NUMERIC = 1,
+    MILENA_SHARED_QUERY_VALUE_TEXT
+} MilenaSharedQueryValueType;
+typedef enum {
+    MILENA_SHARED_QUERY_SINK_ARROW_IPC_STREAM = 1,
+    MILENA_SHARED_QUERY_SINK_SQLITE_RESULT
+} MilenaSharedQuerySink;
+typedef struct {
+    const char *name;
+    MilenaSharedQueryValueType type;
+} MilenaSharedQueryProjection;
+typedef struct {
+    const char *source;
+    bool has_text_equal_filter;
+    const char *filter_column;
+    const char *filter_text; /* non-NULL, valid UTF-8 when filter is present */
+    size_t filter_text_length;
+    const MilenaSharedQueryProjection *projections; /* borrowed from adapter/plan owner */
+    size_t projection_count;
+    MilenaSharedQuerySink sink;
+    bool preserve_source_order;
+    MilenaSharedQueryOperator operators[MILENA_SHARED_QUERY_MAX_OPERATORS];
+    size_t operator_count;
+} MilenaSharedQueryPlan;
+MilenaStatus milena_shared_query_plan_build(
+    const char *source, bool has_text_equal_filter,
+    const char *filter_column, const char *filter_text,
+    const MilenaSharedQueryProjection *projections, size_t projection_count,
+    MilenaSharedQuerySink sink, MilenaSharedQueryPlan *plan,
+    MilenaError *error);
+MilenaStatus milena_shared_query_plan_validate(
+    const MilenaSharedQueryPlan *plan, MilenaError *error);
+bool milena_shared_query_plans_same_logic(
+    const MilenaSharedQueryPlan *left, const MilenaSharedQueryPlan *right);
 
 /* Typed logical and physical plan annotations for the canonical .analisis path.
  * AST references are borrowed and remain valid while the runtime owns the AST. */
@@ -33,7 +182,7 @@ typedef enum {
 
 #define MILENA_STREAM_PLAN_MAX_OPERATORS 6u
 
-typedef struct {
+typedef struct MilenaStreamExecutionPlan {
     const ASTNode *source;
     const ASTNode *filter;
     const ASTNode *sink;
@@ -161,6 +310,9 @@ typedef struct {
     MilenaSqlPlanOperationKind kind;
     const ASTNode *source;
     const char *statement;
+    bool has_shared_query_plan;
+    MilenaSharedQueryPlan shared_query_plan;
+    MilenaSharedQueryProjection *shared_projections;
     char *owned_statement; /* generated only for a validated typed SQL operation */
     MilenaSqlPlanParameter *parameters;
     size_t parameter_count;
