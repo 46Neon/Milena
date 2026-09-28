@@ -1,4 +1,6 @@
-# Native AOT (Phase 1)
+# Native AOT (Phase 6 — experimental generated-C slice)
+
+The normative roadmap assigns native AOT to Phase 6. This document describes a generated-C bootstrap prototype that invokes a host C compiler; it does not satisfy the Phase 6 requirement for a backend that does not delegate code generation to an external compiler. It is not Phase 1 work and does not claim Phase 6 completion.
 
 `milena build SOURCE -o OUTPUT` compiles the source through the official
 lexer/parser/semantic frontend and `milena_canonical_program_compile_scalar_ir()`.
