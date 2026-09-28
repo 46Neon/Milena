@@ -1669,12 +1669,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
     if (arrow_stream) {
         const MilenaArrowHIR *arrow_hir = source_program.arrow_hir;
         char output_path[2048];
-<<<<<<<
-        const ASTNode *export_node = arrow_plan.sink;
-        status = dataset_resolve_runtime_path(export_node->value, script_filename, true,
-=======
-        status = dataset_runtime_path(arrow_hir->output_path, script_filename, true,
->>>>>>>
+        status = dataset_resolve_runtime_path(arrow_hir->output_path, script_filename, true,
                                       output_path, sizeof(output_path), error);
         if (status == MILENA_OK) {
             if (arrow_hir->projection_count == 0 ||

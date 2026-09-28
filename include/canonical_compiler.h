@@ -96,14 +96,6 @@ struct MilenaHIRStatement {
 typedef struct {
     char *name;
     size_t resolved_symbol_id;
-<<<<<<<
-    MilenaHIRSourceSpan span;
-    struct {
-        char *name;
-        size_t resolved_symbol_id;
-        MilenaHIRValueType value_type;
-    } *parameters;
-=======
     MilenaHIRValueType value_type;
 } MilenaHIRFunctionParameter;
 
@@ -112,7 +104,6 @@ typedef struct MilenaHIRFunction {
     size_t resolved_symbol_id;
     MilenaHIRSourceSpan span;
     MilenaHIRFunctionParameter *parameters;
->>>>>>>
     size_t parameter_count;
     MilenaHIRStatement **body;
     size_t body_count;

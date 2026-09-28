@@ -1224,7 +1224,6 @@ int main(void) {
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
         ".limpiar dataset { #nulos(\"rellenar\") } }";
     CHECK(milena_canonical_program_parse(&program, unsupported_cleaning_action,
-<<<<<<<
                                          &error) == MILENA_OK, error.message);
     CHECK(program.ast && program.ast->children[0]->children[1]->children[0]
               ->data_cleanup.present == false &&
@@ -1239,18 +1238,6 @@ int main(void) {
     milena_canonical_program_release(&program);
 
     /* Malformed filter text remains AST-only and cannot be admitted to HIR. */
-=======
-                                         &error) == MILENA_ERR_PARSE,
-          "una acción de limpieza distinta de eliminar debe rechazarse en parser");
-    CHECK(program.ast == NULL && program.data_hir == NULL && error.line > 0 &&
-          error.column > 0 && strstr(error.message, "solo admite eliminar") != NULL,
-          "la acción de limpieza inválida debe fallar cerrado sin AST/HIR parcial");
-    milena_canonical_program_release(&program);
-
-
-    /* Malformed filter text is rejected during parsing rather than leaving an
-       untyped AST node for a later HIR failure. */
->>>>>>>
     milena_canonical_program_init(&program);
     const char *malformed_filter_source =
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "

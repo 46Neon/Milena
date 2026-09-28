@@ -1254,11 +1254,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 }
             }
         } else if (parser_match(parser, TOKEN_KW_DATASET)) {
-<<<<<<<
-            Token source_start = parser->current;
-=======
             Token dataset_start = parser->current;
->>>>>>>
+            Token source_start = parser->current;
             parser_advance(parser);
             if (!parser_match(parser, TOKEN_KW_CARGAR)) {
                 parser_error_at(parser, &dataset_start,
@@ -1352,15 +1349,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_advance(parser);
                             if (!parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) break;
                             if (!parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) break;
-<<<<<<<
                             Token action_token = parser->previous;
-=======
-                            if (strcmp(parser->previous.lexeme, "eliminar") != 0) {
-                                parser_error_at(parser, &command_start,
-                                    "La acción de limpieza solo admite eliminar");
-                                break;
-                            }
->>>>>>>
                             ASTNode *command = ast_create_leaf(command_type,
                                                                action_token.lexeme);
                             if (!command) {
@@ -1879,17 +1868,11 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         Token block_start = parser->previous;
                         ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
                                                        (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
-<<<<<<<
                         if (!filtrar) {
                             parser_error(parser, "Sin memoria para bloque de unión o filtro");
                             break;
                         }
                         if (joining) {
-=======
-                        if (!filtrar) parser_error(parser,
-                            "Sin memoria para bloque nombrado");
-                        if (filtrar && joining) {
->>>>>>>
                             filtrar->join_memory_budget_bytes =
                                 MILENA_TABLE_JOIN_DEFAULT_MEMORY_BYTES;
                             filtrar->join_max_output_rows =

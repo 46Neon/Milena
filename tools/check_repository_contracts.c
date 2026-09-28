@@ -28,11 +28,7 @@ typedef struct {
 } StringList;
 
 static const char *const product_sources[] = {
-<<<<<<<
-    "analysis.c", "array.c", "arrow_ipc.c", "bytecode.c", "bytecode_compiler.c", "bytecode_data.c", "bytecode_data_runtime.c", "canonical_compiler.c", "common.c",
-=======
-    "analysis.c", "array.c", "arrow_ipc.c", "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "common.c",
->>>>>>>
+    "analysis.c", "array.c", "arrow_ipc.c", "bytecode.c", "bytecode_compiler.c", "bytecode_data.c", "bytecode_data_runtime.c", "canonical_compiler.c", "canonical_ir.c", "typed_bytecode.c", "native_aot.c", "common.c",
     "dataset.c", "entrypoints.c", "external_merge.c", "external_sort.c",
     "finance.c", "group_key_codec.c", "grouped_aggregate.c", "interpreter.c",
     "language_grouped_spill.c", "language_runtime.c", "logger.c", "main.c",
@@ -52,11 +48,7 @@ static const char *const function_sources[] = {
 };
 static const char *const experimental_sources[] = {
     "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c", "instructions.c",
-<<<<<<<
     "ir.c", "module.c", "semantic.c", "temp_scope.c", "vm.c", "bytecode_native.c"
-=======
-    "ir.c", "module.c", "semantic.c", "temp_scope.c"
->>>>>>>
 };
 static const char *const reference_sources[] = {"vm.c"};
 
@@ -2095,25 +2087,12 @@ static void check_termux_packaging(void)
         list_add(&errors, "Makefile lacks explicit Termux build/install variables");
     }
     if (makefile != NULL) {
-<<<<<<<
         static const char *const experimental[] = {"compiler.c", "ir.c", "vm.c", "bytecode_native.c"};
-=======
-        static const char *const experimental[] = {"compiler.c", "ir.c", "vm.c"};
->>>>>>>
         static const char *const forbidden_make[] = {"/usr/bin", "/usr/local", "apt-get", "__GLIBC__"};
-<<<<<<<
-        Span product_source_span = find_make_sources(makefile);
-=======
         product_sources = find_make_sources(makefile);
->>>>>>>
         for (index = 0U; index < ARRAY_COUNT(experimental); ++index) {
-<<<<<<<
-            if (make_has_source_token(product_source_span, experimental[index], true)) {
-                list_addf(&errors, "experimental source enters canonical Makefile SOURCES: %s", experimental[index]);
-=======
             if (make_has_source_token(product_sources, experimental[index], true)) {
                 list_addf(&errors, "experimental/reference source enters canonical product SOURCES: %s", experimental[index]);
->>>>>>>
             }
         }
         for (index = 0U; index < ARRAY_COUNT(forbidden_make); ++index) {

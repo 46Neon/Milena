@@ -1,12 +1,8 @@
 #include "common.h"
 #include "entrypoints.h"
-<<<<<<<
 #include "bytecode.h"
 #include "bytecode_compiler.h"
 #include "canonical_compiler.h"
-=======
-#include "native_aot.h"
->>>>>>>
 #include <limits.h>
 
 #define CLI_MAX_SOURCE_BYTES (16u * 1024u * 1024u)
@@ -248,12 +244,8 @@ static void usage(const char *program) {
     printf("  %s analizar <csv> <json>\n", program);
     printf("  %s perfil <csv> <json>\n", program);
     printf("  %s run <archivo.milena>\n", program);
-<<<<<<<
     printf("  %s vm <archivo.milena>\n", program);
     printf("  %s build <archivo.milena> -o <programa>\n", program);
-=======
-    printf("  %s build <archivo.milena> -o <ejecutable>\n", program);
->>>>>>>
     printf("  %s inspect <csv>\n", program);
 }
 
@@ -280,17 +272,11 @@ int main(int argc, char **argv) {
         status = milena_cli_profile(argv[2], argv[3], stdout, &error);
     } else if (strcmp(argv[1], "run") == 0 && argc == 3) {
         status = milena_cli_run_script(argv[2], &error);
-<<<<<<<
     } else if (strcmp(argv[1], "vm") == 0 && argc == 3) {
         status = cli_run_vm(argv[2], &error);
     } else if (strcmp(argv[1], "build") == 0 && argc == 5 &&
                strcmp(argv[3], "-o") == 0) {
         status = cli_build_native(argv[2], argv[4], &error);
-=======
-    } else if (strcmp(argv[1], "build") == 0 && argc == 5 &&
-               strcmp(argv[3], "-o") == 0) {
-        status = milena_cli_build(argv[2], argv[4], &error);
->>>>>>>
     } else if (strcmp(argv[1], "inspect") == 0 && argc == 3) {
         status = milena_cli_inspect(argv[2], stdout, &error);
     } else {
