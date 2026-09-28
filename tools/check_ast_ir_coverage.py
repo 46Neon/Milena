@@ -185,6 +185,19 @@ def check_ledger(header_path: Path, ledger_path: Path,
     )
     records = ledger.get("variants")
     require(isinstance(records, list), "ledger variants must be a JSON array")
+    phase2_slices = ledger.get("phase2_hir_slices")
+    require(isinstance(phase2_slices, list), "ledger phase2_hir_slices must be an array")
+    require(len(phase2_slices) == 1 and isinstance(phase2_slices[0], dict),
+            "ledger must record exactly the bounded #periodo Phase 2 HIR slice")
+    period_slice = phase2_slices[0]
+    require(period_slice.get("ast_variant") == "AST_COMANDO_PERIODO" and
+            period_slice.get("operation") ==
+                "MILENA_HIR_DATA_PERIOD / AST_PERIOD_MONTH_FROM_DATE" and
+            period_slice.get("lowering_source") ==
+                "src/canonical_compiler.c:data_hir_build" and
+            period_slice.get("reference_execution") == "milena_table_add_month" and
+            "not end-to-end" in period_slice.get("scope", ""),
+            "#periodo HIR slice must remain explicit and distinct from end-to-end coverage")
 
     names: list[str] = []
     counts = {status: 0 for status in LOWERING_STATUSES}

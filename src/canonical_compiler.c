@@ -450,6 +450,10 @@ static void data_hir_release(MilenaDataHIR *hir) {
                 hir_column_ref_release(&op->as.product.right);
                 free(op->as.product.output_name);
                 break;
+            case MILENA_HIR_DATA_PERIOD:
+                hir_column_ref_release(&op->as.period.date_column);
+                free(op->as.period.output_name);
+                break;
             case MILENA_HIR_DATA_FILTER_NUMERIC:
                 hir_column_ref_release(&op->as.filter.column);
                 break;
@@ -837,7 +841,32 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
         if (node->type == AST_BLOQUE_TRANSFORMAR) {
             for (size_t j = 0; j < node->child_count; ++j) {
                 const ASTNode *command = node->children[j];
-                if (!command || command->type != AST_COMANDO_TOTAL || !command->value) {
+                if (!command) {
+                    data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+                }
+                if (command->type == AST_COMANDO_PERIODO) {
+                    if (!command->has_period_operation ||
+                        command->period_operation != AST_PERIOD_MONTH_FROM_DATE ||
+                        !command->value || strcmp(command->value, "mes de fecha") != 0 ||
+                        command->child_count != 0) {
+                        data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+                    }
+                    MilenaHIRDataOperation period = {0};
+                    period.kind = MILENA_HIR_DATA_PERIOD;
+                    hir_source_span(&period.span, command->has_source_span ? command : node);
+                    period.as.period.operation = command->period_operation;
+                    period.as.period.date_column = hir_unresolved_column("fecha", command);
+                    period.as.period.output_name = milena_strdup("periodo");
+                    if (!period.as.period.date_column.name || !period.as.period.output_name ||
+                        !hir_append_data_operation(hir, &period)) {
+                        hir_column_ref_release(&period.as.period.date_column);
+                        free(period.as.period.output_name);
+                        data_hir_release(hir);
+                        return HIR_BUILD_MEMORY;
+                    }
+                    continue;
+                }
+                if (command->type != AST_COMANDO_TOTAL || !command->value) {
                     data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
                 }
                 char left[128] = {0}, right[128] = {0};
@@ -1312,17 +1341,13 @@ static bool hir_numeric_dtype(MilenaDType dtype) {
     return dtype >= MILENA_DTYPE_INT8 && dtype <= MILENA_DTYPE_FLOAT64;
 }
 
-static bool hir_previous_product(const MilenaDataHIR *hir, size_t before,
-                                 const char *name) {
-    if (!hir || !name) return false;
-    if (before > hir->operation_count) before = hir->operation_count;
-    for (size_t i = 0; i < before; ++i) {
-        const MilenaHIRDataOperation *op = &hir->operations[i];
-        if (op->kind == MILENA_HIR_DATA_PRODUCT && op->as.product.output_name &&
-            strcmp(op->as.product.output_name, name) == 0) return true;
-    }
-    return false;
+static const char *hir_derived_output_name(const MilenaHIRDataOperation *op) {
+    if (!op) return NULL;
+    if (op->kind == MILENA_HIR_DATA_PRODUCT) return op->as.product.output_name;
+    if (op->kind == MILENA_HIR_DATA_PERIOD) return op->as.period.output_name;
+    return NULL;
 }
+
 
 static MilenaStatus hir_bind_column(const MilenaTable *table,
                                     const MilenaDataHIR *hir,
@@ -1334,21 +1359,30 @@ static MilenaStatus hir_bind_column(const MilenaTable *table,
     int index = milena_table_column_index(table, ref->name);
     const MilenaTableColumn *column = index >= 0
         ? milena_table_column(table, (size_t)index) : NULL;
-    if (!column && hir_previous_product(hir, before_operation, ref->name)) {
+    if (!column) {
         size_t virtual_index = table->column_count;
         for (size_t i = 0; i < before_operation; ++i) {
             const MilenaHIRDataOperation *prior = &hir->operations[i];
-            if (prior->kind != MILENA_HIR_DATA_PRODUCT) continue;
-            if (strcmp(prior->as.product.output_name, ref->name) == 0) break;
+            const char *output = hir_derived_output_name(prior);
+            if (!output) continue;
+            if (strcmp(output, ref->name) == 0) {
+                ref->resolved_column_index = virtual_index;
+                ref->type = prior->kind == MILENA_HIR_DATA_PERIOD
+                    ? MILENA_HIR_COLUMN_TEXT : MILENA_HIR_COLUMN_NUMERIC;
+                ref->dtype = ref->type == MILENA_HIR_COLUMN_TEXT
+                    ? MILENA_DTYPE_UINT8 : MILENA_DTYPE_FLOAT64;
+                ref->nullable = true;
+                ref->rank = 1;
+                ref->shape[0] = table->row_count;
+                if (require_numeric && ref->type != MILENA_HIR_COLUMN_NUMERIC) {
+                    canonical_span_error(error, MILENA_ERR_TYPE, &ref->span,
+                        "La operación requiere una columna numérica no booleana");
+                    return MILENA_ERR_TYPE;
+                }
+                return MILENA_OK;
+            }
             virtual_index++;
         }
-        ref->resolved_column_index = virtual_index;
-        ref->type = MILENA_HIR_COLUMN_NUMERIC;
-        ref->dtype = MILENA_DTYPE_FLOAT64;
-        ref->nullable = true;
-        ref->rank = 1;
-        ref->shape[0] = table->row_count;
-        return MILENA_OK;
     }
     if (!column) {
         canonical_span_error(error, MILENA_ERR_TYPE, &ref->span,
@@ -1461,8 +1495,14 @@ static MilenaStatus data_hir_bind_tables(MilenaDataHIR *hir,
                 op->as.product.left.span = op->span;
             if (!op->as.product.right.span.has_source_span)
                 op->as.product.right.span = op->span;
+            bool derived_duplicate = false;
+            for (size_t prior_index = 0; prior_index < i; ++prior_index) {
+                const char *prior_name = hir_derived_output_name(&hir->operations[prior_index]);
+                if (prior_name && strcmp(prior_name, op->as.product.output_name) == 0)
+                    derived_duplicate = true;
+            }
             if (milena_table_column_index(table, op->as.product.output_name) >= 0 ||
-                hir_previous_product(hir, i, op->as.product.output_name)) {
+                derived_duplicate) {
                 canonical_span_error(error, MILENA_ERR_TYPE, &op->span,
                                      "La columna derivada 'total' ya existe");
                 return MILENA_ERR_TYPE;
@@ -1471,6 +1511,39 @@ static MilenaStatus data_hir_bind_tables(MilenaDataHIR *hir,
             if (status == MILENA_OK)
                 status = hir_bind_column(table, hir, &op->as.product.right, i, true, error);
             if (status != MILENA_OK) return status;
+            if (current_columns == SIZE_MAX) return MILENA_ERR_OVERFLOW;
+            current_columns++;
+            if (current_columns > maximum_columns) maximum_columns = current_columns;
+        } else if (op->kind == MILENA_HIR_DATA_PERIOD) {
+            if (op->as.period.operation != AST_PERIOD_MONTH_FROM_DATE ||
+                !op->as.period.output_name || !op->as.period.date_column.name) {
+                canonical_span_error(error, MILENA_ERR_UNSUPPORTED, &op->span,
+                    "Operación de periodo no representada por HIR");
+                return MILENA_ERR_UNSUPPORTED;
+            }
+            if (!op->as.period.date_column.span.has_source_span)
+                op->as.period.date_column.span = op->span;
+            bool duplicate = milena_table_column_index(table,
+                op->as.period.output_name) >= 0;
+            for (size_t prior_index = 0; prior_index < i; ++prior_index) {
+                const char *prior_name = hir_derived_output_name(&hir->operations[prior_index]);
+                if (prior_name && strcmp(prior_name, op->as.period.output_name) == 0)
+                    duplicate = true;
+            }
+            if (duplicate) {
+                canonical_span_error(error, MILENA_ERR_TYPE, &op->span,
+                    "La columna derivada 'periodo' ya existe");
+                return MILENA_ERR_TYPE;
+            }
+            status = hir_bind_column(table, hir, &op->as.period.date_column,
+                                     i, false, error);
+            if (status != MILENA_OK) return status;
+            if (op->as.period.date_column.type != MILENA_HIR_COLUMN_TEXT) {
+                canonical_span_error(error, MILENA_ERR_TYPE,
+                    &op->as.period.date_column.span,
+                    "La extracción de periodo requiere una columna de texto 'fecha'");
+                return MILENA_ERR_TYPE;
+            }
             if (current_columns == SIZE_MAX) return MILENA_ERR_OVERFLOW;
             current_columns++;
             if (current_columns > maximum_columns) maximum_columns = current_columns;
@@ -1664,6 +1737,21 @@ MilenaStatus milena_canonical_program_execute_data(
                 status = milena_table_add_product(&working,
                     op->as.product.left.name, op->as.product.right.name,
                     op->as.product.output_name, error);
+            }
+        } else if (op->kind == MILENA_HIR_DATA_PERIOD) {
+            if (op->as.period.operation != AST_PERIOD_MONTH_FROM_DATE) {
+                status = MILENA_ERR_UNSUPPORTED;
+                canonical_span_error(error, status, &op->span,
+                    "Operación de periodo no representada por HIR");
+            } else if (working.column_count >= limits->max_columns) {
+                status = MILENA_ERR_OVERFLOW;
+                canonical_span_error(error, status, &op->span,
+                    "La transformación excede el límite de columnas HIR");
+            } else {
+                status = milena_table_add_month(&working,
+                    op->as.period.date_column.name,
+                    op->as.period.output_name, error);
+                if (status != MILENA_OK) hir_attach_error_span(error, &op->span);
             }
         } else if (op->kind == MILENA_HIR_DATA_FILTER_NUMERIC) {
             const char *operator_text = hir_operator_text(op->as.filter.operation);
@@ -1882,6 +1970,7 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_DECLARACION_VARIABLE:
         case AST_BLOQUE_TRANSFORMAR:
         case AST_COMANDO_TOTAL:
+        case AST_COMANDO_PERIODO:
         case AST_BLOQUE_LIMPIAR:
         case AST_COMANDO_NULOS:
         case AST_COMANDO_DUPLICADOS:

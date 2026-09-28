@@ -382,7 +382,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
+      "lowering_evidence": "End-to-end lowering remains incomplete: the aggregate coverage ledger is 0/68 full, 7 partial, 61 not lowered. A bounded Phase 2 HIR slice for #periodo is tracked separately in phase2_hir_slices; it is not full AST-to-typed-IR/bytecode/VM coverage.",
       "completion_evidence": null
     },
     {
@@ -824,6 +824,16 @@
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
       "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
+    }
+  ],
+  "phase2_hir_slices": [
+    {
+      "ast_variant": "AST_COMANDO_PERIODO",
+      "operation": "MILENA_HIR_DATA_PERIOD / AST_PERIOD_MONTH_FROM_DATE",
+      "lowering_source": "src/canonical_compiler.c:data_hir_build",
+      "binding": "fecha is resolved as text; existing periodo output is rejected",
+      "reference_execution": "milena_table_add_month",
+      "scope": "bounded Phase 2 HIR slice only; not end-to-end IR/bytecode/VM coverage"
     }
   ]
 }

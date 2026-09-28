@@ -168,6 +168,11 @@ typedef enum {
 } ASTAggregateOperation;
 
 typedef enum {
+    AST_PERIOD_OPERATION_NONE = 0,
+    AST_PERIOD_MONTH_FROM_DATE
+} ASTPeriodOperation;
+
+typedef enum {
     AST_FILTER_PREDICATE_OK = 0,
     AST_FILTER_PREDICATE_INVALID,
     AST_FILTER_PREDICATE_MEMORY
@@ -191,6 +196,9 @@ typedef struct ASTNode {
     ASTAggregateOperation aggregate_operation;
     char *aggregate_column;
     bool has_aggregate_metric;
+    /* Typed operation for the closed #periodo payload; `value` is legacy spelling. */
+    ASTPeriodOperation period_operation;
+    bool has_period_operation;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */
     struct ASTNode *left_operand;
     struct ASTNode *right_operand;
@@ -267,6 +275,7 @@ ASTFilterPredicateStatus ast_set_filter_predicate(ASTNode *node,
 /* Set typed canonical metric data while preserving the legacy value spelling. */
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column);
+bool ast_set_period_operation(ASTNode *node, ASTPeriodOperation operation);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
 ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,

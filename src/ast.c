@@ -220,6 +220,15 @@ bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
     return true;
 }
 
+bool ast_set_period_operation(ASTNode *node, ASTPeriodOperation operation) {
+    if (!node || node->type != AST_COMANDO_PERIODO || !node->value ||
+        node->child_count != 0 || operation != AST_PERIOD_MONTH_FROM_DATE ||
+        strcmp(node->value, "mes de fecha") != 0) return false;
+    node->period_operation = operation;
+    node->has_period_operation = true;
+    return true;
+}
+
 static bool ast_is_filter_comparison(ASTOperatorKind operation) {
     return operation == AST_OPERATOR_EQUAL ||
            operation == AST_OPERATOR_NOT_EQUAL ||
@@ -294,6 +303,8 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
             (unsigned)node->filter_operator >= (unsigned)AST_OPERATOR_COUNT ||
             (unsigned)node->aggregate_operation >=
                 (unsigned)AST_AGGREGATE_OPERATION_LIMIT ||
+            (unsigned)node->period_operation >
+                (unsigned)AST_PERIOD_MONTH_FROM_DATE ||
             (unsigned)node->stream_operation >
                 (unsigned)AST_STREAM_OPERATION_STDDEV) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
@@ -341,6 +352,21 @@ bool ast_validate(const ASTNode *root, MilenaError *error) {
                    AST_AGGREGATE_OPERATION_NONE) {
             valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
                 "Payload de métrica agregada sin etiqueta en el AST");
+            break;
+        }
+        if (node->has_period_operation) {
+            if (node->type != AST_COMANDO_PERIODO || !node->value ||
+                node->period_operation != AST_PERIOD_MONTH_FROM_DATE ||
+                node->child_count != 0 ||
+                strcmp(node->value, "mes de fecha") != 0) {
+                valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                    "Payload tipado de periodo inconsistente en el AST");
+                break;
+            }
+        } else if (node->period_operation != AST_PERIOD_OPERATION_NONE ||
+                   node->type == AST_COMANDO_PERIODO) {
+            valid = ast_validation_error(error, MILENA_ERR_ARGUMENT, node,
+                "Comando periodo sin operación tipada en el AST");
             break;
         }
         if (node->stream_operation != AST_STREAM_OPERATION_NONE &&

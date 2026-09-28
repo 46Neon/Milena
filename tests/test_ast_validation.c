@@ -209,6 +209,35 @@ int main(void) {
     ast_destroy(program);
     parser_release(&parser);
 
+    /* #periodo has one typed, span-bearing AST representation; legacy spelling
+       normalizes to the same payload and an untyped synthetic node is invalid. */
+    const char *period_source =
+        ".analisis demo { dataset cargar datos(\"entrada.csv\") "
+        ".transformar dataset { #periodo(\"mes de fecha\") } }";
+    lexer_init(&lexer, period_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program != NULL && !parser.has_error);
+    ASTNode *period = program->children[0]->children[1]->children[0];
+    assert(period->type == AST_COMANDO_PERIODO && period->has_period_operation &&
+           period->period_operation == AST_PERIOD_MONTH_FROM_DATE &&
+           period->child_count == 0 && period->has_source_span);
+    assert(strncmp(period_source + period->start_offset, "#periodo(\"mes de fecha\")",
+                   period->end_offset - period->start_offset) == 0);
+    assert(ast_validate(program, &error));
+    period->has_period_operation = false;
+    assert(!ast_validate(program, &error) && error.code == MILENA_ERR_ARGUMENT);
+    period->has_period_operation = true;
+    assert(ast_validate(program, &error));
+    ast_destroy(program);
+    parser_release(&parser);
+
+    ASTNode *untyped_period = ast_create_leaf(AST_COMANDO_PERIODO, "mes de fecha");
+    assert(untyped_period && !ast_validate(untyped_period, &error));
+    assert(ast_set_period_operation(untyped_period, AST_PERIOD_MONTH_FROM_DATE));
+    assert(ast_validate(untyped_period, &error));
+    ast_destroy(untyped_period);
+
     ASTNode *typed_metric = ast_create_leaf(AST_RESUMEN_METRICA, "conteo:ciudad");
     assert(typed_metric && ast_set_aggregate_metric(typed_metric,
            AST_AGGREGATE_OPERATION_COUNT, "ciudad"));

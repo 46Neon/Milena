@@ -843,6 +843,106 @@ int main(void) {
     milena_table_destroy(&sentinel);
     milena_table_destroy(&data_output);
 
+    /* Typed HIR lowering and reference execution for #periodo, including
+       Gregorian leap-year validation, null propagation and transactional error. */
+    milena_canonical_program_init(&program);
+    const char *period_source =
+        ".analisis fechas { dataset cargar datos(\"fechas.csv\") "
+        ".transformar dataset { #periodo(\"mes de fecha\") } }";
+    CHECK(milena_canonical_program_parse(&program, period_source, &error) == MILENA_OK,
+          error.message);
+    CHECK(program.data_hir && program.data_hir->operation_count == 1 &&
+          program.data_hir->operations[0].kind == MILENA_HIR_DATA_PERIOD &&
+          program.data_hir->operations[0].as.period.operation ==
+              AST_PERIOD_MONTH_FROM_DATE &&
+          strcmp(program.data_hir->operations[0].as.period.date_column.name, "fecha") == 0 &&
+          strcmp(program.data_hir->operations[0].as.period.output_name, "periodo") == 0 &&
+          program.data_hir->operations[0].span.has_source_span,
+          "#periodo debe bajar a una operación HIR tipada y con span");
+    const char *period_values[] = {"2024-02-29", "2023-12-31", NULL};
+    bool period_validity[] = {true, true, false};
+    MilenaTable period_table;
+    milena_table_init(&period_table);
+    CHECK(milena_table_add_string_column_copy(&period_table, "fecha", period_values, 3,
+                                               period_validity, &error) == MILENA_OK &&
+          milena_table_set_metadata(&period_table, MILENA_HIR_DATASET_PATH_METADATA,
+                                   "fechas.csv", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &period_table, &error) == MILENA_OK &&
+          program.data_hir->schema_bound &&
+          program.data_hir->operations[0].as.period.date_column.type ==
+              MILENA_HIR_COLUMN_TEXT &&
+          program.data_hir->operations[0].as.period.date_column.resolved_column_index == 0 &&
+          program.data_hir->resource_policy.max_columns == 2,
+          "el binder debe resolver fecha como texto y contar la columna derivada");
+    MilenaTable period_output;
+    milena_table_init(&period_output);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &period_output,
+                                                 &error) == MILENA_OK,
+          error.message);
+    CHECK(period_output.row_count == 3 && period_output.column_count == 2 &&
+          milena_table_column_index(&period_output, "periodo") == 1,
+          "el ejecutor debe agregar exactamente una columna periodo");
+    const char *period_cell = NULL;
+    CHECK(milena_table_get_string(&period_output, 1, 0, &period_cell, &error) == MILENA_OK &&
+          strcmp(period_cell, "2024-02") == 0 &&
+          milena_table_get_string(&period_output, 1, 1, &period_cell, &error) == MILENA_OK &&
+          strcmp(period_cell, "2023-12") == 0 &&
+          milena_table_is_null(&period_output, 1, 2),
+          "periodo debe extraer año-mes, admitir año bisiesto y propagar nulos");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&period_output);
+    milena_table_destroy(&period_table);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, period_source, &error) == MILENA_OK,
+          error.message);
+    const char *invalid_date_values[] = {"2023-02-29"};
+    MilenaTable invalid_dates;
+    milena_table_init(&invalid_dates);
+    CHECK(milena_table_add_string_column_copy(&invalid_dates, "fecha",
+          invalid_date_values, 1, NULL, &error) == MILENA_OK &&
+          milena_table_set_metadata(&invalid_dates, MILENA_HIR_DATASET_PATH_METADATA,
+                                    "fechas.csv", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &invalid_dates, &error) == MILENA_OK,
+          error.message);
+    MilenaTable period_sentinel;
+    milena_table_init(&period_sentinel);
+    const char *sentinel_value[] = {"conservar"};
+    CHECK(milena_table_add_string_column_copy(&period_sentinel, "marcador",
+          sentinel_value, 1, NULL, &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_execute_data(&program, NULL, &period_sentinel,
+          &error) == MILENA_ERR_TYPE && error.line > 0 &&
+          period_sentinel.row_count == 1 && period_sentinel.column_count == 1 &&
+          milena_table_column_index(&period_sentinel, "periodo") < 0 &&
+          milena_table_column_index(&period_sentinel, "marcador") == 0,
+          "una fecha inválida debe reportar el span y no publicar salida parcial");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&invalid_dates);
+    milena_table_destroy(&period_sentinel);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, period_source, &error) == MILENA_OK,
+          error.message);
+    const char *duplicate_date_values[] = {"2024-01-01"};
+    const char *duplicate_period_values[] = {"existente"};
+    MilenaTable duplicate_period;
+    milena_table_init(&duplicate_period);
+    CHECK(milena_table_add_string_column_copy(&duplicate_period, "fecha",
+          duplicate_date_values, 1, NULL, &error) == MILENA_OK &&
+          milena_table_add_string_column_copy(&duplicate_period, "periodo",
+          duplicate_period_values, 1, NULL, &error) == MILENA_OK &&
+          milena_table_set_metadata(&duplicate_period, MILENA_HIR_DATASET_PATH_METADATA,
+                                    "fechas.csv", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_bind_table(&program, &duplicate_period, &error) ==
+          MILENA_ERR_TYPE && !program.data_hir->schema_bound,
+          "el binder debe rechazar una columna de salida periodo ya existente");
+    milena_canonical_program_release(&program);
+    milena_table_destroy(&duplicate_period);
+
     /* Schema binding rejects unknown columns and type mismatches with spans. */
     milena_canonical_program_init(&program);
     const char *unknown_column_source =

@@ -1510,8 +1510,35 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                                 "#periodo solo admite el payload \"mes de fecha\"");
                                             break;
                                         }
-                                        if (!parser_add_child(parser, transformar, ast_create_leaf(AST_COMANDO_PERIODO, parser->previous.lexeme), "Sin memoria para comando periodo")) break;
-                                        parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'" );
+                                        ASTNode *period_command = ast_create_leaf(
+                                            AST_COMANDO_PERIODO, parser->previous.lexeme);
+                                        if (!period_command) {
+                                            parser_error(parser, "Sin memoria para comando periodo");
+                                            break;
+                                        }
+                                        if (!ast_set_period_operation(
+                                                period_command,
+                                                AST_PERIOD_MONTH_FROM_DATE)) {
+                                            ast_destroy(period_command);
+                                            parser_error_at(parser, &command_start,
+                                                "Payload de periodo no representado");
+                                            break;
+                                        }
+                                        if (!parser_expect(parser, TOKEN_PAR_DER,
+                                                           "Se esperaba ')'")) {
+                                            ast_destroy(period_command);
+                                            break;
+                                        }
+                                        if (!ast_set_source_span(period_command,
+                                                &command_start, &parser->previous)) {
+                                            ast_destroy(period_command);
+                                            parser_error_at(parser, &command_start,
+                                                "No se pudo asignar span a comando periodo");
+                                            break;
+                                        }
+                                        if (!parser_add_child(parser, transformar,
+                                                period_command,
+                                                "Sin memoria para comando periodo")) break;
                                     }
                                 }
                             } else {

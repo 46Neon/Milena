@@ -118,8 +118,8 @@ typedef struct MilenaScalarHIR {
 
 /* Typed table/data HIR. This deliberately closed subset has one program-local
  * dataset binding with loader-stamped path provenance; numeric product/filter,
- * null/duplicate cleaning, column projection, grouping, summary, and a
- * borrowed-output export boundary. */
+ * month-from-date extraction, null/duplicate cleaning, column projection,
+ * grouping, summary, and a borrowed-output export boundary. */
 typedef enum {
     MILENA_HIR_COLUMN_UNKNOWN,
     MILENA_HIR_COLUMN_NUMERIC,
@@ -170,6 +170,7 @@ typedef struct {
 
 typedef enum {
     MILENA_HIR_DATA_PRODUCT,
+    MILENA_HIR_DATA_PERIOD,
     MILENA_HIR_DATA_FILTER_NUMERIC,
     MILENA_HIR_DATA_SELECT_COLUMNS,
     MILENA_HIR_DATA_GROUP,
@@ -187,6 +188,7 @@ typedef struct {
     MilenaHIRSourceSpan span;
     union {
         struct { MilenaHIRColumnRef left, right; char *output_name; } product;
+        struct { ASTPeriodOperation operation; MilenaHIRColumnRef date_column; char *output_name; } period;
         struct { MilenaHIRColumnRef column; ASTOperatorKind operation; double threshold; } filter;
         struct { MilenaHIRColumnRef *columns; size_t count; } select;
         struct { MilenaHIRColumnRef key; MilenaHIRAggregate *aggregates; size_t aggregate_count; MilenaHIRResourcePolicy policy; } group;
