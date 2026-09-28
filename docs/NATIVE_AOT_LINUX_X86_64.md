@@ -1,7 +1,8 @@
-# Direct native AOT slice: Linux x86-64
+# Direct native AOT slice: Phase 6, Linux x86-64
 
-This is a deliberately partial Phase 2 implementation, not a Phase 2 completion
-claim. On Linux x86-64, `milena build` emits an ELF64 `ET_EXEC` file directly:
+This is a deliberately partial experimental slice of normative Phase 6, not a
+Phase 2 implementation and not a Phase 6 completion claim. On Linux x86-64,
+`milena build` emits an ELF64 `ET_EXEC` file directly:
 the executable image, x86-64 instructions, and program header are written by
 Milena itself. The path does not invoke a C compiler, assembler, linker, VM, or
 interpreter. `MILENA_CC` is ignored.
@@ -48,10 +49,9 @@ signatures, or unsupported targets fail closed with explicit diagnostics.
 Output installation is atomic and source/output aliasing is rejected. Windows/PE, Android/Bionic,
 other Linux architectures, runtime-dependent calculations, and all language
 constructs outside this narrow slice remain unsupported. This is not whole-
-language AOT or full VM equivalence: Phase 1 remains incomplete, and the
-normative Phase 2 acceptance gate still requires every Phase 1-supported
-construct, resource/error equivalence, and validation on all agreed targets
-including Android/Termux.
+language AOT or full VM equivalence. The Phase 6 acceptance gate remains open:
+Phases 1–5 must be closed first, then result/error/resource parity and the agreed
+targets, including Windows and Android/Termux, must be validated.
 
 `make test-native-aot` verifies ELF identity, confirms runtime arithmetic and
 direct call opcodes occur in executable text, executes a multi-argument helper
