@@ -1427,7 +1427,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                                                   expression_token.lexeme)) {
                                             ast_destroy(total);
                                             parser_error_at(parser, &command_start,
-                                                "No se pudo estructurar el producto tipado de #total");
+                                                "No se pudo estructurar #total: la forma columna * columna es obligatoria");
                                             break;
                                         }
                                         if (!parser_expect(parser, TOKEN_PAR_DER,
