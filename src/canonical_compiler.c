@@ -846,7 +846,6 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
                 }
                 if (command->type == AST_COMANDO_PERIODO) {
                     if (!command->has_period_operation ||
-                        command->period_operation != AST_PERIOD_MONTH_FROM_DATE ||
                         !command->value || strcmp(command->value, "mes de fecha") != 0 ||
                         command->child_count != 0) {
                         data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
