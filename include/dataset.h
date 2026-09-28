@@ -20,11 +20,26 @@ typedef struct {
 } Dataset;
 
 DatasetLimits dataset_default_limits(void);
+/* Shared canonical CLI path rules: input prefers cwd then the source file's
+ * directory; output-relative paths use the source file's directory. */
+MilenaStatus dataset_resolve_runtime_path(const char *requested,
+                                         const char *source_filename,
+                                         bool output,
+                                         char *resolved,
+                                         size_t resolved_size,
+                                         MilenaError *error);
 void dataset_init(Dataset *dataset);
 void dataset_destroy(Dataset *dataset);
 MilenaStatus dataset_load_csv_with_limits(Dataset *dataset, const char *filename,
                                         char delimiter, const DatasetLimits *limits,
                                         MilenaError *error);
+/* The byte budget counts physical input bytes from the first header byte through
+ * every record terminator. A zero budget accepts only an empty file (which still
+ * returns the existing empty-CSV data error). Limit failures return LIMIT and
+ * leave the destination Dataset unchanged. */
+MilenaStatus dataset_load_csv_with_limits_and_byte_budget(
+    Dataset *dataset, const char *filename, char delimiter,
+    const DatasetLimits *limits, size_t max_file_bytes, MilenaError *error);
 MilenaStatus dataset_load_csv(Dataset *dataset, const char *filename,
                             char delimiter, MilenaError *error);
 MilenaStatus dataset_save_json(const Dataset *dataset, const char *filename,

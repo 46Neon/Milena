@@ -1,74 +1,57 @@
-# Compilador de Milena: plan normativo por fases
+# Compilador de Milena: plan normativo en dos fases
 
-**Estado:** contrato normativo de aceptación. Este roadmap sustituye la organización anterior en dos fases. `COMPILADOR_IR_PLAN.md` queda como archivo histórico de análisis e incrementos; cuando haya diferencias de estado o alcance, rige este documento y la evidencia del SHA exacto.
+**Estado:** plan y contrato de aceptación. Este documento no afirma que la IR universal ni la compilación nativa ya estén implementadas. Base auditada: `main` en `14525959fd8f25593037a0d65646d87e3cb62b9e`, tras la integración de incrementos parciales de AST/HIR, MLBC, VM, runtime de datos y una base AOT Linux x86-64 en PR #37. PR #33 presenta un incremento revisable de Fase 1; sus experimentos AOT se identifican aparte como trabajo preparatorio de Fase 2.
 
-La entrega se organiza en ocho fases secuenciales. Cada fase tiene un gate de salida verificable. Preparar documentación, aislar prototipos, añadir un inventario, o completar solo un subconjunto no cierra una fase. Ninguna fase posterior se considera iniciada formalmente antes de cerrar la anterior; se permiten incrementos preparatorios fail-closed siempre que se describan como tales.
+La entrega completa se organiza en exactamente dos fases. Las tareas internas son criterios de salida, no fases adicionales.
+
+## Diagnóstico de la base
+
+- El ejecutable oficial de Milena se construye desde fuentes C17 con el compilador C de la plataforma. Eso compila la implementación de Milena, no cada programa `.milena` a código nativo.
+- El producto ya integra lexer, parser, AST, validación semántica y runtime. `canonical_compiler.c` construye y ejecuta una HIR de datos acotada; no emite bytes de instrucciones nativas.
+- `compiler.c`, `ir.c` y `assembler.c` siguen siendo prototipos experimentales aislados; main ya incorpora incrementos parciales de AST/HIR, MLBC, VM, runtime de datos y una base AOT Linux x86-64 procedentes de PR #37. Ninguno de esos incrementos cubre por sí solo todo el lenguaje ni cierra un gate; el IR secuencial y el ensamblador aún no representan todas las construcciones ni un ISA/ABI de Windows, Linux o Android.
+- El repositorio contiene capacidades de arrays, tablas, estadísticas, CSV, flujo, SQLite y Arrow. Cada capacidad solo cuenta como lenguaje compilable cuando su sintaxis y semántica tienen una representación completa en la ruta canónica y pruebas de equivalencia; una biblioteca C disponible no basta.
 
 ## Regla de arquitectura
 
-La ruta canónica es única:
+La única ruta canónica de un programa será:
 
-`fuente Milena → lexer → AST tipado → análisis semántico → HIR → IR Milena verificada → bytecode portable → VM de referencia → backend AOT/JIT`
+`fuente Milena → lexer → AST tipado → análisis semántico → IR Milena verificada → backend → ejecutable nativo`
 
-No se agregará un parser, un IR de lenguaje o un runtime competidor. La compatibilidad con consumidores heredados es transitoria, explícita y no puede anunciarse como compilación. Ninguna sintaxis oficialmente soportada podrá quedar indefinidamente fuera de la ruta canónica: cada forma se implementa o se depreca con política de versión y diagnóstico explícito.
+No se añadirá otro parser, un segundo IR competidor ni un runtime alternativo. La VM de referencia de la fase 1 y el backend nativo de la fase 2 consumirán el mismo contrato IR. Se puede conservar compatibilidad durante la migración, pero ninguna sintaxis oficialmente soportada podrá quedar indefinidamente en una ruta no compilable.
 
-## Fase 1 — lexer y spans
+## Fase 1 — frontend completo e IR Milena de altas capacidades
 
-**Objetivo:** tokens, errores léxicos y rangos de fuente inequívocos, conservados por el parser en los nodos que construye.
+**Objetivo:** representar sin pérdida semántica todo el lenguaje oficialmente soportado en una IR propia, tipada, versionada, portable y verificable. Al cierre de esta fase, los programas se podrán serializar como bytecode portable y ejecutar en una VM de referencia; ese bytecode no es código máquina de la CPU.
 
-- Los offsets son bytes y spans semiabiertos `[inicio, fin)`; líneas/columnas empiezan en 1, el final es exclusivo y LF avanza de línea. EOF tiene span vacío. Las columnas cuentan bytes salvo que una futura versión defina otra unidad.
-- Fijar reglas numéricas y de escapes: signo unario separado, exponente con signo opcional y dígitos obligatorios, rechazo de valores no finitos/fuera de rango, y error para escapes desconocidos.
-- El lexema decodificado no altera el span del texto fuente. Los diagnósticos conservan la posición inicial pertinente.
-- El parser copia spans a expresiones numéricas/identificadores y operaciones aritméticas, declaraciones/asignaciones, llamadas estadísticas, bloques de análisis y funciones numéricas; los contenedores agregan rangos de hijos. Los diagnósticos semánticos cubiertos apuntan al origen del argumento. Esta fase no exige rediseñar el AST ni construir HIR.
+1. **Cerrar el inventario del lenguaje.** Crear una matriz exhaustiva `token/sintaxis → AST → regla semántica → operación IR → ejecución de referencia → pruebas`. Incluir funciones, expresiones, control de flujo, arrays, datasets/tablas, estadísticas, entrada/salida y capacidades de flujo que formen parte del lenguaje público. Cada nodo y variante AST queda soportado o se elimina/depreca explícitamente con una política de versión; nunca se omite por un `default` recursivo que finja cobertura.
 
-**Gate de salida:** pruebas de límites, errores, limpieza/estado y reglas numéricas/escapes; spans consistentes en la superficie enumerada; matrices CI requeridas verdes en el SHA exacto. No contar un workflow omitido como aprobado ni inferir ejecución local inexistente.
+   **Instrumentación de estado, no cierre del criterio:** `docs/AST_TYPED_IR_COVERAGE.json` enumera y comprueba las 72 variantes reales de `ASTNodeType`: 68 construcciones activas del lenguaje y 4 variantes enum-only reservadas fuera del denominador. El ledger registra 0 completas, 7 parciales y 61 sin lowering entre las construcciones activas. `make check-hir-ast-coverage` valida el inventario contra `include/ast.h`. El ledger no decide qué sintaxis es oficial ni reemplaza la matriz semántica/de ejecución/pruebas requerida; la fase 1 sigue incompleta.
+2. **Completar el frontend antes del lowering.** Consolidar los spans y diagnósticos del lexer, estructurar los nodos AST por constructo, y tipar/resolver símbolos, funciones, columnas, operaciones, nulabilidad y errores. La transformación a IR debe consumir payloads AST tipados, no volver a interpretar cadenas de comandos ni reparsear el texto de origen.
+3. **Definir una IR canónica de una sola ruta.** Usar valores tipados y operaciones con operandos explícitos, IDs estables, bloques y flujo de control verificable, tipos y firmas de funciones, constantes, llamadas y retornos. Conservar spans de origen, efectos, contratos de error, ownership/lifetimes y límites de recursos. Representar arrays, tablas, CSV/streaming y operaciones estadísticas con instrucciones de dominio cuando ello evite destruir oportunidades de optimización; bajar esas instrucciones mediante pases definidos a las operaciones escalares y de control de la misma IR, no a un motor paralelo.
+4. **Especificar y verificar el bytecode portable.** Cabecera mágica y versión explícita; enteros de ancho fijo y endianess definidos; ningún puntero nativo serializado. El lector impone límites antes de reservar memoria y rechaza truncamiento, IDs/tipos inválidos, firmas incompatibles, bloques o saltos inválidos, valores sin definición, recursos excesivos y opcodes desconocidos. Añadir serialización determinista y pruebas round-trip, de límites y fuzzing.
+5. **Implementar la VM de referencia sobre la IR verificada.** Ejecutar todas las operaciones admitidas con semántica idéntica al runtime actual. Definir la propiedad de cada valor y recurso, limpieza ante éxito/error/cancelación y propagación determinista de diagnósticos. La VM sirve como oráculo de equivalencia y fallback explícito; no sustituye al compilador nativo de la fase 2.
 
-## Fase 2 — AST estructurado, semántica y HIR
+**Gate de salida de fase 1:** cobertura automática del 100 % de los constructos oficialmente soportados; ningún constructo con rechazo accidental, lowering silencioso o pérdida de semántica; verificador fail-closed; bytecode portable validado; pruebas diferenciales del runtime/VM sobre resultados, errores, límites de memoria y limpieza; CI verde en el SHA exacto con GCC, Clang y sanitizadores. La fase no se declara completa por tener un HIR parcial, una especificación escrita o pruebas solo estructurales.
 
-**Objetivo:** representar estructuralmente cada constructo oficial, con semántica tipada y HIR poseída, sin reinterpretar cadenas de comandos ni volver a parsear la fuente.
+## Contrato de la IR de altas capacidades
 
-- Mantener una matriz exhaustiva `sintaxis → AST → regla semántica → HIR → ejecución de referencia → pruebas`. Toda variante AST debe estar soportada o tener estado histórico/gramatical resuelto y política explícita de exclusión o deprecación.
-- Crear nodos/payloads tipados por constructo con spans; resolver bindings, funciones, datasets, columnas, tipos, nulabilidad, efectos, errores y políticas de recursos que correspondan.
-- La HIR debe conservar IDs estables, operandos tipados, referencias resueltas, ownership/lifetimes y spans. Los consumidores estrictos rechazan sin salida parcial cualquier forma no representada; la ruta de compatibilidad no autoriza compilación.
-- Verificar el recorrido canónico lexer→parser→semántica→HIR y paridad con el runtime existente para cada constructo admitido; probar diagnósticos, fallos de asignación, limpieza, límites y entradas inválidas.
+- **Tipos y valores:** escalares y valores nulos/optionales; arrays con dtype, forma y layout explícitos; tablas con esquema, tipos y nulabilidad; streams con fuente, modo, particionado y límites; funciones con parámetros/retorno tipados. La matriz semántica del lenguaje decide los tipos exactos: el backend no puede inferirlos de cadenas o nombres.
+- **Operaciones:** constantes; conversión y aritmética tipada; comparaciones; bloques/ramas/ciclos; llamadas; lectura/escritura de bindings; errores; operaciones de arrays/reducciones; carga, filtro, proyección, transformación, agrupación, resumen y join de tablas; estadísticas; lectura/escritura y flujo. Cada opcode tiene operandos, tipos, efectos, errores, límites y reglas de ownership normativos.
+- **Control y validación:** bloques con terminador explícito; cada valor se define una sola vez o por parámetro de bloque; los usos están dominados por su definición; las entradas/salidas de bloques concuerdan en tipo; toda rama apunta a un bloque existente; las funciones retornan según su firma. Ningún archivo serializado puede conseguir ejecución antes de superar el verificador.
+- **Efectos y recursos:** las operaciones de archivos, reportes, estado y memoria son visibles en IR; límites de filas, columnas, bytes y memoria se validan como parte del contrato de ejecución, no como optimizaciones opcionales. El backend conserva el orden observable y no puede eliminar efectos.
+- **Fuente y errores:** cada operación conserva span suficiente para señalar el origen Milena; los errores de parseo, tipo, datos, E/S, límite y runtime conservan categoría y ubicación a través de AST, IR, VM y binario nativo.
 
-**Gate de salida:** cobertura por constructo cerrada o exclusión versionada; pruebas end-to-end y de error/cleanup; ausencia de fallback semántico silencioso; CI verde en el SHA exacto. Una HIR escalar o de datos parcial no satisface el gate.
+## Fase 2 — backend AOT directo a código máquina
 
-## Fase 3 — IR, opcode y assembler
+**Objetivo:** convertir cada programa aceptado por la fase 1 en un ejecutable nativo por plataforma sin invocar LLVM, GCC, Clang ni otro compilador como backend del programa Milena.
 
-**Objetivo:** traducir la HIR admitida a una representación de instrucciones tipada con una semántica inequívoca, preservando operandos, valores, strings, tipos, control de flujo y errores.
+1. Implementar selección de instrucciones, asignación de registros, frames de pila, llamadas y convenciones ABI, ramas, constantes, relocaciones y tratamiento de errores para cada target acordado.
+2. El compilador Milena produce el código nativo y el formato final de ejecutable/objeto mediante componentes propios. Para que el artefacto no necesite un intérprete separado, las rutinas de soporte Milena utilizadas (memoria, arrays, tablas, CSV/flujo, estadísticas y E/S aplicables) se compilan o se enlazan estáticamente dentro del artefacto. El camino AOT no admite fallback silencioso a interpretación.
+3. Validar targets explícitos: Windows/PE y ABI Windows, Linux/ELF y ABI Linux, Android/Termux/ELF y Bionic, en las arquitecturas acordadas. Termux debe validarse en Android real; un host Ubuntu no es evidencia de Bionic.
+4. Comparar cada binario nativo contra la VM de referencia usando la misma batería de programas, entradas, errores y límites. Medir RAM, CPU e I/O con workloads reproducibles antes de anunciar rendimiento o escalabilidad.
 
-- Auditar y poner en cuarentena o retirar `IRProgram`/`IROpCode`, `InstrOpcode`/`MachineInstruction` y `OpCode`/`Instruction` antes de promover un contrato tipado.
-- Prohibir conversiones por ordinal, cast, coincidencia de nombre o mapeo genérico; no permitir conversiones numéricas, de strings, tipos o errores con pérdida. El lowering falla cerrado ante operaciones no admitidas.
-- Usar MLBC v1.2 como referencia del subconjunto escalar y mantener `MilenaDataHIR`/DPLN v1.3 en su contrato separado; no afirmar una HIR universal por compartir infraestructura.
-- Probar cada opcode aceptado desde el productor HIR hasta la instrucción tipada emitida y su verificación estructural, con casos positivos/negativos y límites. Cuando ya haya un oráculo de ejecución, comparar también resultados y errores; las operaciones sin semántica ejecutable permanecen fuera del conjunto admitido. Documentar por separado los opcodes no implementados y los módulos experimentales.
+**Gate de salida de fase 2:** todo constructo de la fase 1 genera código nativo o falla con diagnóstico; ninguna ruta ejecuta el intérprete en modo AOT; los binarios corren en cada target real; resultados, errores y límites concuerdan con la VM; artefactos y CI quedan vinculados al SHA validado. Si se anuncia procesamiento masivo, añadir las pruebas de escala y recursos correspondientes en Linux, Windows y Android/Termux.
 
-**Gate de salida:** matriz opcode por opcode ejecutada y verde; trazabilidad semántica completa para cada operación admitida; ninguna ruta canónica usa los mapeos heredados con pérdida; guardias estáticas y pruebas E2E verdes en el SHA exacto. Un contrato escrito, una cuarentena o una matriz sin recorrido de ejecución no cierran la fase.
+## Límite de la promesa “sin otro componente”
 
-El contrato detallado de fase 3 se mantiene en `IR_OPCODE_ASSEMBLER_CONTRACT.md` dentro de la PR preparatoria de esa fase; sus listas de soporte son cerradas y no amplían el lenguaje por inferencia.
-
-## Fase 4 — bytecode portable
-
-Especificar magic/versión, anchos fijos, endianess y serialización determinista sin punteros nativos. El lector debe validar tamaños y límites antes de reservar memoria y rechazar truncamiento, IDs/tipos/firmas inválidos, CFG/saltos incorrectos, valores sin definición, recursos excesivos y opcodes desconocidos. Gate: round-trip, límites, entradas malformadas y fuzzing reproducible.
-
-## Fase 5 — VM y memoria por ejecución
-
-Ejecutar solo IR/bytecode verificados. Definir ownership de valores/recursos y limpieza en éxito, error y cancelación; propagar errores deterministas con categoría/span. Implementar límites y memoria por ejecución con fallos controlados; no reutilizar un GC sin roots seguros. Gate: batería diferencial completa y sanitizadores verdes.
-
-## Fase 6 — AOT nativo
-
-Generar ejecutables nativos sin invocar LLVM, GCC, Clang u otro compilador como backend del programa Milena, y sin fallback silencioso a interpretación. Implementar ABI, instrucciones, registros, frames, llamadas, ramas, constantes, relocaciones y runtime necesario enlazado estáticamente. Validar Windows/PE, Linux/ELF y Android/Termux/Bionic en targets reales acordados; Termux requiere dispositivo/runner Android real. Gate: ejecución y paridad de resultados, errores y límites contra la VM, artefactos ligados al SHA.
-
-## Fase 7 — JIT
-
-Implementar emisión/ejecución real por target, permisos de memoria y transición W^X, invalidación/liberación y fallback seguro. Gate: lifecycle, errores, límites y paridad semántica; una API de reserva o un stub no cuenta como JIT.
-
-## Fase 8 — integración industrial
-
-Integrar componentes en el producto canónico detrás de fronteras explícitas; optimizar con mediciones reproducibles; validar multiplataforma, recursos y releases. Publicar artefactos y evidencia vinculados al SHA revisado. Un gate de dispositivo requiere un dispositivo/runner real.
-
-## Evidencia y cambios de alcance
-
-- Una fase solo se declara completa cuando sus criterios y dependencias anteriores pasan en el SHA exacto revisado. CI en un SHA anterior no valida cambios posteriores.
-- Los informes separan código implementado, especificación, pruebas compiladas, pruebas ejecutadas y CI; no se extrapola soporte de un subconjunto a todo el lenguaje.
-- Cambiar el orden, alcance oficial, targets, semántica o gates requiere actualizar este contrato y su matriz de aceptación antes de tratarlo como nuevo requisito.
+El programa `.milena` no debe necesitar un compilador externo, LLVM ni una VM/intérprete separado para generar y ejecutar el binario AOT; el runtime Milena requerido puede ir incorporado estáticamente en el artefacto. Un ejecutable nativo sigue necesitando el cargador, el kernel y las interfaces del sistema operativo. El compilador actual está escrito en C: reconstruir el propio compilador desde fuentes seguirá necesitando un toolchain C mientras no se emprenda explícitamente un proyecto de autoalojamiento, que no forma parte de estas dos fases.

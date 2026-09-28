@@ -447,79 +447,6 @@ typedef struct {
     bool loaded;
 } MilenaDatasetRuntime;
 
-static bool dataset_runtime_file_exists(const char *path) {
-    FILE *file = path ? fopen(path, "rb") : NULL;
-    if (!file) return false;
-    fclose(file);
-    return true;
-}
-
-static bool dataset_runtime_absolute(const char *path) {
-    return path && (path[0] == '/' ||
-                    (isalpha((unsigned char)path[0]) && path[1] == ':' &&
-                     (path[2] == '\\' || path[2] == '/')));
-}
-
-static MilenaStatus dataset_runtime_path(const char *requested,
-                                         const char *script_filename,
-                                         bool output,
-                                         char *resolved, size_t resolved_size,
-                                         MilenaError *error) {
-    if (!requested || !resolved || resolved_size == 0) {
-        runtime_error(error, MILENA_ERR_ARGUMENT, "Ruta de dataset inválida");
-        return MILENA_ERR_ARGUMENT;
-    }
-    if (dataset_runtime_absolute(requested)) {
-        if (strlen(requested) + 1 > resolved_size) {
-            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
-            return MILENA_ERR_OVERFLOW;
-        }
-        strcpy(resolved, requested);
-        if (!output && !dataset_runtime_file_exists(resolved)) {
-            runtime_error(error, MILENA_ERR_IO, "No se pudo abrir el dataset");
-            return MILENA_ERR_IO;
-        }
-        return MILENA_OK;
-    }
-    if (!output && dataset_runtime_file_exists(requested)) {
-        if (strlen(requested) + 1 > resolved_size) {
-            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
-            return MILENA_ERR_OVERFLOW;
-        }
-        strcpy(resolved, requested);
-        return MILENA_OK;
-    }
-
-    char base[1024] = ".";
-    if (script_filename && script_filename[0]) {
-        size_t length = strlen(script_filename);
-        if (length >= sizeof(base)) {
-            runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta del script demasiado larga");
-            return MILENA_ERR_OVERFLOW;
-        }
-        memcpy(base, script_filename, length + 1);
-        char *slash = strrchr(base, '/');
-        char *backslash = strrchr(base, '\\');
-        if (backslash && (!slash || backslash > slash)) slash = backslash;
-        if (slash) {
-            if (slash == base) base[1] = '\0';
-            else *slash = '\0';
-        } else {
-            strcpy(base, ".");
-        }
-    }
-    int written = snprintf(resolved, resolved_size, "%s/%s", base, requested);
-    if (written < 0 || (size_t)written >= resolved_size) {
-        runtime_error(error, MILENA_ERR_OVERFLOW, "Ruta demasiado larga");
-        return MILENA_ERR_OVERFLOW;
-    }
-    if (!output && !dataset_runtime_file_exists(resolved)) {
-        runtime_error(error, MILENA_ERR_IO, "No se pudo abrir el dataset indicado");
-        return MILENA_ERR_IO;
-    }
-    return MILENA_OK;
-}
-
 static const ASTNode *dataset_runtime_find_child(const ASTNode *block,
                                                  ASTNodeType type) {
     if (!block) return NULL;
@@ -1730,7 +1657,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
         source_path = source_program.data_hir->source.path;
     }
     if (status == MILENA_OK)
-        status = dataset_runtime_path(source_path, script_filename, false,
+        status = dataset_resolve_runtime_path(source_path, script_filename, false,
                                       input, sizeof(input), error);
     if (status != MILENA_OK) {
         milena_canonical_program_release(&source_program);
@@ -1742,7 +1669,12 @@ MilenaStatus milena_run_dataset_program(const char *source,
     if (arrow_stream) {
         const MilenaArrowHIR *arrow_hir = source_program.arrow_hir;
         char output_path[2048];
+<<<<<<<
+        const ASTNode *export_node = arrow_plan.sink;
+        status = dataset_resolve_runtime_path(export_node->value, script_filename, true,
+=======
         status = dataset_runtime_path(arrow_hir->output_path, script_filename, true,
+>>>>>>>
                                       output_path, sizeof(output_path), error);
         if (status == MILENA_OK) {
             if (arrow_hir->projection_count == 0 ||
@@ -1819,7 +1751,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
         const ASTNode *export_node = stream_plan.sink;
         const char *requested_output = export_node && export_node->value
             ? export_node->value : "reporte_flujo.json";
-        status = dataset_runtime_path(requested_output, script_filename, true,
+        status = dataset_resolve_runtime_path(requested_output, script_filename, true,
                                       output_path, sizeof(output_path), error);
         if (status == MILENA_OK) {
             size_t chunk_rows = load->stream_chunk_rows > 0
@@ -1883,7 +1815,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
     const char *requested_output = export_node && export_node->value
         ? export_node->value : "reporte_dataset.json";
     if (status == MILENA_OK) {
-        status = dataset_runtime_path(requested_output, script_filename, true,
+        status = dataset_resolve_runtime_path(requested_output, script_filename, true,
                                       output_path, sizeof(output_path), error);
     }
     MilenaSchema schema;
@@ -1964,7 +1896,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
             }
             if (status == MILENA_OK && join_operation) {
                 char right_input[2048];
-                status = dataset_runtime_path(join_operation->as.join.right_source,
+                status = dataset_resolve_runtime_path(join_operation->as.join.right_source,
                     script_filename, false, right_input, sizeof(right_input), error);
                 if (status == MILENA_OK) {
                     status = dataset_load_csv(&right_dataset, right_input, ',', error);
@@ -1990,7 +1922,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
             }
             char hir_input[2048];
             if (status == MILENA_OK)
-                status = dataset_runtime_path(canonical_program.data_hir->source.path,
+                status = dataset_resolve_runtime_path(canonical_program.data_hir->source.path,
                                           script_filename, false, hir_input,
                                           sizeof(hir_input), error);
             if (status == MILENA_OK && strcmp(hir_input, input) != 0) {
@@ -2013,7 +1945,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
                 }
             }
             if (status == MILENA_OK && canonical_program.data_hir->export_path)
-                status = dataset_runtime_path(
+                status = dataset_resolve_runtime_path(
                     canonical_program.data_hir->export_path, script_filename, true,
                     output_path, sizeof(output_path), error);
             if (status == MILENA_OK) {
@@ -2331,7 +2263,7 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     status = MILENA_ERR_PARSE;
                 } else {
                     char right_path[2048];
-                    status = dataset_runtime_path(right_node->value, script_filename,
+                    status = dataset_resolve_runtime_path(right_node->value, script_filename,
                                                   false, right_path, sizeof(right_path), error);
                     Dataset right_dataset;
                     dataset_init(&right_dataset);
@@ -2498,3 +2430,4 @@ MilenaStatus milena_run_dataset_program(const char *source,
     parser_release(&parser);
     return status;
 }
+

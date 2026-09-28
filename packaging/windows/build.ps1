@@ -29,7 +29,8 @@ $SourceNames = @(
     'logger.c', 'metrics.c', 'function_parser.c', 'user_functions.c',
     'third_party/nanoarrow/src/nanoarrow.c', 'third_party/nanoarrow/src/nanoarrow_ipc.c',
     'third_party/nanoarrow/src/flatcc.c',
-    'sqlite_backend.c', 'third_party/sqlite/sqlite3.c'
+    'sqlite_backend.c', 'bytecode.c', 'bytecode_data.c', 'bytecode_compiler.c',
+    'bytecode_data_runtime.c', 'third_party/sqlite/sqlite3.c'
 )
 $Compiler = if ($env:CC) { $env:CC } else { 'clang' }
 $VersionHeader = Join-Path $ObjectDir 'milena-version.h'
@@ -76,3 +77,4 @@ Copy-Item (Join-Path $Root 'third_party/nanoarrow/LICENSE.txt') (Join-Path $Lice
 Copy-Item (Join-Path $Root 'third_party/nanoarrow/NOTICE.txt') (Join-Path $LicenseDir 'nanoarrow-NOTICE.txt') -Force
 Copy-Item (Join-Path $Root 'third_party/nanoarrow/FLATCC-LICENSE.txt') (Join-Path $LicenseDir 'flatcc-LICENSE.txt') -Force
 Copy-Item (Join-Path $Root 'third_party/sqlite/README.md') (Join-Path $LicenseDir 'sqlite-PROVENANCE-LICENSE.md') -Force
+

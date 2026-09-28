@@ -319,6 +319,48 @@ static MilenaHIRStatement *hir_build_statement(const ASTNode *node,
     return statement;
 }
 
+static bool hir_collect_function_return_type(
+    MilenaHIRStatement *const *statements, size_t statement_count,
+    bool *found, bool *consistent, MilenaHIRValueType *return_type) {
+    if (!found || !consistent || !return_type ||
+        (statement_count && !statements)) return false;
+    for (size_t i = 0; i < statement_count; ++i) {
+        const MilenaHIRStatement *statement = statements[i];
+        if (!statement) return false;
+        switch (statement->kind) {
+            case MILENA_HIR_STMT_RETURN:
+                if (statement->value_type != MILENA_HIR_NUMBER &&
+                    statement->value_type != MILENA_HIR_BOOLEAN) {
+                    *consistent = false;
+                    break;
+                }
+                if (!*found) {
+                    *return_type = statement->value_type;
+                    *found = true;
+                } else if (*return_type != statement->value_type) {
+                    *consistent = false;
+                }
+                break;
+            case MILENA_HIR_STMT_IF:
+                if (!hir_collect_function_return_type(
+                        statement->as.conditional.then_body,
+                        statement->as.conditional.then_count,
+                        found, consistent, return_type) ||
+                    !hir_collect_function_return_type(
+                        statement->as.conditional.else_body,
+                        statement->as.conditional.else_count,
+                        found, consistent, return_type)) return false;
+                break;
+            case MILENA_HIR_STMT_DECLARE:
+            case MILENA_HIR_STMT_ASSIGN:
+                break;
+            default:
+                return false;
+        }
+    }
+    return true;
+}
+
 static HIRBuildResult scalar_hir_build(const ASTNode *ast,
                                        MilenaScalarHIR **output) {
     *output = NULL;
@@ -392,6 +434,11 @@ static HIRBuildResult scalar_hir_build(const ASTNode *ast,
             function->parameters[j].name = milena_strdup(parameter->value);
             function->parameters[j].resolved_symbol_id =
                 parameter->resolved_symbol_id;
+            if (!hir_value_type(parameter->value_type,
+                                &function->parameters[j].value_type)) {
+                result = HIR_BUILD_UNSUPPORTED;
+                break;
+            }
             if (!function->parameters[j].name) {
                 result = HIR_BUILD_MEMORY;
                 break;
@@ -408,6 +455,17 @@ static HIRBuildResult scalar_hir_build(const ASTNode *ast,
         if (!hir_build_statement_array(
                 (const ASTNode *const *)body->children, body->child_count,
                 &function->body, &result)) break;
+        bool found_return = false;
+        bool consistent_returns = true;
+        MilenaHIRValueType return_type = MILENA_HIR_NUMBER;
+        if (!hir_collect_function_return_type(
+                function->body, function->body_count, &found_return,
+                &consistent_returns, &return_type)) {
+            result = HIR_BUILD_UNSUPPORTED;
+            break;
+        }
+        function->return_type_resolved = found_return && consistent_returns;
+        if (found_return) function->return_type = return_type;
         function_index++;
     }
     if (result != HIR_BUILD_OK) {
@@ -617,57 +675,6 @@ static bool hir_append_data_operation(MilenaDataHIR *hir,
     return true;
 }
 
-static bool hir_parse_product(const char *text, char left[128], char right[128]) {
-    char extra;
-    return text && sscanf(text, " %127s * %127s %c", left, right, &extra) == 2;
-}
-
-static char *hir_trim(char *text) {
-    if (!text) return NULL;
-    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n') text++;
-    size_t length = strlen(text);
-    while (length && (text[length - 1] == ' ' || text[length - 1] == '\t' ||
-                      text[length - 1] == '\r' || text[length - 1] == '\n'))
-        text[--length] = '\0';
-    return text;
-}
-
-static bool hir_parse_selection(const char *text, MilenaHIRDataOperation *op,
-                                const ASTNode *span_node) {
-    if (!text || !op) return false;
-    char *copy = milena_strdup(text);
-    if (!copy) return false;
-    size_t count = 1;
-    for (const char *p = text; *p; ++p) if (*p == ',') count++;
-    if (!count || count > 32 || count > SIZE_MAX / sizeof(*op->as.select.columns)) {
-        free(copy);
-        return false;
-    }
-    op->as.select.columns = (MilenaHIRColumnRef *)calloc(
-        count, sizeof(*op->as.select.columns));
-    if (!op->as.select.columns) { free(copy); return false; }
-    char *cursor = copy;
-    for (size_t i = 0; i < count; ++i) {
-        char *comma = strchr(cursor, ',');
-        if (comma) *comma = '\0';
-        char *name = hir_trim(cursor);
-        if (!name || !*name || strlen(name) >= 128) { free(copy); return false; }
-        for (size_t j = 0; j < i; ++j)
-            if (strcmp(op->as.select.columns[j].name, name) == 0) {
-                free(copy);
-                return false;
-            }
-        op->as.select.columns[i] = hir_unresolved_column(name, span_node);
-        if (!op->as.select.columns[i].name) { free(copy); return false; }
-        op->as.select.count++;
-        if (i + 1 < count && !comma) { free(copy); return false; }
-        if (i + 1 == count && comma) { free(copy); return false; }
-        cursor = comma ? comma + 1 : cursor + strlen(cursor);
-    }
-    free(copy);
-    return true;
-}
-
 static const char *hir_aggregate_legacy_name(ASTAggregateOperation operation) {
     switch (operation) {
         case AST_AGGREGATE_OPERATION_SUM: return "suma";
@@ -780,13 +787,15 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             return HIR_BUILD_UNSUPPORTED;
         }
         if (node->type == AST_LLAMADA_CARGAR) {
-            if (load || !node->value || (node->type_name &&
+            if (load || !node->data_source.present ||
+                !node->data_source.path || !node->data_source.path[0] ||
+                !node->has_source_span || (node->type_name &&
                 strcmp(node->type_name, "flujo") == 0)) {
                 data_hir_release(hir);
                 return HIR_BUILD_UNSUPPORTED;
             }
             load = node;
-            hir->source.path = milena_strdup(node->value);
+            hir->source.path = milena_strdup(node->data_source.path);
             hir->source.resolved_dataset_id = 1;
             hir->source.streaming = false;
             hir->source.chunk_rows = 0;
@@ -795,17 +804,19 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             continue;
         }
         if (node->type == AST_DECLARACION_VARIABLE) {
-            if (!node->value || !node->type_name || node->child_count != 0) {
+            if (!node->data_column.present || !node->data_column.name ||
+                !node->has_source_span || node->child_count != 0) {
                 data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
             }
-            MilenaHIRColumnRef declared = hir_unresolved_column(node->value, node);
-            if (strcmp(node->type_name, "numerica") == 0)
+            MilenaHIRColumnRef declared =
+                hir_unresolved_column(node->data_column.name, node);
+            if (node->data_column.type == AST_DATA_COLUMN_TYPE_NUMERIC)
                 declared.declared_type = MILENA_HIR_COLUMN_NUMERIC;
-            else if (strcmp(node->type_name, "binaria") == 0 ||
-                     strcmp(node->type_name, "categorica") == 0)
+            else if (node->data_column.type == AST_DATA_COLUMN_TYPE_BINARY ||
+                     node->data_column.type == AST_DATA_COLUMN_TYPE_CATEGORICAL)
                 declared.declared_type = MILENA_HIR_COLUMN_CATEGORICAL;
-            else if (strcmp(node->type_name, "texto") == 0 ||
-                     strcmp(node->type_name, "fecha") == 0)
+            else if (node->data_column.type == AST_DATA_COLUMN_TYPE_TEXT ||
+                     node->data_column.type == AST_DATA_COLUMN_TYPE_DATE)
                 declared.declared_type = MILENA_HIR_COLUMN_TEXT;
             else {
                 hir_column_ref_release(&declared);
@@ -830,18 +841,22 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
         if (node->type == AST_BLOQUE_TRANSFORMAR) {
             for (size_t j = 0; j < node->child_count; ++j) {
                 const ASTNode *command = node->children[j];
-                if (!command || command->type != AST_COMANDO_TOTAL || !command->value) {
-                    data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
-                }
-                char left[128] = {0}, right[128] = {0};
-                if (!hir_parse_product(command->value, left, right)) {
+                if (!command || command->type != AST_COMANDO_TOTAL ||
+                    !command->data_product.present ||
+                    !command->data_product.left_column ||
+                    !command->data_product.left_column[0] ||
+                    !command->data_product.right_column ||
+                    !command->data_product.right_column[0] ||
+                    !command->has_source_span || command->child_count != 0) {
                     data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
                 }
                 MilenaHIRDataOperation op = {0};
                 op.kind = MILENA_HIR_DATA_PRODUCT;
-                hir_source_span(&op.span, command->has_source_span ? command : node);
-                op.as.product.left = hir_unresolved_column(left, command);
-                op.as.product.right = hir_unresolved_column(right, command);
+                hir_source_span(&op.span, command);
+                op.as.product.left = hir_unresolved_column(
+                    command->data_product.left_column, command);
+                op.as.product.right = hir_unresolved_column(
+                    command->data_product.right_column, command);
                 op.as.product.output_name = milena_strdup("total");
                 if (!op.as.product.left.name || !op.as.product.right.name ||
                     !op.as.product.output_name || !hir_append_data_operation(hir, &op)) {
@@ -898,7 +913,9 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
                     aggregate_result = HIR_BUILD_UNSUPPORTED;
                     break;
                 }
-                if (child->type == AST_AGRUPACION_POR && child->value && !key_node) {
+                if (child->type == AST_AGRUPACION_POR &&
+                    child->group_key.present && child->group_key.name &&
+                    !key_node) {
                     key_node = child;
                 } else if (child->type == AST_RESUMEN_METRICA &&
                            op.as.group.aggregate_count < 16) {
@@ -920,7 +937,7 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
                 return aggregate_result == HIR_BUILD_OK ? HIR_BUILD_UNSUPPORTED :
                                                          aggregate_result;
             }
-            op.as.group.key = hir_unresolved_column(key_node->value, key_node);
+            op.as.group.key = hir_unresolved_column(key_node->group_key.name, key_node);
             if (!op.as.group.key.name) {
                 hir_aggregate_array_release(op.as.group.aggregates,
                                             op.as.group.aggregate_count);
@@ -981,8 +998,9 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             for (size_t j = 0; j < node->child_count; ++j) {
                 const ASTNode *command = node->children[j];
                 MilenaHIRDataOperation op = {0};
-                if (!command || !command->value ||
-                    strcmp(command->value, "eliminar") != 0) {
+                if (!command || !command->data_cleanup.present ||
+                    command->data_cleanup.action !=
+                        AST_DATA_CLEANUP_ACTION_REMOVE) {
                     data_hir_release(hir);
                     return HIR_BUILD_UNSUPPORTED;
                 }
@@ -1008,9 +1026,13 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             for (size_t j = 0; j < node->child_count; ++j) {
                 const ASTNode *child = node->children[j];
                 if (!child) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
-                if (child->type == AST_COMANDO_DERECHA && child->value && !right_node)
+                if (child->type == AST_COMANDO_DERECHA &&
+                    child->join_right.present && child->join_right.path &&
+                    !right_node)
                     right_node = child;
-                else if (child->type == AST_COMANDO_CLAVE && child->value && !key_node)
+                else if (child->type == AST_COMANDO_CLAVE &&
+                         child->join_key.present && child->join_key.name &&
+                         !key_node)
                     key_node = child;
                 else {
                     data_hir_release(hir);
@@ -1025,10 +1047,12 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             MilenaHIRDataOperation op = {0};
             op.kind = MILENA_HIR_DATA_JOIN;
             hir_source_span(&op.span, node);
-            op.as.join.right_source = milena_strdup(right_node->value);
+            op.as.join.right_source = milena_strdup(right_node->join_right.path);
             op.as.join.right_dataset_id = 2;
-            op.as.join.left_key = hir_unresolved_column(key_node->value, key_node);
-            op.as.join.right_key = hir_unresolved_column(key_node->value, key_node);
+            op.as.join.left_key = hir_unresolved_column(
+                key_node->join_key.name, key_node);
+            op.as.join.right_key = hir_unresolved_column(
+                key_node->join_key.name, key_node);
             op.as.join.join_type = MILENA_JOIN_INNER;
             op.as.join.policy.max_input_rows = SIZE_MAX;
             op.as.join.policy.max_output_rows = node->join_max_output_rows;
@@ -1049,20 +1073,34 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
         if (node->type == AST_BLOQUE_SELECCIONAR) {
             if (node->child_count != 1 || !node->children[0] ||
                 node->children[0]->type != AST_COMANDO_COLUMNAS ||
-                !node->children[0]->value) {
+                !node->children[0]->column_selection.present ||
+                !node->children[0]->column_selection.names ||
+                node->children[0]->column_selection.count == 0u ||
+                node->children[0]->column_selection.count > 32u) {
                 data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
             }
+            const ASTNode *selection = node->children[0];
             MilenaHIRDataOperation op = {0};
             op.kind = MILENA_HIR_DATA_SELECT_COLUMNS;
-            hir_source_span(&op.span, node->children[0]->has_source_span ?
-                            node->children[0] : node);
-            if (!hir_parse_selection(node->children[0]->value, &op,
-                                     node->children[0])) {
-                for (size_t j = 0; j < op.as.select.count; ++j)
-                    hir_column_ref_release(&op.as.select.columns[j]);
-                free(op.as.select.columns);
+            hir_source_span(&op.span, selection->has_source_span ? selection : node);
+            size_t selection_count = selection->column_selection.count;
+            op.as.select.columns = (MilenaHIRColumnRef *)calloc(
+                selection_count, sizeof(*op.as.select.columns));
+            if (!op.as.select.columns) {
                 data_hir_release(hir);
-                return HIR_BUILD_UNSUPPORTED;
+                return HIR_BUILD_MEMORY;
+            }
+            for (size_t j = 0; j < selection_count; ++j) {
+                op.as.select.columns[j] = hir_unresolved_column(
+                    selection->column_selection.names[j], selection);
+                if (!op.as.select.columns[j].name) {
+                    for (size_t k = 0; k < op.as.select.count; ++k)
+                        hir_column_ref_release(&op.as.select.columns[k]);
+                    free(op.as.select.columns);
+                    data_hir_release(hir);
+                    return HIR_BUILD_MEMORY;
+                }
+                op.as.select.count++;
             }
             if (!hir_append_data_operation(hir, &op)) {
                 for (size_t j = 0; j < op.as.select.count; ++j)
@@ -1074,9 +1112,13 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             terminal_operation_seen = true;
             continue;
         }
-        if (node->type == AST_BLOQUE_EXPORTAR && node->value) {
-            if (hir->export_path) { data_hir_release(hir); return HIR_BUILD_UNSUPPORTED; }
-            hir->export_path = milena_strdup(node->value);
+        if (node->type == AST_BLOQUE_EXPORTAR) {
+            if (!node->export_result.present ||
+                !node->export_result.destination ||
+                !node->has_source_span || hir->export_path) {
+                data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
+            }
+            hir->export_path = milena_strdup(node->export_result.destination);
             if (!hir->export_path) { data_hir_release(hir); return HIR_BUILD_MEMORY; }
             export_seen = true;
             continue;
@@ -1869,18 +1911,26 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
     switch (node->type) {
         case AST_COMANDO_CONDICION:
             return node->has_filter_predicate && node->filter_column != NULL;
+        case AST_COMANDO_NULOS:
+        case AST_COMANDO_DUPLICADOS:
+            return node->data_cleanup.present &&
+                   node->data_cleanup.action == AST_DATA_CLEANUP_ACTION_REMOVE;
+        case AST_LLAMADA_CARGAR:
+            return node->data_source.present && node->data_source.path != NULL;
+        case AST_DECLARACION_VARIABLE:
+            return node->data_column.present && node->data_column.name != NULL;
+        case AST_AGRUPACION_POR:
+            return node->group_key.present && node->group_key.name != NULL;
+        case AST_BLOQUE_EXPORTAR:
+            return node->export_result.present &&
+                   node->export_result.destination != NULL;
         case AST_PROGRAMA:
         case AST_BLOQUE_ANALISIS:
-        case AST_LLAMADA_CARGAR:
-        case AST_DECLARACION_VARIABLE:
         case AST_BLOQUE_TRANSFORMAR:
         case AST_COMANDO_TOTAL:
         case AST_BLOQUE_LIMPIAR:
-        case AST_COMANDO_NULOS:
-        case AST_COMANDO_DUPLICADOS:
         case AST_BLOQUE_FILTRAR:
         case AST_BLOQUE_AGRUPAR:
-        case AST_AGRUPACION_POR:
         case AST_RESUMEN_METRICA:
         case AST_BLOQUE_RESUMIR:
         case AST_BLOQUE_UNIR:
@@ -1888,7 +1938,6 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_COMANDO_CLAVE:
         case AST_BLOQUE_SELECCIONAR:
         case AST_COMANDO_COLUMNAS:
-        case AST_BLOQUE_EXPORTAR:
             return true;
         default:
             return false;
@@ -1983,3 +2032,4 @@ MilenaStatus milena_canonical_compiler_input(
     MilenaError *error) {
     return milena_canonical_hir_input(program, input, error);
 }
+
