@@ -48,7 +48,7 @@ static const char *const function_sources[] = {
 };
 static const char *const experimental_sources[] = {
     "arena.c", "assembler.c", "compiler.c", "forest.c", "gc.c", "instructions.c",
-    "ir.c", "module.c", "semantic.c", "temp_scope.c", "vm.c", "bytecode_native.c"
+    "ir.c", "module.c", "semantic.c", "temp_scope.c", "bytecode_native.c"
 };
 static const char *const reference_sources[] = {"vm.c"};
 
