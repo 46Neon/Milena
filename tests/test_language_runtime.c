@@ -429,6 +429,39 @@ static int run_arrays(void) {
     return 0;
 }
 
+
+static int run_transform_trailing_token_rejected(void) {
+    const char *csv = "test-language-runtime-transform-invalid.csv";
+    const char *output = "test-language-runtime-transform-invalid.json";
+    const char *csv_content = "a,b\n2,3\n";
+    CHECK(write_file(csv, csv_content),
+          "transformación: no se pudo crear CSV de regresión");
+    (void)remove(output);
+    const char *source =
+        ".analisis invalid_total {\n"
+        "  dataset cargar datos(\"test-language-runtime-transform-invalid.csv\")\n"
+        "  variable a numerica\n"
+        "  variable b numerica\n"
+        "  .transformar dataset { #total(\"a * b extra\") }\n"
+        "  .exportar { (\"test-language-runtime-transform-invalid.json\") }\n"
+        "}\n";
+    MilenaError error;
+    milena_error_clear(&error);
+    MilenaStatus status = milena_run_dataset_program(source,
+        "test-language-runtime-transform-invalid.milena", NULL, &error);
+    CHECK(status == MILENA_ERR_PARSE,
+          "transformación: se aceptó un token final en #total");
+    CHECK(strstr(error.message, "forma columna * columna") != NULL,
+          "transformación: diagnóstico de producto inválido ausente");
+    FILE *created = fopen(output, "rb");
+    CHECK(created == NULL,
+          "transformación: error publicó una salida parcial");
+    if (created) fclose(created);
+    (void)remove(csv);
+    (void)remove(output);
+    return 0;
+}
+
 static int run_dataset_pipeline(void) {
     const char *csv = "test-language-runtime-data.csv";
     const char *right = "test-language-runtime-right.csv";
@@ -1216,6 +1249,8 @@ int main(void) {
     CHECK(run_materialized_source_limits() == 0,
           "falló la fase de límites materializados");
     CHECK(run_dataset_pipeline() == 0, "falló la fase de datasets");
+    CHECK(run_transform_trailing_token_rejected() == 0,
+          "falló la validación cerrada de #total");
     CHECK(run_typed_data_hir_runtime() == 0, "falló la fase de HIR de datos");
     CHECK(run_inference_pipeline() == 0, "falló la fase de inferencia");
     CHECK(run_summary_pipeline() == 0, "falló la fase de resumen");

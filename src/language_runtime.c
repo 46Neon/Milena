@@ -2375,7 +2375,9 @@ MilenaStatus milena_run_dataset_program(const char *source,
                     if (!command || !command->value) continue;
                     if (command->type == AST_COMANDO_TOTAL) {
                         char left[128] = {0}, right[128] = {0};
-                        if (sscanf(command->value, " %127s * %127s", left, right) != 2) {
+                        char trailing = '\0';
+                        if (sscanf(command->value, " %127s * %127s %c",
+                                   left, right, &trailing) != 2) {
                             runtime_error(error, MILENA_ERR_PARSE,
                                           "La transformación total debe tener la forma columna * columna");
                             status = MILENA_ERR_PARSE;

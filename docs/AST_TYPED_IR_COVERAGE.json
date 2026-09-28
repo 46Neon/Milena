@@ -1,19 +1,20 @@
 {
   "schema_version": 1,
   "title": "AST-to-typed-IR coverage ledger",
-  "purpose": "Exhaustive instrumentation of the current AST inventory; not a language decision, lowering implementation, or Phase 1 completion claim.",
+  "purpose": "Exhaustive instrumentation of all ASTNodeType slots; four explicitly reserved enum-only variants are outside the source-language lowering denominator. This is not a Phase 1 completion claim.",
   "source_enum": "include/ast.h: ASTNodeType",
   "sentinel": "AST_NODE_TYPE_COUNT",
   "expected_real_variant_count": 72,
   "coverage_invariants": {
     "full": 0,
     "partial": 7,
-    "not_lowered": 65
+    "not_lowered": 61,
+    "not_applicable_reserved": 4
   },
   "classification_invariants": {
-    "documented_syntax_contract": 47,
-    "unresolved_public_contract": 21,
-    "unresolved_enum_only_legacy_status": 4
+    "documented_syntax_contract": 68,
+    "unresolved_public_contract": 0,
+    "reserved_internal_enum_not_language_construct": 4
   },
   "partial_variants": [
     "AST_ASIGNACION_VARIABLE",
@@ -25,11 +26,11 @@
     "AST_EXPRESION_OPERACION"
   ],
   "classification_sources": {
-    "documented_syntax_contract": "docs/COMPILADOR_IR_ESTADO.md, section “Contratos de sintaxis documentados”; this is evidence of syntax documentation/parser reachability, not end-to-end semantic or lowering coverage.",
-    "unresolved_public_contract": "docs/COMPILADOR_IR_ESTADO.md, section “Parser-reachable, pero con contrato público por cerrar”; preserve as unresolved, not supported or unsupported.",
-    "unresolved_enum_only_legacy_status": "docs/COMPILADOR_IR_ESTADO.md, section “Variantes declaradas sin constructor actual del parser”; preserve historical status as unconfirmed.",
+    "documented_syntax_contract": "docs/COMPILADOR_IR_ESTADO.md, section “Contratos de sintaxis documentados”; parser-reachable operations closed by per-variant normative contracts in docs/COMPILADOR_IR_CONTRATOS_AST.md. This is syntax contract evidence, not lowering/execution proof.",
+    "unresolved_public_contract": "docs/COMPILADOR_IR_ESTADO.md, section “Parser-reachable, con contrato público documentado”: count is zero after the 16 forms received individual normative contracts; any future unresolved form must be listed explicitly.",
     "semantic_status": "Unresolved per variant: current documentation does not provide a complete AST-variant-to-semantic-rule evidence matrix.",
-    "testing_status": "Unresolved per variant: current documentation does not provide end-to-end test evidence for every AST variant; existing slice tests do not establish complete coverage."
+    "testing_status": "Unresolved per variant: current documentation does not provide end-to-end test evidence for every AST variant; existing slice tests do not establish complete coverage.",
+    "reserved_internal_enum_not_language_construct": "docs/COMPILADOR_IR_ESTADO.md, section “Variantes enum-only reservadas fuera del lenguaje”: explicit Phase 1 policy keeps four enum slots but excludes them from source syntax and lowering coverage; future removal requires versioned compatibility review."
   },
   "variants": [
     {
@@ -40,7 +41,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -51,40 +52,40 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_DECLARACION_DATOS",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_DECLARACION_ESTADISTICA",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_ASIGNACION_DATASET",
-      "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_enum_only_legacy_status",
-      "parser_status": "no_current_parser_constructor_found_enum_only_legacy_unconfirmed",
-      "semantic_status": "unresolved_per_variant",
-      "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Variantes declaradas sin constructor actual del parser",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_status": "not_applicable_reserved",
+      "language_contract_status": "reserved_internal_enum_not_language_construct",
+      "parser_status": "enum_only_reserved_not_language_construct",
+      "semantic_status": "not_applicable_reserved",
+      "testing_status": "not_applicable_reserved",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Variantes enum-only reservadas fuera del lenguaje; no hay sintaxis fuente activa.",
+      "lowering_evidence": "No source-language lowering is applicable by explicit policy; the enum slot is retained for compatibility and excluded from the 68-construct language denominator.",
       "completion_evidence": null
     },
     {
@@ -95,40 +96,40 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_BLOQUE_LIMPIAR",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_BLOQUE_TRANSFORMAR",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_BLOQUE_FILTRAR",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -139,7 +140,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -150,18 +151,18 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_BLOQUE_VISUALIZAR",
-      "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_enum_only_legacy_status",
-      "parser_status": "no_current_parser_constructor_found_enum_only_legacy_unconfirmed",
-      "semantic_status": "unresolved_per_variant",
-      "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Variantes declaradas sin constructor actual del parser",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_status": "not_applicable_reserved",
+      "language_contract_status": "reserved_internal_enum_not_language_construct",
+      "parser_status": "enum_only_reserved_not_language_construct",
+      "semantic_status": "not_applicable_reserved",
+      "testing_status": "not_applicable_reserved",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Variantes enum-only reservadas fuera del lenguaje; no hay sintaxis fuente activa.",
+      "lowering_evidence": "No source-language lowering is applicable by explicit policy; the enum slot is retained for compatibility and excluded from the 68-construct language denominator.",
       "completion_evidence": null
     },
     {
@@ -172,7 +173,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -210,13 +211,13 @@
     },
     {
       "ast_variant": "AST_EXPRESION_FUNCION",
-      "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_enum_only_legacy_status",
-      "parser_status": "no_current_parser_constructor_found_enum_only_legacy_unconfirmed",
-      "semantic_status": "unresolved_per_variant",
-      "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Variantes declaradas sin constructor actual del parser",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_status": "not_applicable_reserved",
+      "language_contract_status": "reserved_internal_enum_not_language_construct",
+      "parser_status": "enum_only_reserved_not_language_construct",
+      "semantic_status": "not_applicable_reserved",
+      "testing_status": "not_applicable_reserved",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Variantes enum-only reservadas fuera del lenguaje; no hay sintaxis fuente activa.",
+      "lowering_evidence": "No source-language lowering is applicable by explicit policy; the enum slot is retained for compatibility and excluded from the 68-construct language denominator.",
       "completion_evidence": null
     },
     {
@@ -227,7 +228,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -238,7 +239,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -249,7 +250,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -282,7 +283,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -293,7 +294,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -321,67 +322,67 @@
     {
       "ast_variant": "AST_COMANDO_NULOS",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_DUPLICADOS",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_CONDICION",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_EXTRAER",
-      "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_enum_only_legacy_status",
-      "parser_status": "no_current_parser_constructor_found_enum_only_legacy_unconfirmed",
-      "semantic_status": "unresolved_per_variant",
-      "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Variantes declaradas sin constructor actual del parser",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_status": "not_applicable_reserved",
+      "language_contract_status": "reserved_internal_enum_not_language_construct",
+      "parser_status": "enum_only_reserved_not_language_construct",
+      "semantic_status": "not_applicable_reserved",
+      "testing_status": "not_applicable_reserved",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Variantes enum-only reservadas fuera del lenguaje; no hay sintaxis fuente activa.",
+      "lowering_evidence": "No source-language lowering is applicable by explicit policy; the enum slot is retained for compatibility and excluded from the 68-construct language denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_TOTAL",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_PERIODO",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -392,7 +393,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -403,7 +404,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -414,7 +415,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -425,128 +426,128 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_DECLARACION_ENTRADA",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_DECLARACION_SALIDA",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_BLOQUE_SELECCIONAR",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_COLUMNAS",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_BLOQUE_UNIR",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; docs/JOIN_RESOURCE_LIMITS.md — gramática .unir y límites; docs/TABLE_SCHEMA_AND_RELATIONAL_SEMANTICS.md — semántica de tabla.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_DERECHA",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; docs/JOIN_RESOURCE_LIMITS.md — #derecha y entrada derecha CSV.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_CLAVE",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; docs/JOIN_RESOURCE_LIMITS.md — #clave y join de una clave.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COMANDO_SST",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; docs/MILENA_ANALYSIS_LANGUAGE.md — superficie oficial SST y lista de comandos; docs/STREAMING_EXECUTION.md — ruta común de runtime.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_STREAM_FILTER",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; docs/MILENA_ANALYSIS_LANGUAGE.md — contrato acotado de filtros de flujo; docs/STREAMING_EXECUTION.md — sintaxis CSV canónica.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COLUMNAR_PROJECT",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
       "ast_variant": "AST_COLUMNAR_FIELD",
       "lowering_status": "not_lowered",
-      "language_contract_status": "unresolved_public_contract",
-      "parser_status": "parser_reachable_contract_unresolved",
+      "language_contract_status": "documented_syntax_contract",
+      "parser_status": "parser_reachable_documented_contract",
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
-      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Parser-reachable, pero con contrato público por cerrar",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados; detalle normativo por variante en docs/COMPILADOR_IR_CONTRATOS_AST.md",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -557,7 +558,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -568,7 +569,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -579,7 +580,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -590,7 +591,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -601,7 +602,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -612,7 +613,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -623,7 +624,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -634,7 +635,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -645,7 +646,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -656,7 +657,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -667,7 +668,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -678,7 +679,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -689,7 +690,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -700,7 +701,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -711,7 +712,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -722,7 +723,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -733,7 +734,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -744,7 +745,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -755,7 +756,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -766,7 +767,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -777,7 +778,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -788,7 +789,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -799,7 +800,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -810,7 +811,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     },
     {
@@ -821,7 +822,7 @@
       "semantic_status": "unresolved_per_variant",
       "testing_status": "unresolved_per_variant",
       "inventory_evidence": "docs/COMPILADOR_IR_ESTADO.md — Contratos de sintaxis documentados",
-      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; documented aggregate state is 0/72 full, 7 partial, 65 not fully lowered.",
+      "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     }
   ]

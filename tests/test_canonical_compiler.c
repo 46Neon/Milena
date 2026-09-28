@@ -23,7 +23,10 @@ static const ASTNode *find_aggregate_metric(const ASTNode *node,
 #define CHECK(condition, message) \
     do { \
         if (!(condition)) { \
-            fprintf(stderr, "FALLO: %s\n", (message)); \
+            const char *check_message = (message); \
+            fprintf(stderr, "FALLO (línea %d; condición: %s): %s\n", \
+                    __LINE__, #condition, \
+                    check_message ? check_message : "(sin diagnóstico)"); \
             return 1; \
         } \
     } while (0)
@@ -1162,31 +1165,27 @@ int main(void) {
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
         ".limpiar dataset { #nulos(\"rellenar\") } }";
     CHECK(milena_canonical_program_parse(&program, unsupported_cleaning_action,
-                                         &error) == MILENA_OK, error.message);
-    CHECK(program.data_hir == NULL &&
-          milena_canonical_compiler_input(&program, &data_input, &error) ==
-              MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&
-          data_input.data_hir == NULL,
-          "una acción de limpieza no implementada debe fallar cerrado y sin vista parcial");
+                                         &error) == MILENA_ERR_PARSE,
+          "una acción de limpieza distinta de eliminar debe rechazarse en parser");
+    CHECK(program.ast == NULL && program.data_hir == NULL && error.line > 0 &&
+          error.column > 0 && strstr(error.message, "solo admite eliminar") != NULL,
+          "la acción de limpieza inválida debe fallar cerrado sin AST/HIR parcial");
     milena_canonical_program_release(&program);
 
 
-    /* Malformed filter text remains AST-only and cannot be admitted to HIR. */
+    /* Malformed filter text is rejected during parsing rather than leaving an
+       untyped AST node for a later HIR failure. */
     milena_canonical_program_init(&program);
     const char *malformed_filter_source =
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
         ".filtrar { #condicion(\"total =~ 10\") } }";
     CHECK(milena_canonical_program_parse(&program, malformed_filter_source,
-                                         &error) == MILENA_OK, error.message);
-    CHECK(program.data_hir == NULL,
-          "un predicado sin forma tipada no debe producir HIR de datos");
-    MilenaCanonicalCompilerInput rejected_input = {0};
-    CHECK(milena_canonical_compiler_input(&program, &rejected_input, &error) ==
-              MILENA_ERR_UNSUPPORTED &&
-          rejected_input.ast == NULL && rejected_input.data_hir == NULL &&
+                                         &error) == MILENA_ERR_PARSE,
+          "un predicado sin forma tipada debe rechazarse en parser");
+    CHECK(program.ast == NULL && program.data_hir == NULL &&
           error.line > 0 && error.column > 0 &&
-          strstr(error.message, "COMANDO_CONDICION") != NULL,
-          "el HIR debe fallar cerrado con nodo y ubicación, sin vista parcial");
+          strstr(error.message, "Predicado numérico inválido") != NULL,
+          "el predicado inválido debe fallar cerrado sin AST/HIR parcial");
     milena_canonical_program_release(&program);
 
     /* A source module with a direct scalar call lowers only on the canonical
@@ -1628,6 +1627,134 @@ int main(void) {
     free(oracle_source);
     free(scalar_bytecode);
     milena_canonical_program_release(&program);
+
+    /* Differential runtime failure: both reference interpreter and verified VM
+       reject division by zero; the VM keeps the source expression span. */
+    /* A second function selects module lowering; bytecode is encoded from the
+       typed module, while a single function currently lowers to a body only. */
+    const char *runtime_error_source =
+        "funcion dividir(x) { retornar 1 / x; } "
+        "funcion delegar(x) { retornar dividir(x); }";
+    MilenaCanonicalProgram runtime_error_program;
+    milena_canonical_program_init(&runtime_error_program);
+    CHECK(milena_canonical_program_parse(&runtime_error_program,
+          runtime_error_source, &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&runtime_error_program,
+          &error) == MILENA_OK && runtime_error_program.typed_module,
+          error.message);
+    uint8_t *runtime_error_bytecode = NULL;
+    size_t runtime_error_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(runtime_error_program.typed_module,
+          &runtime_error_bytecode, &runtime_error_bytecode_size,
+          error.message, sizeof(error.message)), error.message);
+    const uint32_t runtime_error_entry =
+        runtime_error_program.typed_module->functions[0].symbol_id;
+    MilenaVMValue zero_argument = {MILENA_IR_TYPE_F64, {.f64 = 0.0}};
+    VirtualMachine runtime_error_vm = {0};
+    CHECK(vm_init_bytecode(&runtime_error_vm, runtime_error_bytecode,
+          runtime_error_bytecode_size, runtime_error_entry, &zero_argument, 1u,
+          NULL), vm_bytecode_error(&runtime_error_vm) ?
+              vm_bytecode_error(&runtime_error_vm) :
+              "no se pudo inicializar la VM de error diferencial");
+    CHECK(!vm_run(&runtime_error_vm),
+          "la VM debe rechazar división por cero en el bytecode verificado");
+    const char *division_expression = strstr(runtime_error_source, "1 / x");
+    CHECK(division_expression != NULL && runtime_error_vm.has_error &&
+          runtime_error_vm.error.code == MILENA_ERR_INTERNAL &&
+          runtime_error_vm.error.category == MILENA_ERROR_EJECUCION &&
+          runtime_error_vm.error.line == 1u &&
+          runtime_error_vm.error.column ==
+              (size_t)(division_expression - runtime_error_source) + 1u,
+          "el error de VM debe conservar categoría y span de la expresión fallida");
+    const char *runtime_error_message = vm_bytecode_error(&runtime_error_vm);
+    CHECK(runtime_error_message != NULL &&
+          strstr(runtime_error_message, "division by zero") != NULL,
+          "el diagnóstico textual anterior de VM debe conservarse");
+    MilenaVMValue failed_result = {0};
+    CHECK(!vm_get_bytecode_result(&runtime_error_vm, &failed_result),
+          "un fallo de VM no debe publicar resultado parcial");
+    vm_destroy(&runtime_error_vm);
+    free(runtime_error_bytecode);
+    milena_canonical_program_release(&runtime_error_program);
+
+    const char *reference_error_source =
+        "funcion dividir(x) { retornar 1 / x; } "
+        "variable salida_error = dividir(0);";
+    MilenaCanonicalProgram reference_error_program;
+    milena_canonical_program_init(&reference_error_program);
+    CHECK(milena_canonical_program_parse(&reference_error_program,
+          reference_error_source, &error) == MILENA_OK, error.message);
+    Interpreter reference_error_interpreter = {0};
+    CHECK(interpreter_init(&reference_error_interpreter,
+          reference_error_program.ast),
+          "no se pudo inicializar el intérprete de errores de referencia");
+    CHECK(!interpreter_run(&reference_error_interpreter),
+          "el intérprete de referencia también debe rechazar división por cero");
+    interpreter_destroy(&reference_error_interpreter);
+    milena_canonical_program_release(&reference_error_program);
+
+    /* Differential runtime failure for finite inputs whose multiplication
+       overflows: both runtimes reject it, and the VM preserves the span. */
+    const char *overflow_source =
+        "funcion multiplicar(x) { retornar x * 2; } "
+        "funcion delegar(x) { retornar multiplicar(x); }";
+    MilenaCanonicalProgram overflow_program;
+    milena_canonical_program_init(&overflow_program);
+    CHECK(milena_canonical_program_parse(&overflow_program, overflow_source,
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&overflow_program,
+          &error) == MILENA_OK && overflow_program.typed_module,
+          error.message);
+    uint8_t *overflow_bytecode = NULL;
+    size_t overflow_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(overflow_program.typed_module,
+          &overflow_bytecode, &overflow_bytecode_size, error.message,
+          sizeof(error.message)), error.message);
+    const uint32_t overflow_entry =
+        overflow_program.typed_module->functions[0].symbol_id;
+    MilenaVMValue maximum_argument = {
+        MILENA_IR_TYPE_F64, {.f64 = 1.7976931348623157e308}
+    };
+    VirtualMachine overflow_vm = {0};
+    CHECK(vm_init_bytecode(&overflow_vm, overflow_bytecode,
+          overflow_bytecode_size, overflow_entry, &maximum_argument, 1u, NULL),
+          vm_bytecode_error(&overflow_vm) ? vm_bytecode_error(&overflow_vm) :
+          "no se pudo inicializar la VM de overflow diferencial");
+    CHECK(!vm_run(&overflow_vm),
+          "la VM debe rechazar resultados numéricos no finitos");
+    const char *overflow_expression = strstr(overflow_source, "x * 2");
+    CHECK(overflow_expression != NULL && overflow_vm.has_error &&
+          overflow_vm.error.code == MILENA_ERR_INTERNAL &&
+          overflow_vm.error.category == MILENA_ERROR_EJECUCION &&
+          overflow_vm.error.line == 1u &&
+          overflow_vm.error.column ==
+              (size_t)(overflow_expression - overflow_source) + 1u,
+          "el error de overflow debe conservar categoría y span de origen");
+    const char *overflow_message = vm_bytecode_error(&overflow_vm);
+    CHECK(overflow_message != NULL && strstr(overflow_message, "not finite") != NULL,
+          "la VM debe diagnosticar el resultado numérico no finito");
+    MilenaVMValue overflow_result = {0};
+    CHECK(!vm_get_bytecode_result(&overflow_vm, &overflow_result),
+          "el overflow no debe publicar un resultado parcial");
+    vm_destroy(&overflow_vm);
+    free(overflow_bytecode);
+    milena_canonical_program_release(&overflow_program);
+
+    const char *reference_overflow_source =
+        "funcion multiplicar(x) { retornar x * 2; } "
+        "variable desbordamiento = multiplicar(1.7976931348623157e308);";
+    MilenaCanonicalProgram reference_overflow_program;
+    milena_canonical_program_init(&reference_overflow_program);
+    CHECK(milena_canonical_program_parse(&reference_overflow_program,
+          reference_overflow_source, &error) == MILENA_OK, error.message);
+    Interpreter reference_overflow_interpreter = {0};
+    CHECK(interpreter_init(&reference_overflow_interpreter,
+          reference_overflow_program.ast),
+          "no se pudo iniciar el intérprete de overflow diferencial");
+    CHECK(!interpreter_run(&reference_overflow_interpreter),
+          "el intérprete de referencia también debe rechazar overflow no finito");
+    interpreter_destroy(&reference_overflow_interpreter);
+    milena_canonical_program_release(&reference_overflow_program);
 
     /* Arrow's typed contract now owns source, projection, filter, and limits
      * independently of AST storage; strict compiler input still waits for IR

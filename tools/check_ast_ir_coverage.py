@@ -12,10 +12,43 @@ from typing import Any
 
 EXPECTED_VARIANTS = 72
 EXPECTED_CONTRACT_COUNTS = {
-    "documented_syntax_contract": 47,
-    "unresolved_public_contract": 21,
-    "unresolved_enum_only_legacy_status": 4,
+    "documented_syntax_contract": 68,
+    "unresolved_public_contract": 0,
+    "reserved_internal_enum_not_language_construct": 4,
 }
+RESERVED_ENUM_VARIANTS = {
+    "AST_ASIGNACION_DATASET",
+    "AST_BLOQUE_VISUALIZAR",
+    "AST_EXPRESION_FUNCION",
+    "AST_COMANDO_EXTRAER",
+}
+CONTRACT_DOC_VARIANTS = {
+    "AST_BLOQUE_LIMPIAR",
+    "AST_BLOQUE_TRANSFORMAR",
+    "AST_BLOQUE_FILTRAR",
+    "AST_COMANDO_NULOS",
+    "AST_COMANDO_DUPLICADOS",
+    "AST_COMANDO_CONDICION",
+    "AST_COMANDO_TOTAL",
+    "AST_COMANDO_PERIODO",
+    "AST_DECLARACION_ENTRADA",
+    "AST_DECLARACION_SALIDA",
+    "AST_BLOQUE_SELECCIONAR",
+    "AST_COMANDO_COLUMNAS",
+    "AST_COLUMNAR_PROJECT",
+    "AST_COLUMNAR_FIELD",
+    "AST_DECLARACION_DATOS",
+    "AST_DECLARACION_ESTADISTICA",
+}
+CONTRACT_DOC_FIELDS = (
+    "- **Sintaxis:**",
+    "- **Forma AST:**",
+    "- **Semántica:**",
+    "- **Restricciones y errores:**",
+    "- **Recursos:**",
+    "- **Alias/compatibilidad:**",
+    "- **Estado:**",
+)
 EXPECTED_PARTIAL = {
     "AST_DECLARACION_VARIABLE",
     "AST_ASIGNACION_VARIABLE",
@@ -26,21 +59,22 @@ EXPECTED_PARTIAL = {
     "AST_EXPRESION_OPERACION",
 }
 SENTINEL = "AST_NODE_TYPE_COUNT"
-LOWERING_STATUSES = {"full", "partial", "not_lowered"}
+LOWERING_STATUSES = {"full", "partial", "not_lowered", "not_applicable_reserved"}
 LANGUAGE_CONTRACT_STATUSES = {
     "documented_syntax_contract",
     "unresolved_public_contract",
-    "unresolved_enum_only_legacy_status",
+    "reserved_internal_enum_not_language_construct",
 }
 PARSER_STATUSES = {
     "parser_reachable_documented_contract",
     "parser_reachable_contract_unresolved",
-    "no_current_parser_constructor_found_enum_only_legacy_unconfirmed",
+    "enum_only_reserved_not_language_construct",
 }
 PER_VARIANT_EVIDENCE_STATUSES = {
     "unresolved_per_variant",
     "partially_verified",
     "verified",
+    "not_applicable_reserved",
 }
 FULL_EVIDENCE_STAGES = {
     "language_contract",
@@ -105,8 +139,35 @@ def require(condition: bool, message: str) -> None:
         raise LedgerError(message)
 
 
-def check_ledger(header_path: Path, ledger_path: Path) -> tuple[int, int, int, int]:
+def check_contract_document(contract_doc_path: Path) -> None:
+    try:
+        text = contract_doc_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise LedgerError(f"cannot read normative AST contract document {contract_doc_path}: {exc}") from exc
+    sections = list(re.finditer(r"^### `(AST_[A-Z0-9_]+)`\s*$", text, flags=re.M))
+    names = [match.group(1) for match in sections]
+    relevant = [name for name in names if name in CONTRACT_DOC_VARIANTS]
+    duplicates = sorted(name for name in set(relevant) if relevant.count(name) > 1)
+    require(not duplicates,
+            f"normative AST contract document has duplicate variant section(s): {', '.join(duplicates)}")
+    missing = sorted(CONTRACT_DOC_VARIANTS - set(relevant))
+    require(not missing,
+            f"normative AST contract document is missing variant contract(s): {', '.join(missing)}")
+    for index, match in enumerate(sections):
+        name = match.group(1)
+        if name not in CONTRACT_DOC_VARIANTS:
+            continue
+        end = sections[index + 1].start() if index + 1 < len(sections) else len(text)
+        section = text[match.start():end]
+        missing_fields = [field for field in CONTRACT_DOC_FIELDS if field not in section]
+        require(not missing_fields,
+                f"{name}: normative contract is missing field(s): {', '.join(missing_fields)}")
+
+
+def check_ledger(header_path: Path, ledger_path: Path,
+                 contract_doc_path: Path) -> tuple[int, int, int, int, int]:
     header_variants = ast_enum_variants(header_path)
+    check_contract_document(contract_doc_path)
     try:
         ledger = json.loads(
             ledger_path.read_text(encoding="utf-8"),
@@ -155,11 +216,16 @@ def check_ledger(header_path: Path, ledger_path: Path) -> tuple[int, int, int, i
         expected_parser = {
             "documented_syntax_contract": "parser_reachable_documented_contract",
             "unresolved_public_contract": "parser_reachable_contract_unresolved",
-            "unresolved_enum_only_legacy_status": (
-                "no_current_parser_constructor_found_enum_only_legacy_unconfirmed"
+            "reserved_internal_enum_not_language_construct": (
+                "enum_only_reserved_not_language_construct"
             ),
         }[language]
         require(parser == expected_parser, f"{name}: parser status conflicts with contract classification")
+        if name in CONTRACT_DOC_VARIANTS:
+            require(language == "documented_syntax_contract",
+                    f"{name}: normative AST contract must be classified as documented")
+            require("docs/COMPILADOR_IR_CONTRATOS_AST.md" in record.get("inventory_evidence", ""),
+                    f"{name}: inventory_evidence must cite docs/COMPILADOR_IR_CONTRATOS_AST.md")
         semantic_status = record.get("semantic_status")
         testing_status = record.get("testing_status")
         require(
@@ -170,6 +236,21 @@ def check_ledger(header_path: Path, ledger_path: Path) -> tuple[int, int, int, i
             isinstance(testing_status, str) and testing_status in PER_VARIANT_EVIDENCE_STATUSES,
             f"{name}: invalid testing_status {testing_status!r}",
         )
+        if name in RESERVED_ENUM_VARIANTS:
+            require(
+                lowering == "not_applicable_reserved"
+                and language == "reserved_internal_enum_not_language_construct"
+                and parser == "enum_only_reserved_not_language_construct"
+                and semantic_status == "not_applicable_reserved"
+                and testing_status == "not_applicable_reserved",
+                f"{name}: reserved enum variants must stay outside language lowering/evidence scope",
+            )
+        else:
+            require(
+                lowering != "not_applicable_reserved"
+                and language != "reserved_internal_enum_not_language_construct",
+                f"{name}: only the four declared enum-only variants may be reserved",
+            )
         if lowering == "full":
             require(
                 language == "documented_syntax_contract"
@@ -225,7 +306,12 @@ def check_ledger(header_path: Path, ledger_path: Path) -> tuple[int, int, int, i
         and set(listed_partial) == actual_partial,
         "partial_variants must list each partial AST variant exactly once",
     )
-    require(counts["not_lowered"] == EXPECTED_VARIANTS - len(EXPECTED_PARTIAL), "not_lowered count invariant failed")
+    reserved_count = len(RESERVED_ENUM_VARIANTS)
+    active_source_count = EXPECTED_VARIANTS - reserved_count
+    require(counts["not_applicable_reserved"] == reserved_count,
+            "reserved enum count invariant failed")
+    require(counts["not_lowered"] == active_source_count - len(EXPECTED_PARTIAL),
+            "not_lowered count invariant failed")
     require(
         ledger.get("coverage_invariants") == counts,
         f"coverage_invariants must equal observed counts {counts}",
@@ -240,10 +326,11 @@ def check_ledger(header_path: Path, ledger_path: Path) -> tuple[int, int, int, i
     )
     sources = ledger.get("classification_sources")
     require(isinstance(sources, dict), "ledger classification_sources must be an object")
-    for key in ("documented_syntax_contract", "unresolved_public_contract", "unresolved_enum_only_legacy_status", "semantic_status", "testing_status"):
+    for key in ("documented_syntax_contract", "unresolved_public_contract", "reserved_internal_enum_not_language_construct", "semantic_status", "testing_status"):
         require(isinstance(sources.get(key), str) and sources[key].strip(), f"missing classification source: {key}")
 
-    return len(records), counts["full"], counts["partial"], counts["not_lowered"]
+    return (len(records), counts["full"], counts["partial"],
+            counts["not_lowered"], counts["not_applicable_reserved"])
 
 
 def main() -> int:
@@ -251,16 +338,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ast-header", type=Path, default=root / "include/ast.h")
     parser.add_argument("--ledger", type=Path, default=root / "docs/AST_TYPED_IR_COVERAGE.json")
+    parser.add_argument("--contract-doc", type=Path,
+                        default=root / "docs/COMPILADOR_IR_CONTRATOS_AST.md")
     args = parser.parse_args()
     try:
-        total, full, partial, not_lowered = check_ledger(args.ast_header, args.ledger)
+        total, full, partial, not_lowered, reserved = check_ledger(
+            args.ast_header, args.ledger, args.contract_doc)
     except (LedgerError, OSError) as exc:
         print(f"AST→typed-IR coverage check failed: {exc}", file=sys.stderr)
         return 1
     print(
         "AST→typed-IR coverage ledger: "
-        f"{total} real variants; {full}/{total} full, {partial} partial, "
-        f"{not_lowered} not lowered; {SENTINEL} excluded."
+        f"{total} enum variants; {full}/{total - reserved} source constructs full, "
+        f"{partial} partial, {not_lowered} not lowered, {reserved} reserved; "
+        f"{SENTINEL} excluded."
     )
     return 0
 
