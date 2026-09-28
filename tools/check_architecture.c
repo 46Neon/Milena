@@ -811,7 +811,7 @@ static void check_architecture(void)
         "src/compiler.c", "src/vm.c"
     };
     static const char *const cli_commands[] = {
-        "analyze", "profile", "inspect", "run_script", "build"
+        "analyze", "profile", "inspect", "run_script"
     };
     static const char *const script_tokens[] = {
         "script_pipeline_from_ast", "script_pipeline_for_source", "SCRIPT_PIPELINE_PARSE_ERROR",
