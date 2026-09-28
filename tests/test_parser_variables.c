@@ -2,6 +2,47 @@
 #include <assert.h>
 #include <string.h>
 
+static void expect_source_span(const char *source, const ASTNode *node,
+                               const char *spelling) {
+    assert(source != NULL && node != NULL && spelling != NULL);
+    const char *start = strstr(source, spelling);
+    assert(start != NULL && node->has_source_span);
+    size_t start_offset = (size_t)(start - source);
+    size_t end_offset = start_offset + strlen(spelling);
+    size_t line = 1, column = 1;
+    for (size_t i = 0; i < start_offset; ++i) {
+        if (source[i] == '\n') { ++line; column = 1; }
+        else ++column;
+    }
+    assert(node->start_offset == start_offset && node->end_offset == end_offset);
+    assert(node->line == line && node->column == column);
+    for (size_t i = start_offset; i < end_offset; ++i) {
+        if (source[i] == '\n') { ++line; column = 1; }
+        else ++column;
+    }
+    assert(node->end_line == line && node->end_column == column);
+}
+
+static void expect_source_subspan(const char *source, const ASTNode *node,
+                                  const char *start_marker, size_t width) {
+    assert(source != NULL && node != NULL && start_marker != NULL);
+    const char *start = strstr(source, start_marker);
+    assert(start != NULL && node->has_source_span);
+    size_t start_offset = (size_t)(start - source);
+    size_t line = 1, column = 1;
+    for (size_t i = 0; i < start_offset; ++i) {
+        if (source[i] == '\n') { ++line; column = 1; }
+        else ++column;
+    }
+    assert(node->start_offset == start_offset && node->end_offset == start_offset + width);
+    assert(node->line == line && node->column == column);
+    for (size_t i = start_offset; i < start_offset + width; ++i) {
+        if (source[i] == '\n') { ++line; column = 1; }
+        else ++column;
+    }
+    assert(node->end_line == line && node->end_column == column);
+}
+
 static void expect_parse_error_at(const char *source, const char *needle,
                                   const char *diagnostic) {
     Lexer lexer;
@@ -106,19 +147,33 @@ int main(void) {
     assert(program->child_count == 2);
     ASTNode *function = program->children[0];
     assert(function->type == AST_DECLARACION_FUNCION);
+    expect_source_span(function_source, function,
+                       "función doble(n) { retornar n * 2; }");
     assert(strcmp(function->value, "doble") == 0);
     assert(function->child_count == 2);
     assert(function->children[0]->type == AST_BLOQUE_FUNCION);
     assert(function->children[0]->child_count == 1);
     assert(strcmp(function->children[0]->children[0]->value, "n") == 0);
+    expect_source_subspan(function_source, function->children[0]->children[0],
+                          "n) {", 1);
     ASTNode *body = function->children[1];
     assert(body->type == AST_BLOQUE_FUNCION);
     assert(body->child_count == 1);
     assert(body->children[0]->type == AST_COMANDO_RETORNAR);
+    expect_source_span(function_source, body->children[0], "retornar n * 2;");
     assert(body->children[0]->children[0]->type == AST_EXPRESION_OPERACION);
+    expect_source_span(function_source, body->children[0]->children[0], "n * 2");
+    expect_source_subspan(function_source,
+        body->children[0]->children[0]->children[0], "n * 2", 1);
+    expect_source_span(function_source,
+        body->children[0]->children[0]->children[1], "2");
     ASTNode *output = program->children[1];
     assert(output->type == AST_DECLARACION_VARIABLE);
+    expect_source_span(function_source, output, "variable salida = doble(21);");
     assert(output->children[0]->type == AST_EXPRESION_LLAMADA);
+    expect_source_span(function_source, output->children[0], "doble(21)");
+    expect_source_span(function_source,
+        output->children[0]->children[0], "21");
     assert(strcmp(output->children[0]->value, "doble") == 0);
     assert(output->children[0]->child_count == 1);
     ast_destroy(program);

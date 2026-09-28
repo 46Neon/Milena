@@ -62,6 +62,38 @@ int main(void) {
     assert(token.line == 2 && token.column == 17);
     assert(token.end_line == token.line && token.end_column == token.column);
 
+    /* Supported escapes decode into the lexeme without changing the token's
+       half-open source byte span (the escaped source spelling is longer). */
+    const char *escaped_source = "\"a\\n\\t\\r\\\\\\\"b\"";
+    lexer_init(&lexer, escaped_source);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_CADENA);
+    assert(strcmp(token.lexeme, "a\n\t\r\\\"b") == 0);
+    assert(token.start_offset == 0 && token.end_offset == strlen(escaped_source));
+    assert(token.line == 1 && token.column == 1);
+    assert(token.end_line == 1 && token.end_column == strlen(escaped_source) + 1);
+    assert(lexer.error.code == MILENA_OK);
+
+    /* A signed literal is two tokens; only an exponent may contain a sign. */
+    lexer_init(&lexer, "-2 1e+2");
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_MENOS && token.start_offset == 0 && token.end_offset == 1);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_NUMERO && token.number_value == 2.0 &&
+           token.start_offset == 1 && token.end_offset == 2);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_NUMERO && token.number_value == 100.0 &&
+           token.start_offset == 3 && token.end_offset == 7);
+
+    char long_number[300];
+    memset(long_number, '9', sizeof(long_number) - 1);
+    long_number[sizeof(long_number) - 1] = '\0';
+    lexer_init(&lexer, long_number);
+    token = lexer_next_token(&lexer);
+    assert(token.type == TOKEN_ERROR);
+    assert(token.start_offset == 0 && token.end_offset == sizeof(long_number) - 1);
+    assert(strstr(lexer.error.message, "255") != NULL);
+
     lexer_init(&lexer, "x-2");
     assert(lexer_next_token(&lexer).type == TOKEN_IDENTIFICADOR);
     token = lexer_next_token(&lexer);
