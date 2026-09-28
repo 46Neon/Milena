@@ -694,7 +694,7 @@ fail:
     return false;
 }
 
-bool milena_bytecode_verify(const uint8_t *bytes, size_t size,
+bool milena_typed_bytecode_verify(const uint8_t *bytes, size_t size,
                             char *error, size_t error_capacity) {
     MilenaIRModule *module = NULL;
     if (!milena_bytecode_decode_module(bytes, size, &module, error, error_capacity))
@@ -702,3 +702,4 @@ bool milena_bytecode_verify(const uint8_t *bytes, size_t size,
     milena_ir_module_destroy(module);
     return true;
 }
+

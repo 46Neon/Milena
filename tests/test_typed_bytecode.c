@@ -198,7 +198,7 @@ static void test_roundtrip_module_with_direct_call(void) {
     assert(encoded != NULL && encoded_size > 16u);
     assert(encoded[4] == MILENA_BYTECODE_VERSION_MAJOR && encoded[5] == 0u &&
            encoded[6] == MILENA_BYTECODE_VERSION_MINOR && encoded[7] == 0u);
-    assert(milena_bytecode_verify(encoded, encoded_size, error, sizeof(error)));
+    assert(milena_typed_bytecode_verify(encoded, encoded_size, error, sizeof(error)));
     assert(milena_bytecode_decode_module(encoded, encoded_size, &decoded,
                                          error, sizeof(error)));
     assert(decoded != NULL && decoded->function_count == 2u);
@@ -283,7 +283,7 @@ static void test_v1_0_compatibility_defaults_empty_spans(void) {
 static void expect_invalid(const uint8_t *bytes, size_t size) {
     char error[256] = {0};
     MilenaIRModule *module = NULL;
-    assert(!milena_bytecode_verify(bytes, size, error, sizeof(error)));
+    assert(!milena_typed_bytecode_verify(bytes, size, error, sizeof(error)));
     assert(error[0] != '\0');
     assert(!milena_bytecode_decode_module(bytes, size, &module,
                                           error, sizeof(error)));
@@ -446,7 +446,7 @@ static void test_rejects_bad_headers_and_lengths(void) {
     set_u32_le(mutated, 58u, 100u); /* call argument count */
     set_u32_le(mutated, 62u, 8u);   /* instruction count */
     char resource_error[256] = {0};
-    assert(!milena_bytecode_verify(mutated, size, resource_error,
+    assert(!milena_typed_bytecode_verify(mutated, size, resource_error,
                                    sizeof(resource_error)));
     assert(strstr(resource_error,
                   "arrays exceed remaining bytecode length") != NULL);
@@ -769,3 +769,4 @@ int main(void) {
     puts("typed bytecode verifier and internal reference VM tests passed");
     return 0;
 }
+

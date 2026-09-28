@@ -24,7 +24,7 @@ bool milena_bytecode_encode_module(const MilenaIRModule *module,
 bool milena_bytecode_decode_module(const uint8_t *bytes, size_t size,
                                    MilenaIRModule **module_out,
                                    char *error, size_t error_capacity);
-bool milena_bytecode_verify(const uint8_t *bytes, size_t size,
+bool milena_typed_bytecode_verify(const uint8_t *bytes, size_t size,
                             char *error, size_t error_capacity);
 
 #ifdef __cplusplus
@@ -32,3 +32,4 @@ bool milena_bytecode_verify(const uint8_t *bytes, size_t size,
 #endif
 
 #endif
+
