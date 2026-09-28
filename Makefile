@@ -463,7 +463,10 @@ tests/test_bytecode_data: tests/test_bytecode_data.c src/bytecode_data.c src/byt
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_bytecode_data.c src/bytecode_data.c src/bytecode.c $(LDFLAGS) -o $@
 
 BYTECODE_COMPILER_TEST_SOURCES = src/bytecode_compiler.c src/bytecode_native.c src/bytecode.c \
-	src/bytecode_data.c src/canonical_compiler.c src/language_semantic.c src/parser.c src/lexer.c \
+	src/bytecode_data.c src/canonical_compiler.c src/canonical_ir.c src/typed_bytecode.c \
+	src/vm.c src/gc.c src/query_plan.c src/arrow_ipc.c \
+	third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c \
+	third_party/nanoarrow/src/flatcc.c src/language_semantic.c src/parser.c src/lexer.c \
 	src/ast.c src/symbol_table.c src/table.c src/array.c src/dataset.c \
 	src/schema.c src/common.c src/interpreter.c src/symbol.c
 
@@ -488,7 +491,7 @@ tests/test_bytecode_native: tests/test_bytecode_native.c src/bytecode_native.c s
 	include/bytecode_compiler.h include/bytecode.h include/common.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
 
-tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/query_plan.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/symbol.c src/interpreter.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/gc.c src/canonical_ir.c src/typed_bytecode.c src/vm.c include/canonical_compiler.h include/query_plan.h include/vm.h include/typed_bytecode.h include/typed_ir.h include/ir.h include/dataset.h include/gc.h include/interpreter.h include/symbol.h
+tests/test_canonical_compiler: tests/test_canonical_compiler.c src/canonical_compiler.c src/query_plan.c src/language_semantic.c src/parser.c src/lexer.c src/ast.c src/symbol_table.c src/symbol.c src/interpreter.c src/table.c src/array.c src/dataset.c src/schema.c src/common.c src/gc.c src/canonical_ir.c src/typed_bytecode.c src/vm.c src/arrow_ipc.c third_party/nanoarrow/src/nanoarrow.c third_party/nanoarrow/src/nanoarrow_ipc.c third_party/nanoarrow/src/flatcc.c include/canonical_compiler.h include/query_plan.h include/vm.h include/typed_bytecode.h include/typed_ir.h include/ir.h include/dataset.h include/gc.h include/interpreter.h include/symbol.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(filter %.c,$^) $(LDFLAGS) -o $@
 
 test-termux-packaging: check-termux-packaging tools/validate_termux_elf tests/test_termux_packaging

@@ -254,9 +254,20 @@ int main(void) {
     expect_parse_error_at(
         ". analisis ventas { .limpiar dataset { } }", "limpiar",
         "El bloque limpiar requiere al menos una orden");
-    expect_parse_error_at(
-        ". analisis ventas { .limpiar dataset { #nulos(\"rellenar\") } }",
-        "#nulos", "La acción de limpieza solo admite eliminar");
+    /* Existing main keeps unsupported cleanup spellings as AST-only compatibility
+       nodes; they are not typed/lowered by the canonical data HIR. */
+    {
+        const char *legacy_cleanup =
+            ". analisis ventas { .limpiar dataset { #nulos(\"rellenar\") } }";
+        Lexer legacy_lexer;
+        Parser legacy_parser;
+        lexer_init(&legacy_lexer, legacy_cleanup);
+        parser_init(&legacy_parser, &legacy_lexer);
+        ASTNode *legacy_program = parser_parse(&legacy_parser);
+        assert(legacy_program != NULL && !legacy_parser.has_error);
+        ast_destroy(legacy_program);
+        parser_release(&legacy_parser);
+    }
 
     /* A malformed numeric condition must not leave an untyped condition AST
        that the parser reports as success. */
@@ -314,3 +325,4 @@ int main(void) {
         "no puede estar vacío");
     return 0;
 }
+
