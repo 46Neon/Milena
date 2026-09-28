@@ -3,6 +3,16 @@
 #include <stdio.h>
 #include <string.h>
 
+static const ASTNode *find_data_product(const ASTNode *node) {
+    if (!node) return NULL;
+    if (node->type == AST_COMANDO_TOTAL) return node;
+    for (size_t i = 0; i < node->child_count; ++i) {
+        const ASTNode *found = find_data_product(node->children[i]);
+        if (found) return found;
+    }
+    return NULL;
+}
+
 static const ASTNode *find_aggregate_metric(const ASTNode *node,
                                             ASTAggregateOperation operation) {
     if (!node) return NULL;
@@ -267,6 +277,7 @@ int main(void) {
     const char *data_source =
         ".analisis ventas {\n"
         " dataset cargar datos(\"entrada.csv\")\n"
+        " variable precio numerica;\n"
         " .transformar dataset { #total(\"precio * cantidad\") }\n"
         " .filtrar { #condicion(\"total >= 10\") }\n"
         " .seleccionar { #columnas(\"id,total,ciudad\") }\n"
@@ -274,11 +285,23 @@ int main(void) {
         "}\n";
     CHECK(milena_canonical_program_parse(&program, data_source, &error) == MILENA_OK,
           error.message);
+    const ASTNode *product_ast = find_data_product(program.ast);
+    CHECK(product_ast && product_ast->data_product.present &&
+          strcmp(product_ast->data_product.left_column, "precio") == 0 &&
+          strcmp(product_ast->data_product.right_column, "cantidad") == 0 &&
+          product_ast->has_source_span,
+          "el parser debe preservar los operandos tipados y el span de #total");
     CHECK(program.data_hir != NULL && program.hir == NULL &&
           strcmp(program.data_hir->source.path, "entrada.csv") == 0 &&
           program.data_hir->source.resolved_dataset_id != 0 &&
           strcmp(program.data_hir->export_path, "salida.json") == 0 &&
+          program.data_hir->declared_column_count == 1 &&
+          strcmp(program.data_hir->declared_schema[0].name, "precio") == 0 &&
+          program.data_hir->declared_schema[0].declared_type ==
+              MILENA_HIR_COLUMN_NUMERIC &&
           program.data_hir->operation_count == 3 &&
+          strcmp(program.data_hir->operations[0].as.product.left.name, "precio") == 0 &&
+          strcmp(program.data_hir->operations[0].as.product.right.name, "cantidad") == 0 &&
           program.data_hir->operations[1].as.filter.operation ==
               AST_OPERATOR_GREATER_EQUAL &&
           program.data_hir->operations[1].as.filter.threshold == 10.0 &&
@@ -286,6 +309,16 @@ int main(void) {
           program.data_hir->operations[0].resolved_dataset_id ==
               program.data_hir->source.resolved_dataset_id,
           "la HIR debe poseer fuente, transformación, filtro, proyección y destino de exportación");
+    ASTNode *selected_columns_ast = program.ast->children[0]->children[4]->children[0];
+    CHECK(selected_columns_ast->column_selection.present &&
+          selected_columns_ast->column_selection.count == 3u &&
+          strcmp(selected_columns_ast->column_selection.names[0], "id") == 0 &&
+          strcmp(selected_columns_ast->column_selection.names[1], "total") == 0 &&
+          strcmp(selected_columns_ast->column_selection.names[2], "ciudad") == 0 &&
+          program.data_hir->operations[2].as.select.count == 3u &&
+          strcmp(program.data_hir->operations[2].as.select.columns[0].name, "id") == 0 &&
+          strcmp(program.data_hir->operations[2].as.select.columns[2].name, "ciudad") == 0,
+          "el AST y la HIR deben conservar nombres tipados y orden de selección");
     MilenaCanonicalCompilerInput data_input = {0};
     CHECK(milena_canonical_compiler_input(&program, &data_input, &error) == MILENA_ERR_DATA &&
           data_input.ast == NULL && data_input.data_hir == NULL,
@@ -394,6 +427,11 @@ int main(void) {
           program.data_hir->operations[0].kind == MILENA_HIR_DATA_GROUP &&
           program.data_hir->operations[0].as.group.aggregate_count == 1,
           "la agrupación debe bajar a claves y agregados HIR tipados");
+    const ASTNode *group_key_ast = program.ast->children[0]->children[1]->children[0];
+    CHECK(group_key_ast->group_key.present && group_key_ast->group_key.name &&
+          strcmp(group_key_ast->group_key.name, "ciudad") == 0 &&
+          strcmp(program.data_hir->operations[0].as.group.key.name, "ciudad") == 0,
+          "la clave #por debe conservar el payload tipado y bajar sin reparsear value");
     const ASTNode *group_metric = find_aggregate_metric(
         program.ast, AST_AGGREGATE_OPERATION_SUM);
     CHECK(group_metric && group_metric->has_source_span &&
@@ -543,6 +581,17 @@ int main(void) {
           program.data_hir->operations[0].as.join.right_dataset_id !=
               program.data_hir->source.resolved_dataset_id,
           "el join debe bajar con identidad separada para el dataset derecho");
+    ASTNode *join_ast = program.ast->children[0]->children[1];
+    CHECK(join_ast->children[0]->join_right.present &&
+          strcmp(join_ast->children[0]->join_right.path, "catalogo.csv") == 0 &&
+          join_ast->children[1]->join_key.present &&
+          strcmp(join_ast->children[1]->join_key.name, "id") == 0 &&
+          program.data_hir->operations[0].as.join.right_source &&
+          strcmp(program.data_hir->operations[0].as.join.right_source,
+                 join_ast->children[0]->join_right.path) == 0 &&
+          strcmp(program.data_hir->operations[0].as.join.left_key.name,
+                 join_ast->children[1]->join_key.name) == 0,
+          "la HIR debe usar los payloads AST tipados de fuente y clave de join");
     CHECK(milena_canonical_program_bind_tables(&program, &data_table,
           &catalog_table, &error) == MILENA_OK, error.message);
     CHECK(milena_canonical_compiler_input(&program, &data_input, &error) == MILENA_OK &&
@@ -638,6 +687,16 @@ int main(void) {
         ".limpiar dataset { #nulos(\"eliminar\") #duplicados(\"eliminar\") } }";
     CHECK(milena_canonical_program_parse(&program, cleanup_source, &error) ==
           MILENA_OK, error.message);
+    const ASTNode *cleanup_ast_block = program.ast->children[0]->children[1];
+    CHECK(cleanup_ast_block->type == AST_BLOQUE_LIMPIAR &&
+          cleanup_ast_block->child_count == 2 &&
+          cleanup_ast_block->children[0]->data_cleanup.present &&
+          cleanup_ast_block->children[0]->data_cleanup.action ==
+              AST_DATA_CLEANUP_ACTION_REMOVE &&
+          cleanup_ast_block->children[1]->data_cleanup.present &&
+          cleanup_ast_block->children[1]->data_cleanup.action ==
+              AST_DATA_CLEANUP_ACTION_REMOVE,
+          "la limpieza admitida debe estar etiquetada como acción tipada en AST");
     CHECK(program.data_hir && program.data_hir->operation_count == 2 &&
           program.data_hir->operations[0].kind == MILENA_HIR_DATA_DROP_NULLS &&
           program.data_hir->operations[1].kind == MILENA_HIR_DATA_DROP_DUPLICATES &&
@@ -682,6 +741,11 @@ int main(void) {
         ".limpiar dataset { #nulos(\"rellenar\") } }";
     CHECK(milena_canonical_program_parse(&program, unsupported_cleaning_action,
                                          &error) == MILENA_OK, error.message);
+    CHECK(program.ast && program.ast->children[0]->children[1]->children[0]
+              ->data_cleanup.present == false &&
+          program.ast->children[0]->children[1]->children[0]
+              ->data_cleanup.action == AST_DATA_CLEANUP_ACTION_NONE,
+          "una acción no admitida debe seguir sin tipo en el AST de compatibilidad");
     CHECK(program.data_hir == NULL &&
           milena_canonical_compiler_input(&program, &data_input, &error) ==
               MILENA_ERR_UNSUPPORTED && data_input.ast == NULL &&

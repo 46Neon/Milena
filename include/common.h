@@ -27,7 +27,8 @@ typedef enum {
     MILENA_ERR_TYPE,
     MILENA_ERR_OVERFLOW,
     MILENA_ERR_UNSUPPORTED,
-    MILENA_ERR_INTERNAL
+    MILENA_ERR_INTERNAL,
+    MILENA_ERR_LIMIT
 } MilenaStatus;
 
 typedef enum {

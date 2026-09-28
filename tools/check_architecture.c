@@ -459,6 +459,23 @@ static void collect_ast_tokens(Span text, StringSet *set)
     }
 }
 
+/* Builder bodies also mention AST_ enums for payload types/operations; count
+ * only names declared by ASTNodeType when auditing handled AST nodes. */
+static void collect_known_ast_node_tokens(Span text, const StringSet *known_nodes,
+                                          StringSet *nodes)
+{
+    StringSet found;
+    size_t index;
+    set_init(&found);
+    collect_ast_tokens(text, &found);
+    for (index = 0U; index < found.count; ++index) {
+        if (set_contains(known_nodes, found.items[index])) {
+            set_add(nodes, found.items[index]);
+        }
+    }
+    set_free(&found);
+}
+
 static void collect_case_labels(Span body, StringSet *set)
 {
     const char *cursor;
@@ -785,7 +802,13 @@ static void check_architecture(void)
     };
     static const char *const main_forbidden[] = {
         "lexer_init(", "parser_init(", "parser_parse(", "dataset_load_csv(",
-        "milena_run_dataset_program("
+        "milena_run_dataset_program(", "ir_generate(", "assembler_assemble(",
+        "vm_init(", "vm_run(", "#include \"ir.h\"", "#include \"assembler.h\"",
+        "#include \"instructions.h\"", "#include \"vm.h\""
+    };
+    static const char *const quarantined_backend_sources[] = {
+        "src/ir.c", "src/assembler.c", "src/instructions.c",
+        "src/compiler.c", "src/vm.c"
     };
     static const char *const cli_commands[] = {
         "analyze", "profile", "inspect", "run_script"
@@ -827,6 +850,16 @@ static void check_architecture(void)
     list_init(&legacy_objects);
     source_region = make_sources_span(makefile);
     collect_source_paths(source_region, &sources);
+    for (index = 0U; index < ARRAY_COUNT(quarantined_backend_sources); ++index) {
+        size_t source_index;
+        for (source_index = 0U; source_index < sources.count; ++source_index) {
+            if (strcmp(sources.items[source_index],
+                       quarantined_backend_sources[index]) == 0) {
+                fail("legacy IR/opcode prototype entered canonical product sources: %s",
+                     quarantined_backend_sources[index]);
+            }
+        }
+    }
     for (index = 0U; index < sources.count; ++index) {
         const char *path = sources.items[index];
         const char *base = strrchr(path, '/');
@@ -1138,7 +1171,8 @@ static void check_hir_coverage(void)
     data_builder_body = function_body(implementation,
                                       "static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output) {",
                                       "data HIR builder");
-    collect_ast_tokens(data_builder_body, &data_builder_nodes);
+    collect_known_ast_node_tokens(data_builder_body, &ast_nodes,
+                                  &data_builder_nodes);
     require_equal_sets(&data_represented, &data_builder_nodes,
                        "documented data-HIR subset differs from AST nodes handled by the builder");
 

@@ -168,6 +168,69 @@ typedef enum {
 } ASTAggregateOperation;
 
 typedef enum {
+    AST_DATA_COLUMN_TYPE_UNSPECIFIED = 0,
+    AST_DATA_COLUMN_TYPE_NUMERIC,
+    AST_DATA_COLUMN_TYPE_BINARY,
+    AST_DATA_COLUMN_TYPE_TEXT,
+    AST_DATA_COLUMN_TYPE_DATE,
+    AST_DATA_COLUMN_TYPE_CATEGORICAL,
+    AST_DATA_COLUMN_TYPE_COUNT
+} ASTDataColumnType;
+
+typedef struct {
+    char *path;
+    bool present;
+} ASTDataSourcePayload;
+
+typedef struct {
+    char *name;
+    ASTDataColumnType type;
+    bool present;
+} ASTDataColumnPayload;
+
+typedef struct {
+    char *destination;
+    bool present;
+} ASTExportPayload;
+
+typedef struct {
+    char *path;
+    bool present;
+} ASTJoinRightPayload;
+
+typedef struct {
+    char *name;
+    bool present;
+} ASTJoinKeyPayload;
+
+typedef struct {
+    char *left_column;
+    char *right_column;
+    bool present;
+} ASTDataProductPayload;
+
+typedef struct {
+    char **names;
+    size_t count;
+    bool present;
+} ASTColumnSelectionPayload;
+
+typedef enum {
+    AST_DATA_CLEANUP_ACTION_NONE = 0,
+    AST_DATA_CLEANUP_ACTION_REMOVE
+} ASTDataCleanupAction;
+
+typedef struct {
+    ASTDataCleanupAction action;
+    bool present;
+} ASTDataCleanupPayload;
+
+typedef struct {
+    char *name;
+    bool present;
+} ASTGroupKeyPayload;
+
+typedef enum {
     AST_FILTER_PREDICATE_OK = 0,
     AST_FILTER_PREDICATE_INVALID,
     AST_FILTER_PREDICATE_MEMORY
@@ -191,6 +254,21 @@ typedef struct ASTNode {
     ASTAggregateOperation aggregate_operation;
     char *aggregate_column;
     bool has_aggregate_metric;
+    /* Owned typed payloads; legacy value/type_name remain compatibility mirrors. */
+    ASTDataSourcePayload data_source;
+    ASTDataColumnPayload data_column;
+    ASTExportPayload export_result;
+    /* Owned typed join operands; value remains a validated compatibility mirror. */
+    ASTJoinRightPayload join_right;
+    ASTJoinKeyPayload join_key;
+    /* Owned typed operands for #total; value remains a validated mirror. */
+    ASTDataProductPayload data_product;
+    /* Owned selection names for #columnas; value is a validated mirror. */
+    ASTColumnSelectionPayload column_selection;
+    /* Enumerated operation for admitted null/duplicate cleanup commands. */
+    ASTDataCleanupPayload data_cleanup;
+    /* Owned typed #por key; value remains a validated compatibility mirror. */
+    ASTGroupKeyPayload group_key;
     /* Non-owning aliases of children[0] and children[1] for binary operators. */
     struct ASTNode *left_operand;
     struct ASTNode *right_operand;
@@ -258,6 +336,18 @@ ASTFilterPredicateStatus ast_set_filter_predicate(ASTNode *node,
 /* Set typed canonical metric data while preserving the legacy value spelling. */
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column);
+/* Typed, independently owned mirrors for the admitted canonical data-summary nodes. */
+bool ast_set_data_source_declaration(ASTNode *node, const char *path);
+bool ast_set_data_column_declaration(ASTNode *node, const char *name,
+                                     ASTDataColumnType type);
+bool ast_set_export_destination(ASTNode *node, const char *destination);
+bool ast_set_join_right_source(ASTNode *node, const char *path);
+bool ast_set_join_key(ASTNode *node, const char *name);
+bool ast_set_data_product(ASTNode *node, const char *expression);
+bool ast_set_column_selection(ASTNode *node, const char *names);
+bool ast_set_data_cleanup_action(ASTNode *node, ASTDataCleanupAction action);
+bool ast_set_group_key(ASTNode *node, const char *name);
+const char *ast_data_column_type_name(ASTDataColumnType type);
 ASTNode* ast_create_leaf(ASTNodeType type, const char *value);
 ASTNode* ast_create_number(double value);
 ASTNode* ast_create_statistic(ASTStatOperation operation, ASTNode *argument,
