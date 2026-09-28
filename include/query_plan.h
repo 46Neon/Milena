@@ -85,7 +85,7 @@ typedef enum {
 #define MILENA_ARROW_PLAN_MAX_OPERATORS 4u
 #define MILENA_ARROW_PLAN_MAX_COLUMNS 128u
 
-typedef struct {
+typedef struct MilenaArrowIpcExecutionPlan {
     const ASTNode *source;
     const ASTNode *projection;
     const ASTNode *filter;

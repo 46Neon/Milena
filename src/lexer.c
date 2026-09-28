@@ -353,7 +353,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (too_long) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "cadena demasiado larga");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             (size_t)token.line, (size_t)token.column, 0,
+                             token.line, token.column, 0,
                              "La cadena supera el límite de 255 caracteres");
             lexer->current_token = token;
             return token;
@@ -361,12 +361,12 @@ Token lexer_next_token(Lexer *lexer) {
         if (invalid_escape) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "escape no válido");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             (size_t)token.line, (size_t)token.column, 0,
+                             token.line, token.column, 0,
                              "La cadena contiene una secuencia de escape no admitida");
         } else if (!closed) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "cadena sin cerrar");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             (size_t)token.line, (size_t)token.column, 0,
+                             token.line, token.column, 0,
                              "Cadena sin cerrar");
         } else {
             buffer[idx] = '\0';
@@ -417,7 +417,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (too_long) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "número demasiado largo");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             (size_t)token.line, (size_t)token.column, 0,
+                             token.line, token.column, 0,
                              "El número supera el límite de 255 caracteres");
             lexer->current_token = token;
             return token;
@@ -425,7 +425,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (malformed_exponent) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "exponente numérico no válido");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             (size_t)token.line, (size_t)token.column, 0,
+                             token.line, token.column, 0,
                              "El exponente de un número debe contener dígitos");
             lexer->current_token = token;
             return token;
@@ -436,7 +436,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (end != buffer + idx || errno == ERANGE || !isfinite(number)) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "número fuera de rango");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             (size_t)token.line, (size_t)token.column, 0,
+                             token.line, token.column, 0,
                              "El literal numérico no es finito o está fuera de rango");
             lexer->current_token = token;
             return token;
@@ -462,7 +462,7 @@ Token lexer_next_token(Lexer *lexer) {
         if (too_long) {
             token = lexer_create_token(lexer, TOKEN_ERROR, "identificador demasiado largo");
             milena_error_set(&lexer->error, MILENA_ERR_PARSE,
-                             (size_t)token.line, (size_t)token.column, 0,
+                             token.line, token.column, 0,
                              "El identificador supera el límite de 255 caracteres");
             lexer->current_token = token;
             return token;
@@ -484,18 +484,18 @@ Token lexer_next_token(Lexer *lexer) {
     token = lexer_create_token(lexer, TOKEN_ERROR, "carácter desconocido");
     char err_msg[64];
     snprintf(err_msg, sizeof(err_msg), "Carácter inesperado: '%c'", c);
-    milena_error_set(&lexer->error, MILENA_ERR_PARSE, (size_t)token.line, (size_t)token.column, 0, err_msg);
+    milena_error_set(&lexer->error, MILENA_ERR_PARSE, token.line, token.column, 0, err_msg);
     lexer->current_token = token;
     return token;
 }
 
 Token lexer_peek_token(Lexer *lexer) {
     size_t old_pos = lexer->position;
-    int old_line = lexer->line;
-    int old_col = lexer->column;
+    size_t old_line = lexer->line;
+    size_t old_col = lexer->column;
     size_t old_token_start_offset = lexer->token_start_offset;
-    int old_token_start_line = lexer->token_start_line;
-    int old_token_start_column = lexer->token_start_column;
+    size_t old_token_start_line = lexer->token_start_line;
+    size_t old_token_start_column = lexer->token_start_column;
     Token prev = lexer->previous_token;
     Token curr = lexer->current_token;
     MilenaError old_error = lexer->error;
@@ -526,7 +526,7 @@ bool lexer_match(Lexer *lexer, MilenaTokenType type) {
 
 bool lexer_expect(Lexer *lexer, MilenaTokenType type, const char *error_msg) {
     if (lexer->current_token.type != type) {
-        milena_error_set(&lexer->error, MILENA_ERR_PARSE, (size_t)lexer->current_token.line, (size_t)lexer->current_token.column, 0, error_msg);
+        milena_error_set(&lexer->error, MILENA_ERR_PARSE, lexer->current_token.line, lexer->current_token.column, 0, error_msg);
         return false;
     }
     return true;

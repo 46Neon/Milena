@@ -2747,6 +2747,31 @@ MilenaStatus milena_table_add_product(MilenaTable *table,
 }
 
 
+static bool table_parse_iso_calendar_date(const char *date,
+                                          int *year_out, int *month_out) {
+    if (!date || strlen(date) != 10 || date[4] != '-' || date[7] != '-')
+        return false;
+    for (size_t i = 0; i < 10; ++i) {
+        if (i == 4 || i == 7) continue;
+        if (date[i] < '0' || date[i] > '9') return false;
+    }
+    int year = (date[0] - '0') * 1000 + (date[1] - '0') * 100 +
+               (date[2] - '0') * 10 + (date[3] - '0');
+    int month = (date[5] - '0') * 10 + (date[6] - '0');
+    int day = (date[8] - '0') * 10 + (date[9] - '0');
+    if (year < 1 || month < 1 || month > 12) return false;
+    static const int month_days[12] = {
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+    };
+    int max_day = month_days[month - 1];
+    bool leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    if (month == 2 && leap_year) max_day = 29;
+    if (day < 1 || day > max_day) return false;
+    if (year_out) *year_out = year;
+    if (month_out) *month_out = month;
+    return true;
+}
+
 MilenaStatus milena_table_add_month(MilenaTable *table,
                                    const char *date_column,
                                    const char *output_column,
@@ -2787,10 +2812,10 @@ MilenaStatus milena_table_add_month(MilenaTable *table,
         const char *date = NULL;
         status = milena_table_get_string(table, (size_t)date_index, row, &date, error);
         if (status != MILENA_OK) break;
-        int year = 0, month = 0, day = 0;
-        if (!date || sscanf(date, "%d-%d-%d", &year, &month, &day) != 3 ||
-            year < 1 || month < 1 || month > 12 || day < 1 || day > 31) {
-            table_error(error, MILENA_ERR_TYPE, "Fecha inválida para extraer periodo");
+        int year = 0, month = 0;
+        if (!table_parse_iso_calendar_date(date, &year, &month)) {
+            table_error(error, MILENA_ERR_TYPE,
+                        "Fecha inválida: se requiere una fecha ISO YYYY-MM-DD válida");
             status = MILENA_ERR_TYPE;
             break;
         }

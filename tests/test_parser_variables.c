@@ -2,6 +2,63 @@
 #include <assert.h>
 #include <string.h>
 
+static void expect_source_span(const char *source, const ASTNode *node,
+                               const char *spelling) {
+    assert(source != NULL && node != NULL && spelling != NULL);
+    const char *start = strstr(source, spelling);
+    assert(start != NULL && node->has_source_span);
+    size_t start_offset = (size_t)(start - source);
+    size_t end_offset = start_offset + strlen(spelling);
+    size_t line = 1, column = 1;
+    for (size_t i = 0; i < start_offset; ++i) {
+        if (source[i] == '\n') { ++line; column = 1; }
+        else ++column;
+    }
+    assert(node->start_offset == start_offset && node->end_offset == end_offset);
+    assert(node->line == line && node->column == column);
+    for (size_t i = start_offset; i < end_offset; ++i) {
+        if (source[i] == '\n') { ++line; column = 1; }
+        else ++column;
+    }
+    assert(node->end_line == line && node->end_column == column);
+}
+
+static void expect_source_subspan(const char *source, const ASTNode *node,
+                                  const char *start_marker, size_t width) {
+    assert(source != NULL && node != NULL && start_marker != NULL);
+    const char *start = strstr(source, start_marker);
+    assert(start != NULL && node->has_source_span);
+    size_t start_offset = (size_t)(start - source);
+    size_t line = 1, column = 1;
+    for (size_t i = 0; i < start_offset; ++i) {
+        if (source[i] == '\n') { ++line; column = 1; }
+        else ++column;
+    }
+    assert(node->start_offset == start_offset && node->end_offset == start_offset + width);
+    assert(node->line == line && node->column == column);
+    for (size_t i = start_offset; i < start_offset + width; ++i) {
+        if (source[i] == '\n') { ++line; column = 1; }
+        else ++column;
+    }
+    assert(node->end_line == line && node->end_column == column);
+}
+
+static void expect_parse_error_at(const char *source, const char *needle,
+                                  const char *diagnostic) {
+    Lexer lexer;
+    Parser parser;
+    lexer_init(&lexer, source);
+    parser_init(&parser, &lexer);
+    ASTNode *program = parser_parse(&parser);
+    const char *position = strstr(source, needle);
+    assert(program == NULL);
+    assert(parser.has_error && parser.error.code == MILENA_ERR_PARSE);
+    assert(position != NULL && parser.error.line == 1u);
+    assert(parser.error.column == (size_t)(position - source) + 1u);
+    assert(strstr(parser.error.message, diagnostic) != NULL);
+    parser_release(&parser);
+}
+
 int main(void) {
     const char *source =
         ". analisis ventas {\n"
@@ -76,5 +133,196 @@ int main(void) {
 
     ast_destroy(program);
     parser_release(&parser);
+
+    /* The public function contract documents both spellings, including the
+       accented canonical keyword. Keep its parameter/return/call AST shape
+       covered independently of interpreter execution. */
+    const char *function_source =
+        "función doble(n) { retornar n * 2; }\n"
+        "variable salida = doble(21);\n";
+    lexer_init(&lexer, function_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program != NULL && !parser.has_error);
+    assert(program->child_count == 2);
+    ASTNode *function = program->children[0];
+    assert(function->type == AST_DECLARACION_FUNCION);
+    expect_source_span(function_source, function,
+                       "función doble(n) { retornar n * 2; }");
+    assert(strcmp(function->value, "doble") == 0);
+    assert(function->child_count == 2);
+    assert(function->children[0]->type == AST_BLOQUE_FUNCION);
+    assert(function->children[0]->child_count == 1);
+    assert(strcmp(function->children[0]->children[0]->value, "n") == 0);
+    expect_source_subspan(function_source, function->children[0]->children[0],
+                          "n) {", 1);
+    ASTNode *body = function->children[1];
+    assert(body->type == AST_BLOQUE_FUNCION);
+    assert(body->child_count == 1);
+    assert(body->children[0]->type == AST_COMANDO_RETORNAR);
+    expect_source_span(function_source, body->children[0], "retornar n * 2;");
+    assert(body->children[0]->children[0]->type == AST_EXPRESION_OPERACION);
+    expect_source_span(function_source, body->children[0]->children[0], "n * 2");
+    expect_source_subspan(function_source,
+        body->children[0]->children[0]->children[0], "n * 2", 1);
+    expect_source_span(function_source,
+        body->children[0]->children[0]->children[1], "2");
+    ASTNode *output = program->children[1];
+    assert(output->type == AST_DECLARACION_VARIABLE);
+    expect_source_span(function_source, output, "variable salida = doble(21);");
+    assert(output->children[0]->type == AST_EXPRESION_LLAMADA);
+    expect_source_span(function_source, output->children[0], "doble(21)");
+    expect_source_span(function_source,
+        output->children[0]->children[0], "21");
+    assert(strcmp(output->children[0]->value, "doble") == 0);
+    assert(output->children[0]->child_count == 1);
+    ast_destroy(program);
+    parser_release(&parser);
+
+    /* Unknown dotted analysis blocks are not silently reinterpreted as filters. */
+    const char *unknown_block_source =
+        ". analisis ventas { .desconocido { #condicion(\"base > 0\") } }";
+    lexer_init(&lexer, unknown_block_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    const char *unknown_name = strstr(unknown_block_source, "desconocido");
+    assert(program == NULL);
+    assert(parser.has_error && parser.error.code == MILENA_ERR_PARSE);
+    assert(unknown_name != NULL && parser.error.line == 1u);
+    assert(parser.error.column == (size_t)(unknown_name - unknown_block_source) + 1u);
+    assert(strstr(parser.error.message, "Bloque de análisis desconocido") != NULL);
+    parser_release(&parser);
+
+    /* Unknown commands and tokens inside allowlisted blocks also fail closed. */
+    const char *unknown_command_source =
+        ". analisis ventas { .seleccionar { #desconocido(\"base\") } }";
+    lexer_init(&lexer, unknown_command_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    const char *unknown_command = strstr(unknown_command_source, "desconocido");
+    assert(program == NULL && parser.has_error &&
+           parser.error.code == MILENA_ERR_PARSE);
+    assert(unknown_command != NULL && parser.error.line == 1u);
+    assert(parser.error.column ==
+           (size_t)(unknown_command - unknown_command_source) + 1u);
+    assert(strstr(parser.error.message,
+                  "Comando desconocido en bloque nombrado") != NULL);
+    parser_release(&parser);
+
+    const char *unknown_token_source =
+        ". analisis ventas { .unir { ignorado } }";
+    lexer_init(&lexer, unknown_token_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    const char *unknown_token = strstr(unknown_token_source, "ignorado");
+    assert(program == NULL && parser.has_error &&
+           parser.error.code == MILENA_ERR_PARSE);
+    assert(unknown_token != NULL && parser.error.line == 1u);
+    assert(parser.error.column ==
+           (size_t)(unknown_token - unknown_token_source) + 1u);
+    assert(strstr(parser.error.message,
+                  "Token desconocido en bloque nombrado") != NULL);
+    parser_release(&parser);
+
+    /* Other documented analysis blocks must not skip arbitrary body tokens. */
+    expect_parse_error_at(
+        ". analisis ventas { .agrupar dataset { ignorado } }",
+        "ignorado", "Token desconocido en bloque agrupar");
+    expect_parse_error_at(
+        ". analisis ventas { .resumir dataset { ignorado } }",
+        "ignorado", "Token desconocido en bloque resumir");
+    expect_parse_error_at(
+        ". analisis ventas { .exportar { ignorado } }",
+        "ignorado", "Token desconocido en exportar");
+
+    /* A reserved keyword after '.' must fail closed instead of leaving the
+       analysis parser on the same token forever. */
+    expect_parse_error_at(
+        ". analisis ventas { .visualizar { datos } }", "visualizar",
+        "El bloque .visualizar está reservado y no se admite");
+
+    /* Bare dataset and an empty numbered command must not silently succeed. */
+    expect_parse_error_at(
+        ". analisis ventas { dataset }", "dataset",
+        "Se esperaba 'cargar' después de dataset");
+    expect_parse_error_at(
+        ". analisis ventas { .transformar dataset { # } }", "#",
+        "Comando desconocido en transformar");
+
+    /* Parser and canonical HIR agree that a cleaning block is not an empty
+       operation and that only the explicitly defined action is accepted. */
+    expect_parse_error_at(
+        ". analisis ventas { .limpiar dataset { } }", "limpiar",
+        "El bloque limpiar requiere al menos una orden");
+    /* Existing main keeps unsupported cleanup spellings as AST-only compatibility
+       nodes; they are not typed/lowered by the canonical data HIR. */
+    {
+        const char *legacy_cleanup =
+            ". analisis ventas { .limpiar dataset { #nulos(\"rellenar\") } }";
+        Lexer legacy_lexer;
+        Parser legacy_parser;
+        lexer_init(&legacy_lexer, legacy_cleanup);
+        parser_init(&legacy_parser, &legacy_lexer);
+        ASTNode *legacy_program = parser_parse(&legacy_parser);
+        assert(legacy_program != NULL && !legacy_parser.has_error);
+        ast_destroy(legacy_program);
+        parser_release(&legacy_parser);
+    }
+
+    /* A malformed numeric condition must not leave an untyped condition AST
+       that the parser reports as success. */
+    expect_parse_error_at(
+        ". analisis ventas { .filtrar dataset { #condicion(\"precio ?? 2\") } }",
+        "condicion", "Predicado numérico inválido");
+    expect_parse_error_at(
+        ". analisis ventas { .filtrar { #condicion(\"precio > 1 && precio < 3\") } }",
+        "condicion", "Predicado numérico inválido");
+    expect_parse_error_at(
+        ". analisis ventas { .filtrar { #condicion(\"precio > 1\") #condicion(\"precio < 3\") } }",
+        "condicion(\"precio < 3\")", "una sola #condicion");
+    expect_parse_error_at(
+        ". analisis ventas { .unir { #derecha(\"r.csv\") #clave(\"id\") #condicion(\"id > 0\") } }",
+        "condicion", "solo se admite dentro de .filtrar");
+
+    const char *valid_filter_source =
+        ". analisis ventas { .filtrar { #condicion(\"precio >= 2.5\") } }";
+    lexer_init(&lexer, valid_filter_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program != NULL && !parser.has_error);
+    ASTNode *filter_block = program->children[0]->children[0];
+    assert(filter_block->type == AST_BLOQUE_FILTRAR && filter_block->child_count == 1);
+    ASTNode *predicate = filter_block->children[0];
+    assert(predicate->type == AST_COMANDO_CONDICION &&
+           predicate->has_filter_predicate &&
+           strcmp(predicate->filter_column, "precio") == 0 &&
+           predicate->filter_operator == AST_OPERATOR_GREATER_EQUAL &&
+           predicate->filter_threshold == 2.5);
+    ast_destroy(program);
+    parser_release(&parser);
+
+    /* The explicit historical alias normalizes to AST_COMANDO_PERIODO, while
+       an unspecified extraction payload is rejected closed. */
+    expect_parse_error_at(
+        ". analisis ventas { .transformar { #periodo(\"dia de fecha\") } }",
+        "#periodo", "#periodo solo admite el payload");
+    const char *period_alias_source =
+        ". analisis ventas { .transformar { #periodo extraer(\"mes de fecha\") } }";
+    lexer_init(&lexer, period_alias_source);
+    parser_init(&parser, &lexer);
+    program = parser_parse(&parser);
+    assert(program != NULL && !parser.has_error);
+    ASTNode *transform = program->children[0]->children[0];
+    assert(transform->type == AST_BLOQUE_TRANSFORMAR &&
+           transform->children[0]->type == AST_COMANDO_PERIODO &&
+           strcmp(transform->children[0]->value, "mes de fecha") == 0);
+    ast_destroy(program);
+    parser_release(&parser);
+
+    /* Empty quoted schema/projection names are rejected before producing ASTs. */
+    expect_parse_error_at(
+        ". analisis ventas { entrada categorica \"\" }", "\"\"",
+        "no puede estar vacío");
     return 0;
 }
+

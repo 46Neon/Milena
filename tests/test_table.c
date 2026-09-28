@@ -126,6 +126,43 @@ int main(void) {
     milena_array_release(&filter);
     milena_array_release(&amount_array);
     milena_array_release(&id_array);
-    puts("OK: MilenaTable columns, validity and filtering");
+
+    /* Period extraction accepts strict ISO calendar dates, honors Gregorian
+       leap years, preserves nulls, and rejects normalized/trailing dates. */
+    milena_error_clear(&error);
+    const char *valid_dates[] = {"2024-02-29", "2000-02-29", NULL};
+    const bool valid_date_rows[] = {true, true, false};
+    MilenaTable dates = {0};
+    milena_table_init(&dates);
+    expect_ok(milena_table_add_string_column_copy(&dates, "fecha", valid_dates,
+        3, valid_date_rows, &error), &error);
+    expect_ok(milena_table_add_month(&dates, "fecha", "periodo", &error), &error);
+    const char *month = NULL;
+    assert(milena_table_column_index(&dates, "periodo") == 1);
+    expect_ok(milena_table_get_string(&dates, 1, 0, &month, &error), &error);
+    assert(strcmp(month, "2024-02") == 0);
+    expect_ok(milena_table_get_string(&dates, 1, 1, &month, &error), &error);
+    assert(strcmp(month, "2000-02") == 0);
+    assert(milena_table_is_null(&dates, 1, 2));
+    milena_table_destroy(&dates);
+
+    const char *invalid_dates[] = {
+        "2023-02-29", "2026-04-31", "2026-01-01x", "0000-01-01",
+        "2026-1-01"
+    };
+    for (size_t i = 0; i < sizeof(invalid_dates) / sizeof(invalid_dates[0]); ++i) {
+        const char *one_date[] = {invalid_dates[i]};
+        MilenaTable invalid = {0};
+        milena_table_init(&invalid);
+        milena_error_clear(&error);
+        expect_ok(milena_table_add_string_column_copy(&invalid, "fecha", one_date,
+            1, NULL, &error), &error);
+        MilenaStatus date_status = milena_table_add_month(&invalid, "fecha",
+                                                          "periodo", &error);
+        assert(date_status == MILENA_ERR_TYPE);
+        assert(milena_table_column_index(&invalid, "periodo") == -1);
+        milena_table_destroy(&invalid);
+    }
+    puts("OK: MilenaTable columns, validity, filtering and strict calendar periods");
     return 0;
 }

@@ -1,6 +1,11 @@
 #include "canonical_compiler.h"
+#include "typed_ir.h"
+#include "typed_bytecode.h"
+#include "vm.h"
+#include "interpreter.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const ASTNode *find_data_product(const ASTNode *node) {
@@ -28,10 +33,106 @@ static const ASTNode *find_aggregate_metric(const ASTNode *node,
 #define CHECK(condition, message) \
     do { \
         if (!(condition)) { \
-            fprintf(stderr, "FALLO: %s\n", (message)); \
+            const char *check_message = (message); \
+            fprintf(stderr, "FALLO (línea %d; condición: %s): %s\n", \
+                    __LINE__, #condition, \
+                    check_message ? check_message : "(sin diagnóstico)"); \
             return 1; \
         } \
     } while (0)
+
+static bool ir_span_matches_hir(const MilenaIRSourceSpan *ir_span,
+                                const MilenaHIRSourceSpan *hir_span) {
+    if (!ir_span || !hir_span ||
+        ir_span->has_source_span != hir_span->has_source_span) return false;
+    if (!hir_span->has_source_span)
+        return ir_span->line == 0 && ir_span->column == 0 &&
+               ir_span->end_line == 0 && ir_span->end_column == 0 &&
+               ir_span->start_offset == 0 && ir_span->end_offset == 0;
+    return ir_span->line == (uint64_t)hir_span->line &&
+           ir_span->column == (uint64_t)hir_span->column &&
+           ir_span->end_line == (uint64_t)hir_span->end_line &&
+           ir_span->end_column == (uint64_t)hir_span->end_column &&
+           ir_span->start_offset == (uint64_t)hir_span->start_offset &&
+           ir_span->end_offset == (uint64_t)hir_span->end_offset;
+}
+
+static bool run_vm_case(const MilenaCanonicalProgram *program,
+                        const uint8_t *bytecode, size_t bytecode_size,
+                        const char *function_name, const double *numeric_arguments,
+                        size_t argument_count, MilenaIRType expected_type,
+                        double expected_number, bool expected_boolean,
+                        char *diagnostic, size_t diagnostic_capacity) {
+    MilenaVMValue arguments[3] = {{0}};
+    MilenaVMValue result = {0};
+    uint32_t entry_symbol = 0;
+    if (!program || !program->typed_module || !bytecode || !function_name ||
+        (argument_count && !numeric_arguments) ||
+        argument_count > sizeof(arguments) / sizeof(arguments[0])) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "invalid source-to-VM test fixture");
+        return false;
+    }
+    for (size_t i = 0; i < program->typed_module->function_count; ++i)
+        if (strcmp(program->typed_module->functions[i].name, function_name) == 0) {
+            entry_symbol = program->typed_module->functions[i].symbol_id;
+            break;
+        }
+    if (!entry_symbol) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "VM fixture function %s was not found", function_name);
+        return false;
+    }
+    for (size_t i = 0; i < argument_count; ++i) {
+        arguments[i].type = MILENA_IR_TYPE_F64;
+        arguments[i].as.f64 = numeric_arguments[i];
+    }
+    VirtualMachine vm = {0};
+    if (!vm_init_bytecode(&vm, bytecode, bytecode_size, entry_symbol,
+                          argument_count ? arguments : NULL, argument_count,
+                          NULL)) {
+        const char *message = vm_bytecode_error(&vm);
+        (void)snprintf(diagnostic, diagnostic_capacity, "%s",
+                       message ? message : "VM initialization failed");
+        vm_destroy(&vm);
+        return false;
+    }
+    if (!vm_run(&vm)) {
+        const char *message = vm_bytecode_error(&vm);
+        (void)snprintf(diagnostic, diagnostic_capacity, "%s",
+                       message ? message : "VM execution failed");
+        vm_destroy(&vm);
+        return false;
+    }
+    if (!vm_get_bytecode_result(&vm, &result)) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "VM did not publish a bytecode result");
+        vm_destroy(&vm);
+        return false;
+    }
+    vm_destroy(&vm);
+    if (result.type != expected_type) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "%s returned type %d, expected %d", function_name,
+                       (int)result.type, (int)expected_type);
+        return false;
+    }
+    if (expected_type == MILENA_IR_TYPE_F64 && result.as.f64 != expected_number) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "%s returned %.17g, expected %.17g", function_name,
+                       result.as.f64, expected_number);
+        return false;
+    }
+    if (expected_type == MILENA_IR_TYPE_BOOL &&
+        result.as.boolean != expected_boolean) {
+        (void)snprintf(diagnostic, diagnostic_capacity,
+                       "%s returned %s, expected %s", function_name,
+                       result.as.boolean ? "true" : "false",
+                       expected_boolean ? "true" : "false");
+        return false;
+    }
+    return true;
+}
 
 int main(void) {
     MilenaError error;
@@ -201,6 +302,380 @@ int main(void) {
     CHECK(program.hir == NULL && program.ast == NULL,
           "liberar el programa debe destruir la HIR y el AST poseídos");
 
+    /* End-to-end canonical compile slice: source passes the official lexer,
+       parser and semantic frontend, then the program owns verified typed IR. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion calcular() { variable x = 10; x = x * 2; "
+          "retornar x + 3; }", &error) == MILENA_OK, error.message);
+    CHECK(program.hir && program.hir->function_count == 1 &&
+          program.hir->functions[0].body_count == 3,
+          "el frontend debe entregar una función tipada con declaración, asignación y retorno");
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK, error.message);
+    MilenaIRProgram *typed_body = program.typed_ir;
+    CHECK(typed_body != NULL &&
+          milena_ir_program_validate(typed_body, error.message, sizeof(error.message)),
+          "la entrada de compilación debe publicar IR tipada verificada");
+    CHECK(typed_body->block_count == 1 && typed_body->count == 6 &&
+          typed_body->instructions[2].opcode == MILENA_IR_MUL_F64 &&
+          typed_body->instructions[4].opcode == MILENA_IR_ADD_F64 &&
+          typed_body->instructions[5].opcode == MILENA_IR_RETURN &&
+          typed_body->instructions[5].result_type == MILENA_IR_TYPE_F64,
+          "la compilación canónica debe producir SSA aritmético tipado y retorno verificado");
+    CHECK(typed_body->instructions[2].operand1_id ==
+              typed_body->instructions[0].result_id &&
+          typed_body->instructions[4].operand1_id ==
+              typed_body->instructions[2].result_id,
+          "reasignación y usos posteriores deben referenciar el valor SSA vigente");
+    {
+        const MilenaHIRFunction *hir_calculate = &program.hir->functions[0];
+        const MilenaHIRExpression *assignment_expression =
+            hir_calculate->body[1]->as.expression;
+        const MilenaHIRExpression *return_expression =
+            hir_calculate->body[2]->as.expression;
+        CHECK(ir_span_matches_hir(&typed_body->instructions[0].source_span,
+                  &hir_calculate->body[0]->as.expression->span) &&
+              ir_span_matches_hir(&typed_body->instructions[1].source_span,
+                  &assignment_expression->as.binary.right->span) &&
+              ir_span_matches_hir(&typed_body->instructions[2].source_span,
+                  &assignment_expression->span) &&
+              ir_span_matches_hir(&typed_body->instructions[3].source_span,
+                  &return_expression->as.binary.right->span) &&
+              ir_span_matches_hir(&typed_body->instructions[4].source_span,
+                  &return_expression->span) &&
+              ir_span_matches_hir(&typed_body->instructions[5].source_span,
+                  &hir_calculate->body[2]->span),
+              "la IR debe conservar spans de literales, operadores y retorno desde HIR");
+    }
+    typed_body = NULL; /* The prior pointer is invalidated by successful replacement. */
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL &&
+          milena_ir_program_validate(program.typed_ir, error.message,
+                                     sizeof(error.message)),
+          "recompilar debe sustituir por una IR poseída y verificada");
+    milena_canonical_program_release(&program);
+    CHECK(program.typed_ir == NULL,
+          "liberar el programa canónico debe liberar su IR tipada poseída");
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion calcular() { retornar (10 - 2) * 3 / 4; }", &error) ==
+              MILENA_OK, error.message);
+    typed_body = milena_ir_program_create();
+    CHECK(typed_body != NULL, "no se pudo reservar IR tipada para operadores");
+    CHECK(milena_ir_program_lower_scalar_function_body(typed_body,
+          &program.hir->functions[0], error.message, sizeof(error.message)),
+          error.message);
+    CHECK(typed_body->count == 8 &&
+          typed_body->instructions[2].opcode == MILENA_IR_SUB_F64 &&
+          typed_body->instructions[4].opcode == MILENA_IR_MUL_F64 &&
+          typed_body->instructions[6].opcode == MILENA_IR_DIV_F64 &&
+          typed_body->instructions[7].opcode == MILENA_IR_RETURN,
+          "resta, multiplicación y división deben preservar el AST tipado");
+    milena_ir_program_destroy(typed_body);
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion elegir() { variable base = 1; "
+          "si (base > 0) { retornar base; } sino { retornar 0; } }",
+          &error) == MILENA_OK, error.message);
+    typed_body = milena_ir_program_create();
+    CHECK(typed_body != NULL, "no se pudo reservar IR tipada para si/sino");
+    CHECK(milena_ir_program_lower_scalar_function_body(typed_body,
+          &program.hir->functions[0], error.message, sizeof(error.message)),
+          error.message);
+    CHECK(typed_body->block_count == 3 && typed_body->count == 7 &&
+          typed_body->instructions[2].opcode == MILENA_IR_GT_F64 &&
+          typed_body->instructions[3].opcode == MILENA_IR_COND_BRANCH &&
+          typed_body->instructions[3].target_true == 2 &&
+          typed_body->instructions[3].target_false == 3 &&
+          typed_body->blocks[0].successor_true == 2 &&
+          typed_body->blocks[0].successor_false == 3 &&
+          typed_body->instructions[4].opcode == MILENA_IR_RETURN &&
+          typed_body->instructions[6].opcode == MILENA_IR_RETURN,
+          "si/sino debe bajar a CFG tipado con retornos en ambas ramas");
+    {
+        const MilenaHIRStatement *hir_if = program.hir->functions[0].body[1];
+        CHECK(ir_span_matches_hir(&typed_body->instructions[3].source_span,
+                  &hir_if->span) &&
+              ir_span_matches_hir(&typed_body->instructions[4].source_span,
+                  &hir_if->as.conditional.then_body[0]->span) &&
+              ir_span_matches_hir(&typed_body->instructions[6].source_span,
+                  &hir_if->as.conditional.else_body[0]->span),
+              "ramas y retornos de IR deben conservar sus spans HIR originales");
+    }
+    milena_ir_program_destroy(typed_body);
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion sin_retorno_falso(x) { si (x > 0) { retornar x; } }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL,
+          "un si terminal sin sino no debe aparentar un retorno en el camino falso");
+    milena_canonical_program_release(&program);
+
+    /* Nonterminal source-level si/sino assignment branches lower to a CFG
+       merge with typed block parameters and per-edge SSA arguments. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion abs_like(x) { variable y = 0; "
+          "si (x > 0) { y = x; } sino { y = 0 - x; } retornar y; }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir,
+          error.message);
+    typed_body = program.typed_ir;
+    CHECK(typed_body->block_count == 4 && typed_body->parameter_count == 2 &&
+          typed_body->edge_argument_count == 2 &&
+          typed_body->blocks[0].successor_true == 2 &&
+          typed_body->blocks[0].successor_false == 3 &&
+          typed_body->blocks[1].successor_true == 4 &&
+          typed_body->blocks[2].successor_true == 4 &&
+          typed_body->parameters[1].block_id == 4 &&
+          typed_body->parameters[1].type == MILENA_IR_TYPE_F64 &&
+          typed_body->instructions[typed_body->count - 1].opcode ==
+              MILENA_IR_RETURN &&
+          typed_body->instructions[typed_body->count - 1].operand1_id ==
+              typed_body->parameters[1].value_id &&
+          milena_ir_program_validate(typed_body, error.message,
+                                     sizeof(error.message)),
+          "el si/sino con asignaciones debe fusionar el valor vigente con un parámetro de bloque verificado");
+    CHECK(typed_body->edge_arguments[0].source_block_id == 2 &&
+          typed_body->edge_arguments[0].target_block_id == 4 &&
+          typed_body->edge_arguments[1].source_block_id == 3 &&
+          typed_body->edge_arguments[1].target_block_id == 4,
+          "cada rama debe suministrar su valor al bloque de merge correspondiente");
+    milena_canonical_program_release(&program);
+
+    /* Nested assignment conditionals stay on the canonical typed-IR route and
+       use inner/outer CFG merges with explicit edge arguments. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion nested_merge(x, y) { variable z = 0; "
+          "si (x > 0) { si (y > 0) { z = x; } sino { z = y; } } "
+          "sino { z = 0 - x; } retornar z; }", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL,
+          error.message);
+    typed_body = program.typed_ir;
+    CHECK(typed_body->block_count == 7 &&
+          typed_body->parameter_count == 4 &&
+          typed_body->edge_argument_count == 4 &&
+          milena_ir_program_validate(typed_body, error.message,
+                                     sizeof(error.message)),
+          "las condiciones anidadas deben bajar a CFG tipado con merges SSA verificados");
+    {
+        size_t conditional_branches = 0;
+        bool inner_merge = false, outer_merge = false;
+        for (size_t i = 0; i < typed_body->count; ++i)
+            if (typed_body->instructions[i].opcode == MILENA_IR_COND_BRANCH)
+                ++conditional_branches;
+        for (size_t i = 0; i < typed_body->parameter_count; ++i) {
+            if (typed_body->parameters[i].block_id == 7) inner_merge = true;
+            if (typed_body->parameters[i].block_id == 4) outer_merge = true;
+        }
+        CHECK(conditional_branches == 2 && inner_merge && outer_merge &&
+              typed_body->instructions[typed_body->count - 1].opcode ==
+                  MILENA_IR_RETURN &&
+              typed_body->instructions[typed_body->count - 1].operand1_id ==
+                  typed_body->parameters[typed_body->parameter_count - 1].value_id,
+              "los dos niveles deben preservar condición, parámetro de merge y retorno final");
+    }
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion nested_no_else(x, y) { variable z = 0; "
+          "si (x > 0) { si (y > 0) { z = x; } z = y; } "
+          "sino { z = 0; } retornar z; }", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL, error.message);
+    {
+        char validation_error[256] = {0};
+        CHECK(milena_ir_program_validate(program.typed_ir, validation_error,
+                                         sizeof(validation_error)),
+              validation_error);
+    }
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion nested_local(x, y) { variable z = 0; "
+          "si (x > 0) { variable valido = y > 0; "
+          "si (valido) { variable temporal = x; z = temporal; } "
+          "sino { variable temporal = y; z = temporal; } } "
+          "sino { variable temporal = 0; z = temporal; } retornar z; }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL,
+          error.message);
+    {
+        char validation_error[256] = {0};
+        CHECK(milena_ir_program_validate(program.typed_ir, validation_error,
+                                         sizeof(validation_error)),
+              validation_error);
+    }
+    milena_canonical_program_release(&program);
+
+    /* Branch-local declarations lower into branch-scoped SSA bindings and do
+       not escape the conditional merge. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion sin_sino(x) { variable y = 0; "
+          "si (x > 0) { y = x; } retornar y; }", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL, error.message);
+    {
+        char validation_error[256] = {0};
+        CHECK(milena_ir_program_validate(program.typed_ir, validation_error,
+                                         sizeof(validation_error)),
+              validation_error);
+    }
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion local_branch(x) { variable y = 0; "
+          "si (x > 0) { variable temporal = x; y = temporal; } "
+          "sino { variable temporal = 0; y = temporal; } retornar y; }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL, error.message);
+    {
+        char validation_error[256] = {0};
+        CHECK(milena_ir_program_validate(program.typed_ir, validation_error,
+                                         sizeof(validation_error)),
+              validation_error);
+    }
+    /* Poison a post-merge reference with a branch-local symbol ID. Lowering
+       must reject it instead of turning a lexical local into a phi input. */
+    {
+        size_t branch_local_id = program.hir->functions[0].body[1]
+            ->as.conditional.then_body[0]->resolved_symbol_id;
+        MilenaHIRExpression *returned = program.hir->functions[0]
+            .body[2]->as.expression;
+        CHECK(branch_local_id != 0 && returned != NULL,
+              "la prueba debe localizar el binding local y el retorno");
+        returned->resolved_symbol_id = branch_local_id;
+        milena_ir_program_destroy(program.typed_ir);
+        program.typed_ir = NULL;
+        CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+                  MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
+              strstr(error.message, "binding") != NULL,
+              "un binding local de rama no debe escapar al bloque merge");
+    }
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion comparar() { variable a = 1 == 2; variable b = 1 != 2; "
+          "variable c = 1 < 2; variable d = 1 <= 2; "
+          "variable e = 1 > 2; variable f = 1 >= 2; "
+          "variable g = verdadero; retornar 0; }",
+          &error) == MILENA_OK, error.message);
+    typed_body = milena_ir_program_create();
+    CHECK(typed_body != NULL, "no se pudo reservar IR tipada para comparaciones");
+    CHECK(milena_ir_program_lower_scalar_function_body(typed_body,
+          &program.hir->functions[0], error.message, sizeof(error.message)),
+          error.message);
+    CHECK(typed_body->count == 21 &&
+          typed_body->instructions[2].opcode == MILENA_IR_EQ_F64 &&
+          typed_body->instructions[5].opcode == MILENA_IR_NE_F64 &&
+          typed_body->instructions[8].opcode == MILENA_IR_LT_F64 &&
+          typed_body->instructions[11].opcode == MILENA_IR_LE_F64 &&
+          typed_body->instructions[14].opcode == MILENA_IR_GT_F64 &&
+          typed_body->instructions[17].opcode == MILENA_IR_GE_F64 &&
+          typed_body->instructions[18].opcode == MILENA_IR_CONST_BOOL &&
+          typed_body->instructions[18].result_type == MILENA_IR_TYPE_BOOL &&
+          typed_body->instructions[2].result_type == MILENA_IR_TYPE_BOOL &&
+          typed_body->instructions[20].opcode == MILENA_IR_RETURN,
+          "las comparaciones numéricas deben bajar a valores bool explícitos");
+    milena_ir_program_destroy(typed_body);
+    milena_canonical_program_release(&program);
+
+    /* Parameterized source -> typed HIR -> canonical IR keeps its function
+       signature and defines every input as an entry-block SSA value. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion identidad(n) { retornar n; }", &error) == MILENA_OK,
+          error.message);
+    CHECK(program.hir && program.hir->function_count == 1 &&
+          program.hir->functions[0].parameter_count == 1 &&
+          program.hir->functions[0].parameters[0].value_type == MILENA_HIR_NUMBER &&
+          program.hir->functions[0].parameters[0].resolved_symbol_id != 0,
+          "la HIR debe conservar la declaración tipada y enlazada del parámetro");
+    program.hir->functions[0].parameters[0].value_type = MILENA_HIR_BOOLEAN;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_ir == NULL &&
+          program.ast != NULL && program.hir != NULL,
+          "un tipo de parámetro no admitido debe fallar cerrado sin publicar IR");
+    program.hir->functions[0].parameters[0].value_type = MILENA_HIR_NUMBER;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir != NULL,
+          error.message);
+    typed_body = program.typed_ir;
+    CHECK(typed_body->has_function_signature &&
+          typed_body->signature.parameter_count == 1 &&
+          typed_body->signature.parameter_types[0] == MILENA_IR_TYPE_F64 &&
+          typed_body->signature.return_type == MILENA_IR_TYPE_F64 &&
+          typed_body->parameter_count == 1 &&
+          typed_body->parameters[0].block_id == 1 &&
+          typed_body->parameters[0].value_id == 1 &&
+          typed_body->parameters[0].type == MILENA_IR_TYPE_F64 &&
+          typed_body->instructions[0].opcode == MILENA_IR_RETURN &&
+          typed_body->instructions[0].operand1_id == 1 &&
+          milena_ir_program_validate(typed_body, error.message,
+                                    sizeof(error.message)),
+          "el parámetro debe ser definición SSA de entrada usada por el retorno");
+    MilenaIRType saved_parameter_type = typed_body->signature.parameter_types[0];
+    typed_body->parameters[0].type = MILENA_IR_TYPE_BOOL;
+    CHECK(!milena_ir_program_validate(typed_body, error.message,
+                                      sizeof(error.message)) &&
+          strstr(error.message, "function signature") != NULL,
+          "el verificador debe rechazar tipo de entrada distinto a la firma");
+    typed_body->parameters[0].type = MILENA_IR_TYPE_F64;
+    typed_body->signature.parameter_types[0] = MILENA_IR_TYPE_BOOL;
+    CHECK(!milena_ir_program_validate(typed_body, error.message,
+                                      sizeof(error.message)),
+          "el verificador debe rechazar firma incompatible con el valor SSA de entrada");
+    typed_body->signature.parameter_types[0] = saved_parameter_type;
+    MilenaIRType *saved_parameter_types = typed_body->signature.parameter_types;
+    typed_body->signature.parameter_types = NULL;
+    typed_body->signature.parameter_count = 0;
+    CHECK(!milena_ir_program_validate(typed_body, error.message,
+                                      sizeof(error.message)) &&
+          strstr(error.message, "function signature") != NULL,
+          "el verificador debe rechazar una firma con aridad distinta a la entrada");
+    typed_body->signature.parameter_types = saved_parameter_types;
+    typed_body->signature.parameter_count = 1;
+    CHECK(milena_ir_program_validate(typed_body, error.message,
+                                     sizeof(error.message)),
+          error.message);
+    milena_canonical_program_release(&program);
+
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion combinar(a, b) { retornar a + b; }", &error) == MILENA_OK,
+          error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir &&
+          program.typed_ir->signature.parameter_count == 2 &&
+          program.typed_ir->parameter_count == 2 &&
+          program.typed_ir->parameters[0].value_id == 1 &&
+          program.typed_ir->parameters[1].value_id == 2 &&
+          program.typed_ir->instructions[0].opcode == MILENA_IR_ADD_F64 &&
+          program.typed_ir->instructions[0].operand1_id == 1 &&
+          program.typed_ir->instructions[0].operand2_id == 2,
+          "la lowering debe preservar orden de firma y lecturas de dos parámetros");
+    milena_canonical_program_release(&program);
+
     milena_canonical_program_init(&program);
     CHECK(milena_canonical_program_parse(&program,
           "funcion elegir(x) { si (x > 0) { retornar x; } sino { retornar 0; } }",
@@ -213,6 +688,15 @@ int main(void) {
           program.hir->functions[0].body[0]->as.conditional.then_count == 1 &&
           program.hir->functions[0].body[0]->as.conditional.else_count == 1,
           "la HIR debe conservar condición booleana y ramas de si/sino");
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_ir &&
+          program.typed_ir->signature.parameter_count == 1 &&
+          program.typed_ir->parameter_count == 1 &&
+          program.typed_ir->blocks[0].successor_true == 2 &&
+          program.typed_ir->blocks[0].successor_false == 3 &&
+          milena_ir_program_validate(program.typed_ir, error.message,
+                                     sizeof(error.message)),
+          "los parámetros de función deben dominar la condición y retornos de ambas ramas");
     milena_canonical_program_release(&program);
 
     /* An unresolved variable is an error with the original identifier span. */
@@ -759,18 +1243,667 @@ int main(void) {
         ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
         ".filtrar { #condicion(\"total =~ 10\") } }";
     CHECK(milena_canonical_program_parse(&program, malformed_filter_source,
-                                         &error) == MILENA_OK, error.message);
-    CHECK(program.data_hir == NULL,
-          "un predicado sin forma tipada no debe producir HIR de datos");
-    MilenaCanonicalCompilerInput rejected_input = {0};
-    CHECK(milena_canonical_compiler_input(&program, &rejected_input, &error) ==
-              MILENA_ERR_UNSUPPORTED &&
-          rejected_input.ast == NULL && rejected_input.data_hir == NULL &&
+                                         &error) == MILENA_ERR_PARSE,
+          "un predicado sin forma tipada debe rechazarse en parser");
+    CHECK(program.ast == NULL && program.data_hir == NULL &&
           error.line > 0 && error.column > 0 &&
-          strstr(error.message, "COMANDO_CONDICION") != NULL,
-          "el HIR debe fallar cerrado con nodo y ubicación, sin vista parcial");
+          strstr(error.message, "Predicado numérico inválido") != NULL,
+          "el predicado inválido debe fallar cerrado sin AST/HIR parcial");
     milena_canonical_program_release(&program);
 
-    puts("OK: canonical compiler boundary, typed scalar/data HIR, binding, execution and source diagnostics");
+
+    /* A source module with a direct scalar call lowers only on the canonical
+       Spanish lexer/parser/semantic -> HIR -> typed-IR path. Calls are
+       nonrecursive, numeric-parameter, scalar-returning, and carry owned,
+       arbitrary-length SSA argument slices. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion combinar(x, z) { retornar x + z; } "
+          "funcion principal(y) { variable listo = verdadero; "
+          "retornar combinar(y, y); }", &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    CHECK(program.typed_module->function_count == 2 &&
+          program.typed_module->functions[0].symbol_id ==
+              program.hir->functions[0].resolved_symbol_id &&
+          program.typed_module->functions[0].body->signature.parameter_count == 2 &&
+          program.typed_module->functions[1].body->signature.parameter_count == 1 &&
+          program.typed_module->functions[1].body->signature.return_type ==
+              MILENA_IR_TYPE_F64 && program.typed_ir ==
+              program.typed_module->functions[0].body,
+          "la IR de módulo debe conservar identidad, firma, cuerpo y vista compatible");
+    MilenaIRInstruction *direct_call = NULL;
+    for (size_t i = 0; i < program.typed_module->functions[1].body->count; ++i)
+        if (program.typed_module->functions[1].body->instructions[i].opcode ==
+            MILENA_IR_CALL)
+            direct_call = &program.typed_module->functions[1].body->instructions[i];
+    CHECK(direct_call && direct_call->integer_immediate ==
+              (int64_t)program.typed_module->functions[0].symbol_id &&
+          direct_call->target_true == 0 && direct_call->operand1_id == 0 &&
+          direct_call->operand2_id == 0 && direct_call->call_argument_count == 2 &&
+          direct_call->call_argument_offset + direct_call->call_argument_count <=
+              program.typed_module->functions[1].body->call_argument_count &&
+          program.typed_module->functions[1].body->call_arguments[
+              direct_call->call_argument_offset] == 1 &&
+          program.typed_module->functions[1].body->call_arguments[
+              direct_call->call_argument_offset + 1] == 1 &&
+          direct_call->result_type == MILENA_IR_TYPE_F64 &&
+          ir_span_matches_hir(&direct_call->source_span,
+              &program.hir->functions[1].body[1]->as.expression->span),
+          "una llamada directa debe enlazar symbol ID y todo el vector SSA tipado");
+    {
+        const int64_t saved_target = direct_call->integer_immediate;
+        direct_call->integer_immediate = UINT32_MAX;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar un symbol ID válido pero desconocido en el módulo");
+        direct_call->integer_immediate = 0;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar una llamada sin target estable");
+        direct_call->integer_immediate = saved_target;
+        const size_t saved_offset = direct_call->call_argument_offset;
+        direct_call->call_argument_offset = program.typed_module->functions[1]
+            .body->call_argument_count;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar segmentos de argumentos fuera de límites");
+        direct_call->call_argument_offset = saved_offset;
+        const size_t saved_arity = direct_call->call_argument_count;
+        direct_call->call_argument_count = 1;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe comparar la aridad completa con la firma del destino");
+        direct_call->call_argument_count = saved_arity;
+        const size_t first_argument_index = direct_call->call_argument_offset;
+        const uint32_t saved_argument = program.typed_module->functions[1]
+            .body->call_arguments[first_argument_index];
+        program.typed_module->functions[1].body->call_arguments[
+            first_argument_index] = 2; /* The caller's BOOL local, not its F64 parameter. */
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar argumentos con tipo distinto a la firma");
+        program.typed_module->functions[1].body->call_arguments[
+            first_argument_index] = saved_argument;
+        const size_t second_argument_index = first_argument_index + 1;
+        const uint32_t saved_second_argument = program.typed_module->functions[1]
+            .body->call_arguments[second_argument_index];
+        program.typed_module->functions[1].body->call_arguments[
+            second_argument_index] = 2; /* The caller's BOOL local as parameter two. */
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe comprobar el tipo de cada argumento del vector");
+        program.typed_module->functions[1].body->call_arguments[
+            second_argument_index] = saved_second_argument;
+        const MilenaIRType saved_return = direct_call->result_type;
+        direct_call->result_type = MILENA_IR_TYPE_BOOL;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar el tipo de salida de llamada incorrecto");
+        direct_call->result_type = saved_return;
+        const MilenaIRType saved_callee_return = program.typed_module->functions[0]
+            .return_type;
+        program.typed_module->functions[0].return_type = MILENA_IR_TYPE_BOOL;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "la firma del destino debe coincidir con el output del cuerpo callee");
+        program.typed_module->functions[0].return_type = saved_callee_return;
+        CHECK(milena_ir_module_validate(program.typed_module, error.message,
+                                        sizeof(error.message)), error.message);
+    }
+    /* Invalid binding and signature annotations are negative source-to-IR
+       tests: parsing remains canonical, but no partial IR module is published. */
+    milena_canonical_program_release(&program);
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion duplicar(x) { retornar x + x; } "
+          "funcion principal(y) { retornar duplicar(y); }", &error) == MILENA_OK,
+          error.message);
+    MilenaHIRExpression *call_expression = program.hir->functions[1]
+        .body[0]->as.expression;
+    const size_t saved_symbol = call_expression->resolved_symbol_id;
+    call_expression->resolved_symbol_id = UINT32_MAX;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir &&
+          strstr(error.message, "unresolved") != NULL,
+          "una llamada con identidad HIR no resuelta debe fallar cerrado");
+    call_expression->resolved_symbol_id = saved_symbol;
+    const size_t saved_argument_count = call_expression->as.call.argument_count;
+    call_expression->as.call.argument_count = 2;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir,
+          "la aridad HIR inválida debe fallar sin publicar módulo parcial");
+    call_expression->as.call.argument_count = saved_argument_count;
+    call_expression->as.call.arguments[0]->value_type = MILENA_HIR_BOOLEAN;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir,
+          "el lowering debe rechazar argumentos de llamada con tipo incorrecto");
+    call_expression->as.call.arguments[0]->value_type = MILENA_HIR_NUMBER;
+    /* Turn the direct call into a resolved self-edge to exercise the explicit
+       recursion boundary independently of frontend recursion inference. */
+    call_expression->resolved_symbol_id = program.hir->functions[1].resolved_symbol_id;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && !program.typed_module && !program.typed_ir &&
+          strstr(error.message, "recursive") != NULL,
+          "la recursión directa debe rechazarse explícitamente y sin IR parcial");
+    milena_canonical_program_release(&program);
+    /* Keep the zero-, one-, and two-argument ABI cases working with the new
+       vector representation, including zero-length and adjacent slices. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion cero() { retornar 0; } "
+          "funcion uno(x) { retornar x + 1; } "
+          "funcion dos(x, y) { retornar x + y; } "
+          "funcion usar(x, y) { variable a = cero(); variable b = uno(x); "
+          "retornar dos(a, b); }", &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    {
+        MilenaIRProgram *body = program.typed_module->functions[3].body;
+        size_t seen = 0;
+        const size_t expected_counts[3] = {0, 1, 2};
+        for (size_t i = 0; i < body->count; ++i) {
+            const MilenaIRInstruction *instruction = &body->instructions[i];
+            if (instruction->opcode != MILENA_IR_CALL) continue;
+            CHECK(seen < 3 && instruction->call_argument_count ==
+                  expected_counts[seen],
+                  "las llamadas de aridad cero, uno y dos deben conservar su aridad");
+            ++seen;
+        }
+        CHECK(seen == 3 && body->call_argument_count == 3,
+              "los slices de aridad cero/uno/dos deben coexistir sin huecos incorrectos");
+    }
+    milena_canonical_program_release(&program);
+
+    /* Three-argument direct calls preserve every SSA argument and verify each
+       value against the destination's full signature on the canonical route. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion sumar_tres(a, b, c) { retornar a + b + c; } "
+          "funcion usar_tres(x, y, z) { variable listo = verdadero; "
+          "retornar sumar_tres(x, y, z); }", &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    MilenaIRProgram *three_body = program.typed_module->functions[1].body;
+    MilenaIRInstruction *three_call = NULL;
+    for (size_t i = 0; i < three_body->count; ++i)
+        if (three_body->instructions[i].opcode == MILENA_IR_CALL)
+            three_call = &three_body->instructions[i];
+    CHECK(program.typed_module->functions[0].parameter_count == 3 &&
+          three_call && three_call->integer_immediate ==
+              (int64_t)program.typed_module->functions[0].symbol_id &&
+          three_call->call_argument_count == 3 &&
+          three_call->call_argument_offset <= three_body->call_argument_count &&
+          three_call->call_argument_count <= three_body->call_argument_count -
+              three_call->call_argument_offset &&
+          three_body->call_arguments[three_call->call_argument_offset] == 1 &&
+          three_body->call_arguments[three_call->call_argument_offset + 1] == 2 &&
+          three_body->call_arguments[three_call->call_argument_offset + 2] == 3,
+          "una llamada de tres argumentos conserva los tres IDs SSA en orden");
+    {
+        size_t third = three_call->call_argument_offset + 2;
+        uint32_t saved_id = three_body->call_arguments[third];
+        three_body->call_arguments[third] = 4; /* The caller's BOOL local. */
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe comprobar SSA y tipo para cada argumento, incluso el tercero");
+        three_body->call_arguments[third] = saved_id;
+        size_t saved_count = three_call->call_argument_count;
+        three_call->call_argument_count = 4;
+        CHECK(!milena_ir_module_validate(program.typed_module, error.message,
+                                         sizeof(error.message)),
+              "el verificador debe rechazar conteos malformados fuera del slice de argumentos");
+        three_call->call_argument_count = saved_count;
+        CHECK(milena_ir_module_validate(program.typed_module, error.message,
+                                        sizeof(error.message)), error.message);
+    }
+    MilenaHIRExpression *three_call_expression = program.hir->functions[1]
+        .body[1]->as.expression;
+    MilenaIRModule *previous_valid_module = program.typed_module;
+    MilenaIRProgram *previous_valid_ir = program.typed_ir;
+    size_t valid_three_count = three_call_expression->as.call.argument_count;
+    three_call_expression->as.call.argument_count = 2;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_module == previous_valid_module &&
+          program.typed_ir == previous_valid_ir &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)),
+          "un fallo de aridad no publica IR parcial ni destruye el módulo previo válido");
+    three_call_expression->as.call.argument_count = valid_three_count;
+    MilenaHIRValueType saved_third_type = three_call_expression
+        ->as.call.arguments[2]->value_type;
+    three_call_expression->as.call.arguments[2]->value_type = MILENA_HIR_BOOLEAN;
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_ERR_UNSUPPORTED && program.typed_module == previous_valid_module &&
+          program.typed_ir == previous_valid_ir &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)),
+          "un tipo de argumento inválido no publica ni altera el módulo previo válido");
+    three_call_expression->as.call.arguments[2]->value_type = saved_third_type;
+    milena_canonical_program_release(&program);
+
+    /* Forward calls use the same full vector and stable resolved symbol ID. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion usar_tres(x, y, z) { retornar sumar_tres(x, y, z); } "
+          "funcion sumar_tres(a, b, c) { retornar a + b + c; }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    MilenaIRProgram *forward_body = program.typed_module->functions[0].body;
+    MilenaIRInstruction *forward_ir_call = NULL;
+    for (size_t i = 0; i < forward_body->count; ++i)
+        if (forward_body->instructions[i].opcode == MILENA_IR_CALL)
+            forward_ir_call = &forward_body->instructions[i];
+    CHECK(forward_ir_call && forward_ir_call->integer_immediate ==
+              (int64_t)program.typed_module->functions[1].symbol_id &&
+          forward_ir_call->call_argument_count == 3 &&
+          forward_body->call_arguments[forward_ir_call->call_argument_offset] == 1 &&
+          forward_body->call_arguments[forward_ir_call->call_argument_offset + 1] == 2 &&
+          forward_body->call_arguments[forward_ir_call->call_argument_offset + 2] == 3,
+          "la llamada adelantada enlaza symbol ID y todos los argumentos SSA");
+    CHECK(milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    milena_canonical_program_release(&program);
+
+    /* The sole canonical Spanish frontend route lowers, serializes and executes
+       only its verified typed bytecode in the internal reference VM. */
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program,
+          "funcion sumar_tres(a, b, c) { retornar a + b + c; } "
+          "funcion principal() { retornar sumar_tres(1, 2, 3); }",
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module &&
+          milena_ir_module_validate(program.typed_module, error.message,
+                                    sizeof(error.message)), error.message);
+    uint32_t entry_symbol = 0;
+    for (size_t i = 0; i < program.typed_module->function_count; ++i)
+        if (strcmp(program.typed_module->functions[i].name, "principal") == 0)
+            entry_symbol = program.typed_module->functions[i].symbol_id;
+    CHECK(entry_symbol != 0, "el frontend español debe conservar la identidad de principal");
+    uint8_t *canonical_bytecode = NULL;
+    size_t canonical_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(program.typed_module,
+          &canonical_bytecode, &canonical_bytecode_size, error.message,
+          sizeof(error.message)), error.message);
+    char canonical_vm_error[256] = {0};
+    CHECK(run_vm_case(&program, canonical_bytecode, canonical_bytecode_size,
+          "principal", NULL, 0, MILENA_IR_TYPE_F64, 6.0, false,
+          canonical_vm_error, sizeof(canonical_vm_error)), canonical_vm_error);
+    free(canonical_bytecode);
+    milena_canonical_program_release(&program);
+
+    /* Exercise every currently lowered scalar arithmetic/comparison operator,
+       assignment merges with and without sino, nested conditionals, and terminal
+       returns through the verified VM; compare all results with the legacy interpreter. */
+    milena_canonical_program_init(&program);
+    const char *scalar_vm_source =
+        "funcion sumar(a, b) { retornar a + b; } "
+        "funcion restar(a, b) { retornar a - b; } "
+        "funcion multiplicar(a, b) { retornar a * b; } "
+        "funcion dividir(a, b) { retornar a / b; } "
+        "funcion igual(a, b) { si (a == b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion distinto(a, b) { si (a != b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion menor(a, b) { si (a < b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion menor_igual(a, b) { si (a <= b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion mayor(a, b) { si (a > b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion mayor_igual(a, b) { si (a >= b) { retornar 1; } "
+        "sino { retornar 0; } } "
+        "funcion elegir(x, y) { variable resultado = 0; "
+        "si (x > y) { resultado = x; } sino { resultado = y; } "
+        "retornar resultado; } "
+        "funcion sin_sino(x, y) { variable resultado = y; "
+        "si (x > 0) { resultado = x; } retornar resultado; } "
+        "funcion clasificar(x) { variable nivel = 0; "
+        "si (x > 0) { si (x > 10) { nivel = 2; } sino { nivel = 1; } } "
+        "sino { nivel = 0; } retornar nivel; } "
+        "funcion positivo(x) { si (x > 0) { retornar x; } "
+        "sino { retornar 0; } } "
+        "funcion booleano_local(x) { variable listo = x > 0; "
+        "si (listo) { retornar 1; } sino { retornar 0; } }";
+    CHECK(milena_canonical_program_parse(&program, scalar_vm_source, &error) ==
+              MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&program, &error) ==
+              MILENA_OK && program.typed_module, error.message);
+    uint8_t *scalar_bytecode = NULL;
+    size_t scalar_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(program.typed_module, &scalar_bytecode,
+          &scalar_bytecode_size, error.message, sizeof(error.message)),
+          error.message);
+    const struct {
+        const char *name;
+        double arguments[2];
+        size_t argument_count;
+        MilenaIRType result_type;
+        double expected_number;
+        bool expected_boolean;
+    } scalar_cases[] = {
+        {"sumar", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 9.0, false},
+        {"restar", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 3.0, false},
+        {"multiplicar", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 18.0, false},
+        {"dividir", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 2.0, false},
+        {"igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"igual", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 0.0, false},
+        {"distinto", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"menor", {3.0, 6.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"menor_igual", {3.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"mayor", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"mayor_igual", {6.0, 6.0}, 2u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"elegir", {6.0, 3.0}, 2u, MILENA_IR_TYPE_F64, 6.0, false},
+        {"elegir", {2.0, 9.0}, 2u, MILENA_IR_TYPE_F64, 9.0, false},
+        {"sin_sino", {5.0, 9.0}, 2u, MILENA_IR_TYPE_F64, 5.0, false},
+        {"sin_sino", {-1.0, 9.0}, 2u, MILENA_IR_TYPE_F64, 9.0, false},
+        {"clasificar", {11.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 2.0, false},
+        {"clasificar", {5.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"clasificar", {-1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false},
+        {"positivo", {2.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 2.0, false},
+        {"positivo", {-2.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false},
+        {"booleano_local", {1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 1.0, false},
+        {"booleano_local", {-1.0, 0.0}, 1u, MILENA_IR_TYPE_F64, 0.0, false}
+    };
+    const size_t scalar_case_count = sizeof(scalar_cases) / sizeof(scalar_cases[0]);
+    size_t oracle_capacity = strlen(scalar_vm_source) + scalar_case_count * 128u + 1u;
+    char *oracle_source = (char *)malloc(oracle_capacity);
+    CHECK(oracle_source != NULL, "no se pudo crear la fuente de referencia diferencial");
+    size_t oracle_length = strlen(scalar_vm_source);
+    memcpy(oracle_source, scalar_vm_source, oracle_length + 1u);
+    for (size_t i = 0; i < scalar_case_count; ++i) {
+        int written = snprintf(oracle_source + oracle_length,
+                               oracle_capacity - oracle_length,
+                               " variable resultado_diferencial_%zu = %s(",
+                               i, scalar_cases[i].name);
+        CHECK(written > 0 && (size_t)written < oracle_capacity - oracle_length,
+              "se desbordó la fuente de referencia diferencial");
+        oracle_length += (size_t)written;
+        for (size_t a = 0; a < scalar_cases[i].argument_count; ++a) {
+            if (a) {
+                written = snprintf(oracle_source + oracle_length,
+                                   oracle_capacity - oracle_length, ", ");
+                CHECK(written > 0 &&
+                      (size_t)written < oracle_capacity - oracle_length,
+                      "se desbordó la lista de argumentos diferencial");
+                oracle_length += (size_t)written;
+            }
+            double argument = scalar_cases[i].arguments[a];
+            written = argument < 0.0 ?
+                snprintf(oracle_source + oracle_length,
+                         oracle_capacity - oracle_length, "0 - %.17g", -argument) :
+                snprintf(oracle_source + oracle_length,
+                         oracle_capacity - oracle_length, "%.17g", argument);
+            CHECK(written > 0 && (size_t)written < oracle_capacity - oracle_length,
+                  "se desbordó un argumento diferencial");
+            oracle_length += (size_t)written;
+        }
+        written = snprintf(oracle_source + oracle_length,
+                           oracle_capacity - oracle_length, "); ");
+        CHECK(written > 0 && (size_t)written < oracle_capacity - oracle_length,
+              "se desbordó una llamada diferencial");
+        oracle_length += (size_t)written;
+    }
+
+    MilenaCanonicalProgram reference_program;
+    milena_canonical_program_init(&reference_program);
+    CHECK(milena_canonical_program_parse(&reference_program, oracle_source,
+                                         &error) == MILENA_OK, error.message);
+    Interpreter reference_interpreter = {0};
+    CHECK(interpreter_init(&reference_interpreter, reference_program.ast),
+          "no se pudo inicializar el intérprete de referencia");
+    CHECK(interpreter_run(&reference_interpreter),
+          reference_interpreter.error.message[0] ?
+              reference_interpreter.error.message :
+              "falló el intérprete de referencia escalar");
+
+    char scalar_vm_error[256] = {0};
+    for (size_t i = 0; i < scalar_case_count; ++i) {
+        char oracle_name[48];
+        double reference_result = 0.0;
+        int name_length = snprintf(oracle_name, sizeof(oracle_name),
+                                   "resultado_diferencial_%zu", i);
+        CHECK(name_length > 0 && (size_t)name_length < sizeof(oracle_name),
+              "el nombre temporal diferencial no cabe");
+        CHECK(interpreter_get_number(&reference_interpreter, oracle_name,
+                                     &reference_result),
+              "el intérprete de referencia no publicó un resultado");
+        CHECK(reference_result == scalar_cases[i].expected_number,
+              "el fixture del intérprete no coincide con el resultado esperado");
+        CHECK(run_vm_case(&program, scalar_bytecode, scalar_bytecode_size,
+              scalar_cases[i].name, scalar_cases[i].arguments,
+              scalar_cases[i].argument_count, scalar_cases[i].result_type,
+              reference_result, scalar_cases[i].expected_boolean,
+              scalar_vm_error, sizeof(scalar_vm_error)), scalar_vm_error);
+    }
+    interpreter_destroy(&reference_interpreter);
+    milena_canonical_program_release(&reference_program);
+    free(oracle_source);
+    free(scalar_bytecode);
+    milena_canonical_program_release(&program);
+
+    /* Differential runtime failure: both reference interpreter and verified VM
+       reject division by zero; the VM keeps the source expression span. */
+    /* A second function selects module lowering; bytecode is encoded from the
+       typed module, while a single function currently lowers to a body only. */
+    const char *runtime_error_source =
+        "funcion dividir(x) { retornar 1 / x; } "
+        "funcion delegar(x) { retornar dividir(x); }";
+    MilenaCanonicalProgram runtime_error_program;
+    milena_canonical_program_init(&runtime_error_program);
+    CHECK(milena_canonical_program_parse(&runtime_error_program,
+          runtime_error_source, &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&runtime_error_program,
+          &error) == MILENA_OK && runtime_error_program.typed_module,
+          error.message);
+    uint8_t *runtime_error_bytecode = NULL;
+    size_t runtime_error_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(runtime_error_program.typed_module,
+          &runtime_error_bytecode, &runtime_error_bytecode_size,
+          error.message, sizeof(error.message)), error.message);
+    const uint32_t runtime_error_entry =
+        runtime_error_program.typed_module->functions[0].symbol_id;
+    MilenaVMValue zero_argument = {MILENA_IR_TYPE_F64, {.f64 = 0.0}};
+    VirtualMachine runtime_error_vm = {0};
+    CHECK(vm_init_bytecode(&runtime_error_vm, runtime_error_bytecode,
+          runtime_error_bytecode_size, runtime_error_entry, &zero_argument, 1u,
+          NULL), vm_bytecode_error(&runtime_error_vm) ?
+              vm_bytecode_error(&runtime_error_vm) :
+              "no se pudo inicializar la VM de error diferencial");
+    CHECK(!vm_run(&runtime_error_vm),
+          "la VM debe rechazar división por cero en el bytecode verificado");
+    const char *division_expression = strstr(runtime_error_source, "1 / x");
+    CHECK(division_expression != NULL && runtime_error_vm.has_error &&
+          runtime_error_vm.error.code == MILENA_ERR_INTERNAL &&
+          runtime_error_vm.error.category == MILENA_ERROR_EJECUCION &&
+          runtime_error_vm.error.line == 1u &&
+          runtime_error_vm.error.column ==
+              (size_t)(division_expression - runtime_error_source) + 1u,
+          "el error de VM debe conservar categoría y span de la expresión fallida");
+    const char *runtime_error_message = vm_bytecode_error(&runtime_error_vm);
+    CHECK(runtime_error_message != NULL &&
+          strstr(runtime_error_message, "division by zero") != NULL,
+          "el diagnóstico textual anterior de VM debe conservarse");
+    MilenaVMValue failed_result = {0};
+    CHECK(!vm_get_bytecode_result(&runtime_error_vm, &failed_result),
+          "un fallo de VM no debe publicar resultado parcial");
+    vm_destroy(&runtime_error_vm);
+    free(runtime_error_bytecode);
+    milena_canonical_program_release(&runtime_error_program);
+
+    const char *reference_error_source =
+        "funcion dividir(x) { retornar 1 / x; } "
+        "variable salida_error = dividir(0);";
+    MilenaCanonicalProgram reference_error_program;
+    milena_canonical_program_init(&reference_error_program);
+    CHECK(milena_canonical_program_parse(&reference_error_program,
+          reference_error_source, &error) == MILENA_OK, error.message);
+    Interpreter reference_error_interpreter = {0};
+    CHECK(interpreter_init(&reference_error_interpreter,
+          reference_error_program.ast),
+          "no se pudo inicializar el intérprete de errores de referencia");
+    CHECK(!interpreter_run(&reference_error_interpreter),
+          "el intérprete de referencia también debe rechazar división por cero");
+    interpreter_destroy(&reference_error_interpreter);
+    milena_canonical_program_release(&reference_error_program);
+
+    /* Differential runtime failure for finite inputs whose multiplication
+       overflows: both runtimes reject it, and the VM preserves the span. */
+    const char *overflow_source =
+        "funcion multiplicar(x) { retornar x * 2; } "
+        "funcion delegar(x) { retornar multiplicar(x); }";
+    MilenaCanonicalProgram overflow_program;
+    milena_canonical_program_init(&overflow_program);
+    CHECK(milena_canonical_program_parse(&overflow_program, overflow_source,
+          &error) == MILENA_OK, error.message);
+    CHECK(milena_canonical_program_compile_scalar_ir(&overflow_program,
+          &error) == MILENA_OK && overflow_program.typed_module,
+          error.message);
+    uint8_t *overflow_bytecode = NULL;
+    size_t overflow_bytecode_size = 0;
+    CHECK(milena_bytecode_encode_module(overflow_program.typed_module,
+          &overflow_bytecode, &overflow_bytecode_size, error.message,
+          sizeof(error.message)), error.message);
+    const uint32_t overflow_entry =
+        overflow_program.typed_module->functions[0].symbol_id;
+    MilenaVMValue maximum_argument = {
+        MILENA_IR_TYPE_F64, {.f64 = 1.7976931348623157e308}
+    };
+    VirtualMachine overflow_vm = {0};
+    CHECK(vm_init_bytecode(&overflow_vm, overflow_bytecode,
+          overflow_bytecode_size, overflow_entry, &maximum_argument, 1u, NULL),
+          vm_bytecode_error(&overflow_vm) ? vm_bytecode_error(&overflow_vm) :
+          "no se pudo inicializar la VM de overflow diferencial");
+    CHECK(!vm_run(&overflow_vm),
+          "la VM debe rechazar resultados numéricos no finitos");
+    const char *overflow_expression = strstr(overflow_source, "x * 2");
+    CHECK(overflow_expression != NULL && overflow_vm.has_error &&
+          overflow_vm.error.code == MILENA_ERR_INTERNAL &&
+          overflow_vm.error.category == MILENA_ERROR_EJECUCION &&
+          overflow_vm.error.line == 1u &&
+          overflow_vm.error.column ==
+              (size_t)(overflow_expression - overflow_source) + 1u,
+          "el error de overflow debe conservar categoría y span de origen");
+    const char *overflow_message = vm_bytecode_error(&overflow_vm);
+    CHECK(overflow_message != NULL && strstr(overflow_message, "not finite") != NULL,
+          "la VM debe diagnosticar el resultado numérico no finito");
+    MilenaVMValue overflow_result = {0};
+    CHECK(!vm_get_bytecode_result(&overflow_vm, &overflow_result),
+          "el overflow no debe publicar un resultado parcial");
+    vm_destroy(&overflow_vm);
+    free(overflow_bytecode);
+    milena_canonical_program_release(&overflow_program);
+
+    const char *reference_overflow_source =
+        "funcion multiplicar(x) { retornar x * 2; } "
+        "variable desbordamiento = multiplicar(1.7976931348623157e308);";
+    MilenaCanonicalProgram reference_overflow_program;
+    milena_canonical_program_init(&reference_overflow_program);
+    CHECK(milena_canonical_program_parse(&reference_overflow_program,
+          reference_overflow_source, &error) == MILENA_OK, error.message);
+    Interpreter reference_overflow_interpreter = {0};
+    CHECK(interpreter_init(&reference_overflow_interpreter,
+          reference_overflow_program.ast),
+          "no se pudo iniciar el intérprete de overflow diferencial");
+    CHECK(!interpreter_run(&reference_overflow_interpreter),
+          "el intérprete de referencia también debe rechazar overflow no finito");
+    interpreter_destroy(&reference_overflow_interpreter);
+    milena_canonical_program_release(&reference_overflow_program);
+
+    /* Arrow's typed contract now owns source, projection, filter, and limits
+     * independently of AST storage; strict compiler input still waits for IR
+     * lowering and portable bytecode. */
+    const char *arrow_source =
+        ".analisis arrow_hir { "
+        "variable id numerica "
+        "datos desde \"entrada.arrow\" formato arrow_stream "
+        "procesar por lotes de 32 filas "
+        "con lote hasta 33554432 bytes con columnas de 32 "
+        "con filas hasta 100000 con tiempo hasta 30000 ms "
+        "con bytes hasta 67108864 con salida hasta 67108864 bytes "
+        "filtrar \"id\" > 10; "
+        "proyectar { \"id\" } "
+        "guardar resultado en \"salida.arrow\" }";
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, arrow_source, &error) ==
+              MILENA_OK, error.message);
+    CHECK(program.arrow_hir != NULL && program.hir == NULL &&
+          program.data_hir == NULL,
+          "Arrow IPC debe conservar una HIR tipada separada de las HIR escalar y tabular");
+    CHECK(strcmp(program.arrow_hir->source_path, "entrada.arrow") == 0 &&
+          strcmp(program.arrow_hir->output_path, "salida.arrow") == 0 &&
+          program.arrow_hir->batch_rows == 32u &&
+          program.arrow_hir->max_batch_bytes == 33554432u &&
+          program.arrow_hir->max_rows == 100000u &&
+          program.arrow_hir->max_columns == 32u &&
+          program.arrow_hir->max_input_bytes == 67108864u &&
+          program.arrow_hir->max_output_bytes == 67108864u &&
+          program.arrow_hir->max_elapsed_milliseconds == 30000.0,
+          "la HIR Arrow debe poseer rutas y límites configurados");
+    CHECK(program.arrow_hir->projection_count == 1u &&
+          strcmp(program.arrow_hir->projections[0].name, "id") == 0 &&
+          program.arrow_hir->projections[0].type == MILENA_ARROW_HIR_NUMERIC &&
+          program.arrow_hir->has_filter &&
+          strcmp(program.arrow_hir->filter.column, "id") == 0 &&
+          program.arrow_hir->filter.kind ==
+              MILENA_ARROW_HIR_FILTER_NUMERIC_GREATER &&
+          program.arrow_hir->filter.numeric_threshold == 10.0,
+          "la HIR Arrow debe tipar proyección y filtro");
+    const ASTNode *arrow_analysis = program.ast->children[0];
+    const ASTNode *arrow_source_node = arrow_analysis->children[1];
+    const ASTNode *arrow_filter_node = NULL;
+    for (size_t i = 0; i < arrow_analysis->child_count; ++i)
+        if (arrow_analysis->children[i]->type == AST_STREAM_FILTER)
+            arrow_filter_node = arrow_analysis->children[i];
+    CHECK(arrow_filter_node &&
+          program.arrow_hir->source_path != arrow_source_node->value &&
+          program.arrow_hir->projections[0].name !=
+              arrow_analysis->children[arrow_analysis->child_count - 2]->children[0]->value &&
+          program.arrow_hir->filter.column != arrow_filter_node->value,
+          "la HIR Arrow no debe tomar ownership ni depender de strings del AST");
+    input = (MilenaCanonicalCompilerInput){0};
+    CHECK(milena_canonical_compatibility_input(&program, &input, &error) ==
+              MILENA_OK && input.arrow_hir == program.arrow_hir &&
+          input.ast == program.ast && input.hir == NULL && input.data_hir == NULL,
+          "la vista de compatibilidad debe exponer la HIR Arrow prestada");
+    input = (MilenaCanonicalCompilerInput){0};
+    CHECK(milena_canonical_hir_input(&program, &input, &error) ==
+              MILENA_ERR_UNSUPPORTED && input.ast == NULL &&
+          input.arrow_hir == NULL &&
+          strstr(error.message, "no representa todavía el nodo") != NULL,
+          "la entrada estricta debe esperar al lowering HIR→IR real");
+    milena_canonical_program_release(&program);
+    CHECK(program.arrow_hir == NULL,
+          "liberar el programa canónico debe liberar la HIR Arrow");
+
+    const char *arrow_invalid_source =
+        ".analisis arrow_tipo_invalido { "
+        "variable id binaria "
+        "datos desde \"entrada.arrow\" formato arrow_stream "
+        "procesar por lotes de 32 filas "
+        "con lote hasta 33554432 bytes con columnas de 32 "
+        "con filas hasta 100000 con tiempo hasta 30000 ms "
+        "con bytes hasta 67108864 con salida hasta 67108864 bytes "
+        "proyectar { \"id\" } "
+        "guardar resultado en \"salida.arrow\" }";
+    milena_canonical_program_init(&program);
+    CHECK(milena_canonical_program_parse(&program, arrow_invalid_source, &error) ==
+              MILENA_ERR_PARSE && program.ast == NULL && program.arrow_hir == NULL &&
+          strstr(error.message, "Cada campo Arrow proyectado") != NULL,
+          "el frontend canónico debe rechazar el tipo Arrow inválido con diagnóstico tipado");
+    milena_canonical_program_release(&program);
+
+    puts("OK: canonical compiler boundary, interprocedural scalar typed IR, typed data HIR, Arrow owned HIR, binding, execution and diagnostics");
     return 0;
 }
+

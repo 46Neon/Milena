@@ -17,8 +17,8 @@ void parser_release(Parser *parser) {
 }
 
 void parser_error(Parser *parser, const char *msg) {
-    size_t line = parser->current.line > 0 ? (size_t)parser->current.line : 0;
-    size_t column = parser->current.column > 0 ? (size_t)parser->current.column : 0;
+    size_t line = parser->current.line;
+    size_t column = parser->current.column;
     milena_error_set(&parser->error, MILENA_ERR_PARSE, line, column, 0, msg);
     parser->has_error = true;
 }
@@ -26,8 +26,8 @@ void parser_error(Parser *parser, const char *msg) {
 static void parser_error_at(Parser *parser, const Token *token,
                             const char *msg) {
     if (!parser || !token || !msg) return;
-    size_t line = token->line > 0 ? (size_t)token->line : 0;
-    size_t column = token->column > 0 ? (size_t)token->column : 0;
+    size_t line = token->line;
+    size_t column = token->column;
     milena_error_set(&parser->error, MILENA_ERR_PARSE, line, column, 0, msg);
     parser->has_error = true;
 }
@@ -1043,8 +1043,14 @@ static ASTNode *parse_arrow_projection(Parser *parser) {
     }
     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
+        Token field_token = parser->current;
         if (!parser_expect(parser, TOKEN_CADENA,
                            "La proyección Arrow requiere nombres de campo entre comillas")) break;
+        if (!parser->previous.lexeme[0]) {
+            parser_error_at(parser, &field_token,
+                "El campo proyectado Arrow no puede estar vacío");
+            break;
+        }
         ASTNode *field = ast_create_leaf(AST_COLUMNAR_FIELD, parser->previous.lexeme);
         if (!field || !parser_add_child(parser, projection, field,
                                         "Sin memoria para campo proyectado")) {
@@ -1058,10 +1064,19 @@ static ASTNode *parse_arrow_projection(Parser *parser) {
             break;
         }
     }
+    if (parser->has_error) {
+        ast_destroy(projection);
+        return NULL;
+    }
+    if (projection->child_count == 0) {
+        Token empty_projection = parser->current;
+        parser_error_at(parser, &empty_projection,
+                        "La proyección Arrow no puede estar vacía");
+        ast_destroy(projection);
+        return NULL;
+    }
     if (!parser_expect(parser, TOKEN_LLAVE_DER,
-                       "Se esperaba '}' después de la proyección") ||
-        projection->child_count == 0) {
-        if (!parser->has_error) parser_error(parser, "La proyección Arrow no puede estar vacía");
+                       "Se esperaba '}' después de la proyección")) {
         ast_destroy(projection);
         return NULL;
     }
@@ -1155,8 +1170,14 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 continue;
             }
             parser_advance(parser);
+            Token role_column_token = parser->current;
             if (!parser_expect(parser, TOKEN_CADENA,
                                "Se esperaba nombre de columna entre comillas")) continue;
+            if (!parser->previous.lexeme[0]) {
+                parser_error_at(parser, &role_column_token,
+                    "El nombre de columna del rol no puede estar vacío");
+                continue;
+            }
             char column_name[MAX_TOKEN_LEN];
             strncpy(column_name, parser->previous.lexeme, sizeof(column_name) - 1);
             column_name[sizeof(column_name) - 1] = '\0';
@@ -1233,9 +1254,13 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 }
             }
         } else if (parser_match(parser, TOKEN_KW_DATASET)) {
+            Token dataset_start = parser->current;
             Token source_start = parser->current;
             parser_advance(parser);
-            if (parser_match(parser, TOKEN_KW_CARGAR)) {
+            if (!parser_match(parser, TOKEN_KW_CARGAR)) {
+                parser_error_at(parser, &dataset_start,
+                                "Se esperaba 'cargar' después de dataset");
+            } else {
                 parser_advance(parser);
                 if (parser_match(parser, TOKEN_KW_DATOS)) {
                     parser_advance(parser);
@@ -1358,9 +1383,15 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_error(parser, "Comando desconocido en limpiar");
                         }
                     }
-                    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'"))
+                    if (parser->has_error) {
                         ast_destroy(limpiar);
-                    else if (limpiar && !ast_set_source_span(limpiar,
+                    } else if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
+                        ast_destroy(limpiar);
+                    } else if (limpiar && limpiar->child_count == 0) {
+                        ast_destroy(limpiar);
+                        parser_error_at(parser, &cleaning_start,
+                            "El bloque limpiar requiere al menos una orden");
+                    } else if (limpiar && !ast_set_source_span(limpiar,
                                 &cleaning_start, &parser->previous)) {
                         ast_destroy(limpiar);
                         parser_error(parser, "No se pudo registrar el origen del bloque limpiar");
@@ -1377,6 +1408,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                         if (parser_match(parser, TOKEN_NUMERAL)) {
+                            Token command_start = parser->current;
                             parser_advance(parser);
                             if (parser_match(parser, TOKEN_KW_TOTAL)) {
                                 Token command_start = parser->previous;
@@ -1395,7 +1427,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                                                   expression_token.lexeme)) {
                                             ast_destroy(total);
                                             parser_error_at(parser, &command_start,
-                                                "No se pudo estructurar el producto tipado de #total");
+                                                "No se pudo estructurar #total: la forma columna * columna es obligatoria");
                                             break;
                                         }
                                         if (!parser_expect(parser, TOKEN_PAR_DER,
@@ -1421,18 +1453,33 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 if (parser_match(parser, TOKEN_KW_EXTRAER)) parser_advance(parser);
                                 if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") ) {
                                     if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
+                                        if (strcmp(parser->previous.lexeme, "mes de fecha") != 0) {
+                                            parser_error_at(parser, &command_start,
+                                                "#periodo solo admite el payload \"mes de fecha\"");
+                                            break;
+                                        }
                                         if (!parser_add_child(parser, transformar, ast_create_leaf(AST_COMANDO_PERIODO, parser->previous.lexeme), "Sin memoria para comando periodo")) break;
                                         parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')'" );
                                     }
                                 }
+                            } else {
+                                parser_error_at(parser, &command_start,
+                                                "Comando desconocido en transformar");
+                                break;
                             }
                         } else {
                             parser_error(parser, "Comando desconocido en transformar");
                         }
                     }
-                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-                    if (transformar) parser_add_child(parser, node, transformar,
-                                                       "Sin memoria para el AST");
+                    if (parser->has_error) {
+                        ast_destroy(transformar);
+                    } else if (!parser_expect(parser, TOKEN_LLAVE_DER,
+                                              "Se esperaba '}'")) {
+                        ast_destroy(transformar);
+                    } else if (transformar) {
+                        parser_add_child(parser, node, transformar,
+                                         "Sin memoria para el AST");
+                    }
                 }
             } else if (parser_match(parser, TOKEN_KW_FILTRAR)) {
                 Token filter_start = parser->previous;
@@ -1478,6 +1525,18 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 "Sin memoria para estructurar el predicado numérico");
                             break;
                         }
+                        if (predicate_status == AST_FILTER_PREDICATE_INVALID) {
+                            ast_destroy(condition);
+                            parser_error_at(parser, &condition_start,
+                                "Predicado numérico inválido en #condicion");
+                            break;
+                        }
+                        if (filtrar->child_count != 0) {
+                            ast_destroy(condition);
+                            parser_error_at(parser, &condition_start,
+                                "El bloque filtrar admite una sola #condicion");
+                            break;
+                        }
                         if (!parser_expect(parser, TOKEN_PAR_DER,
                                            "Se esperaba ')' después de la condición")) {
                             ast_destroy(condition);
@@ -1509,11 +1568,19 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
                     ASTNode *agrupar = ast_create(AST_BLOQUE_AGRUPAR);
+                    if (!agrupar)
+                        parser_error(parser, "Sin memoria para bloque agrupar");
                     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
-                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                        if (parser_match(parser, TOKEN_COMA) ||
+                            parser_match(parser, TOKEN_PUNTO_Y_COMA)) {
                             parser_advance(parser);
                             continue;
+                        }
+                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                            parser_error(parser,
+                                         "Token desconocido en bloque agrupar");
+                            break;
                         }
                         parser_advance(parser);
                         if (parser_match(parser, TOKEN_KW_POR) ||
@@ -1653,22 +1720,35 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_error(parser, "Comando desconocido en agrupar");
                         }
                     }
-                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-                    if (agrupar && agrupar->child_count > 1) {
-                        if (!parser_add_child(parser, node, agrupar, "Sin memoria para bloque agrupar")) break;
+                    if (!parser->has_error)
+                        parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                    if (parser->has_error) {
+                        ast_destroy(agrupar);
+                    } else if (agrupar && agrupar->child_count > 1) {
+                        if (!parser_add_child(parser, node, agrupar,
+                                              "Sin memoria para bloque agrupar")) break;
+                    } else {
+                        ast_destroy(agrupar);
                     }
-                    else ast_destroy(agrupar);
                 }
             } else if (parser_match(parser, TOKEN_KW_RESUMIR)) {
                 parser_advance(parser);
                 if (parser_match(parser, TOKEN_KW_DATASET)) parser_advance(parser);
                 if (parser_expect(parser, TOKEN_LLAVE_IZQ, "Se esperaba '{'")) {
                     ASTNode *resumir = ast_create(AST_BLOQUE_RESUMIR);
+                    if (!resumir)
+                        parser_error(parser, "Sin memoria para bloque resumir");
                     while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                            !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
-                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                        if (parser_match(parser, TOKEN_COMA) ||
+                            parser_match(parser, TOKEN_PUNTO_Y_COMA)) {
                             parser_advance(parser);
                             continue;
+                        }
+                        if (!parser_match(parser, TOKEN_NUMERAL)) {
+                            parser_error(parser,
+                                         "Token desconocido en bloque resumir");
+                            break;
                         }
                         parser_advance(parser);
                         if (!(parser_match(parser, TOKEN_FUNCION_SUMA) ||
@@ -1703,11 +1783,16 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             }
                         }
                     }
-                    parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
-                    if (resumir && resumir->child_count > 0) {
-                        if (!parser_add_child(parser, node, resumir, "Sin memoria para bloque resumir")) break;
+                    if (!parser->has_error)
+                        parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                    if (parser->has_error) {
+                        ast_destroy(resumir);
+                    } else if (resumir && resumir->child_count > 0) {
+                        if (!parser_add_child(parser, node, resumir,
+                                              "Sin memoria para bloque resumir")) break;
+                    } else {
+                        ast_destroy(resumir);
                     }
-                    else ast_destroy(resumir);
                 }
             } else if (parser_match(parser, TOKEN_KW_EXPORTAR)) {
                 Token export_start = parser->current;
@@ -1732,11 +1817,15 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                 exportar = NULL;
                                 break;
                             }
-                        } else {
+                        } else if (parser_match(parser, TOKEN_COMA) ||
+                                   parser_match(parser, TOKEN_PUNTO_Y_COMA)) {
                             parser_advance(parser);
+                        } else {
+                            parser_error(parser, "Token desconocido en exportar");
                         }
                     }
-                    if (!parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
+                    if (parser->has_error ||
+                        !parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'")) {
                         ast_destroy(exportar);
                     } else if (exportar) {
                         if (!ast_set_source_span(exportar, &export_start,
@@ -1756,12 +1845,24 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                 /* Los bloques nombrados de análisis conservan la condición
                  * en el AST; no se ejecutan mediante clasificación textual. */
                 if (parser_is_identifier(parser)) {
+                    Token named_block_token = parser->current;
                     char named_block[MAX_TOKEN_LEN];
                     strncpy(named_block, parser->current.lexeme, sizeof(named_block) - 1);
                     named_block[sizeof(named_block) - 1] = '\0';
                     bool selecting = strcmp(named_block, "seleccionar") == 0;
                     bool joining = strcmp(named_block, "unir") == 0;
+                    bool filtering = strcmp(named_block, "filtrar") == 0;
+                    if (!selecting && !joining && !filtering) {
+                        parser_error_at(parser, &named_block_token,
+                                        "Bloque de análisis desconocido");
+                        break;
+                    }
                     parser_advance(parser);
+                    if (!parser_match(parser, TOKEN_LLAVE_IZQ)) {
+                        parser_error_at(parser, &named_block_token,
+                                        "Se esperaba '{' después del nombre del bloque");
+                        break;
+                    }
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
                         Token block_start = parser->previous;
@@ -1780,7 +1881,8 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                         while (!parser_match(parser, TOKEN_LLAVE_DER) &&
                                !parser_match(parser, TOKEN_EOF) && !parser->has_error) {
                             if (parser_match(parser, TOKEN_KW_DATASET) ||
-                                parser_match(parser, TOKEN_COMA)) {
+                                parser_match(parser, TOKEN_COMA) ||
+                                parser_match(parser, TOKEN_PUNTO_Y_COMA)) {
                                 parser_advance(parser);
                             } else if (parser_match(parser, TOKEN_PAR_IZQ)) {
                                 parser_advance(parser);
@@ -1884,31 +1986,84 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                         }
                                     }
                                 } else if (parser_match(parser, TOKEN_KW_CONDICION)) {
+                                    Token condition_start = parser->current;
+                                    if (!filtering) {
+                                        parser_error_at(parser, &condition_start,
+                                            "#condicion solo se admite dentro de .filtrar");
+                                        break;
+                                    }
+                                    if (filtrar->child_count != 0) {
+                                        parser_error_at(parser, &condition_start,
+                                            "El bloque filtrar admite una sola #condicion");
+                                        break;
+                                    }
                                     parser_advance(parser);
                                     if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('")) {
                                         if (parser_expect(parser, TOKEN_CADENA, "Se esperaba condición")) {
                                             ASTNode *condition = ast_create_leaf(
                                                 AST_COMANDO_CONDICION,
                                                 parser->previous.lexeme);
-                                            if (condition && filtrar && !parser_add_child(parser, filtrar, condition, "Sin memoria para condición")) break;
+                                            if (condition && filtering) {
+                                                if (!ast_set_source_span(condition,
+                                                        &condition_start, &parser->previous)) {
+                                                    ast_destroy(condition);
+                                                    parser_error_at(parser, &condition_start,
+                                                        "No se pudo registrar el origen de la condición");
+                                                    break;
+                                                }
+                                                ASTFilterPredicateStatus predicate_status =
+                                                    ast_set_filter_predicate(condition,
+                                                        parser->previous.lexeme);
+                                                if (predicate_status != AST_FILTER_PREDICATE_OK) {
+                                                    ast_destroy(condition);
+                                                    parser_error_at(parser, &condition_start,
+                                                        predicate_status == AST_FILTER_PREDICATE_MEMORY
+                                                            ? "Sin memoria para estructurar el predicado numérico"
+                                                            : "Predicado numérico inválido en #condicion");
+                                                    break;
+                                                }
+                                            }
+                                            if (!condition) {
+                                                parser_error(parser, "Sin memoria para condición");
+                                                break;
+                                            }
+                                            if (filtrar && !parser_add_child(parser, filtrar, condition,
+                                                    "Sin memoria para condición")) break;
                                             parser_expect(parser, TOKEN_PAR_DER, "Se esperaba ')' después de condición");
                                         }
                                     }
+                                } else {
+                                    parser_error(parser,
+                                        "Comando desconocido en bloque nombrado");
                                 }
                             } else {
-                                parser_advance(parser);
+                                parser_error(parser,
+                                    "Token desconocido en bloque nombrado");
                             }
                         }
-                        parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
+                        if (!parser->has_error)
+                            parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
                         Token block_end = parser->previous;
-                        if (filtrar && block_start.type != TOKEN_EOF &&
+                        if (!parser->has_error && filtrar &&
+                            block_start.type != TOKEN_EOF &&
                             block_end.type == TOKEN_LLAVE_DER)
                             (void)ast_set_source_span(filtrar, &block_start, &block_end);
-                        if (filtrar && filtrar->child_count > 0) {
+                        if (filtering && !parser->has_error && filtrar &&
+                            filtrar->child_count != 1) {
+                            parser_error_at(parser, &named_block_token,
+                                "El bloque filtrar requiere una sola #condicion válida");
+                        }
+                        if (filtrar && filtrar->child_count > 0 && !parser->has_error) {
                             if (!parser_add_child(parser, node, filtrar, "Sin memoria para bloque de filtro")) break;
                         }
                         else ast_destroy(filtrar);
                     }
+                } else {
+                    Token block_token = parser->current;
+                    parser_error_at(parser, &block_token,
+                        block_token.type == TOKEN_KW_VISUALIZAR
+                            ? "El bloque .visualizar está reservado y no se admite"
+                            : "Bloque de análisis desconocido");
                 }
             }
         } else {
@@ -2951,3 +3106,4 @@ ASTNode* parser_parse(Parser *parser) {
 ASTNode* parser_parse_statistical_call(Parser *parser) {
     return parse_statistical_call(parser, false);
 }
+
