@@ -329,9 +329,9 @@ La descripción más honesta es:
 
 No es solamente un ejercicio educativo, pero tampoco se presenta todavía como una plataforma industrial masiva ya consolidada. Es una base tecnológica real, verificable y en evolución hacia ese objetivo.
 
-## Compilación nativa AOT (subconjunto de fase 1)
+## Compilación nativa AOT experimental (Linux x86-64; Fase 6)
 
-En hosts POSIX con un compilador C17 disponible, `milena build programa.milena -o programa` genera un ejecutable nativo a partir de la IR tipada canónica verificada. No ejecuta ni empaqueta bytecode. El alcance está limitado a funciones escalares `F64`, comparaciones booleanas, CFG y llamadas internas verificadas; las operaciones no representadas se rechazan. Windows conserva el comando, pero el backend AOT no está habilitado allí. Consulta [el contrato y el subconjunto exacto de AOT](docs/NATIVE_AOT.md).
+`milena build programa.milena -o programa` emite directamente un ejecutable ELF64 solo en Linux x86-64; este backend no invoca compilador C, assembler, linker, VM ni intérprete. El subconjunto escalar admitido y sus límites están detallados en [el contrato AOT para Linux x86-64](docs/NATIVE_AOT_LINUX_X86_64.md). Windows, Android/Termux y otros targets no están soportados por este backend. Es una implementación parcial: no compila todo Milena ni cierra el gate de la Fase 6, que depende de completar las fases anteriores y validar paridad en los targets acordados.
 
 ## Contribuir
 
