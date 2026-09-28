@@ -1,0 +1,9 @@
+funcion principal() {
+    variable resultado = 0;
+    si (2 < 1) {
+        resultado = 41;
+    } sino {
+        resultado = 42;
+    }
+    retornar resultado;
+}

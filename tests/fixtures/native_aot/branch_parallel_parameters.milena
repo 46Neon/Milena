@@ -1,0 +1,12 @@
+funcion principal() {
+    variable x = 0;
+    variable y = 0;
+    si (1 < 2) {
+        x = 11;
+        y = 22;
+    } sino {
+        x = 33;
+        y = 44;
+    }
+    retornar x + y;
+}

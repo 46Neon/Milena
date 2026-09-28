@@ -127,15 +127,58 @@ fi
 grep -F 'máximo 8 argumentos F64' "$TEMP_DIR/too-many-args.err" >/dev/null
 [ "$(cat "$TEMP_DIR/preserved")" = 'keep-existing-output' ]
 
-# Control flow outside the small verified slice fails closed and preserves output.
-printf 'keep-existing-output\n' >"$TEMP_DIR/preserved"
-if "$MILENA" build "$FIXTURES/branches_calls.milena" -o "$TEMP_DIR/preserved" \
-    >"$TEMP_DIR/reject.out" 2>"$TEMP_DIR/reject.err"; then
-    echo 'AOT unexpectedly accepted unsupported control flow/calls' >&2
-    exit 1
-fi
-grep -E 'subconjunto AOT de un bloque|subconjunto ELF directo|AOT directo requiere' "$TEMP_DIR/reject.err" >/dev/null
-[ "$(cat "$TEMP_DIR/preserved")" = 'keep-existing-output' ]
+# Verified acyclic conditionals execute native Jcc/JMP code and transfer the
+# selected edge value into a block parameter. Compare both outcomes with VM IR.
+check_branch_case() {
+    fixture=$1; outcome=$2; expected=$3; name=$4
+    "$MILENA" build "$FIXTURES/$fixture" -o "$TEMP_DIR/$name"
+    [ -x "$TEMP_DIR/$name" ]
+    python3 - "$TEMP_DIR/$name" <<'PYCODE'
+import pathlib, sys
+code = pathlib.Path(sys.argv[1]).read_bytes()[120:]
+if (b'\x0f\x85' not in code or b'\xe9' not in code or
+        bytes.fromhex('66 0f 2e c1') not in code):
+    raise SystemExit('expected emitted F64 comparison and conditional/unconditional branch instructions')
+PYCODE
+    "$ROOT/tests/test_typed_bytecode" --aot-reference-branch "$outcome" \
+        >"$TEMP_DIR/$name.vm.out" 2>"$TEMP_DIR/$name.vm.err"
+    "$TEMP_DIR/$name" >"$TEMP_DIR/$name.native.out" 2>"$TEMP_DIR/$name.native.err"
+    cmp "$TEMP_DIR/$name.vm.out" "$TEMP_DIR/$name.native.out"
+    [ "$(cat "$TEMP_DIR/$name.native.out")" = "$expected" ]
+}
+check_branch_case branch_true_block_parameter.milena true 41 branch-true
+check_branch_case branch_false_block_parameter.milena false 42 branch-false
+
+# Two block parameters on each edge are copied as one parallel transfer.
+"$MILENA" build "$FIXTURES/branch_parallel_parameters.milena" -o "$TEMP_DIR/branch-parallel"
+"$ROOT/tests/test_typed_bytecode" --aot-reference-branch-parallel >"$TEMP_DIR/branch-parallel.vm.out" 2>"$TEMP_DIR/branch-parallel.vm.err"
+"$TEMP_DIR/branch-parallel" >"$TEMP_DIR/branch-parallel.native.out" 2>"$TEMP_DIR/branch-parallel.native.err"
+cmp "$TEMP_DIR/branch-parallel.vm.out" "$TEMP_DIR/branch-parallel.native.out"
+[ "$(cat "$TEMP_DIR/branch-parallel.native.out")" = '33' ]
+
+# Existing direct helper calls remain supported across an acyclic branch.
+"$MILENA" build "$FIXTURES/branches_calls.milena" -o "$TEMP_DIR/branches-calls"
+python3 - "$TEMP_DIR/branches-calls" <<'PYCODE'
+import pathlib, sys
+code = pathlib.Path(sys.argv[1]).read_bytes()[120:]
+if code.count(b'\xe8') < 2:
+    raise SystemExit('expected the branch-containing module to retain direct CALL rel32')
+PYCODE
+"$TEMP_DIR/branches-calls" >"$TEMP_DIR/branches-calls.native.out" 2>"$TEMP_DIR/branches-calls.native.err"
+[ "$(cat "$TEMP_DIR/branches-calls.native.out")" = '42' ]
+
+# A division-by-zero reached through a native branch matches the verified VM.
+"$MILENA" build "$FIXTURES/branch_division_by_zero.milena" -o "$TEMP_DIR/branch-div-zero"
+set +e
+"$ROOT/tests/test_typed_bytecode" --aot-reference-branch-div-zero >"$TEMP_DIR/branch-div.vm.out" 2>"$TEMP_DIR/branch-div.vm.err"
+BRANCH_VM_STATUS=$?
+"$TEMP_DIR/branch-div-zero" >"$TEMP_DIR/branch-div.native.out" 2>"$TEMP_DIR/branch-div.native.err"
+BRANCH_NATIVE_STATUS=$?
+set -e
+[ "$BRANCH_VM_STATUS" -eq 70 ]
+[ "$BRANCH_NATIVE_STATUS" -eq 70 ]
+grep -F 'division by zero' "$TEMP_DIR/branch-div.vm.err" >/dev/null
+grep -F 'Milena native runtime error: division by zero' "$TEMP_DIR/branch-div.native.err" >/dev/null
 
 if "$MILENA" build "$FIXTURES/no_principal.milena" -o "$TEMP_DIR/preserved" \
     >"$TEMP_DIR/no-entry.out" 2>"$TEMP_DIR/no-entry.err"; then
