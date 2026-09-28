@@ -442,6 +442,9 @@ static void data_hir_release(MilenaDataHIR *hir) {
     for (size_t i = 0; i < hir->declared_column_count; ++i)
         hir_column_ref_release(&hir->declared_schema[i]);
     free(hir->declared_schema);
+    for (size_t i = 0; i < hir->role_declaration_count; ++i)
+        hir_column_ref_release(&hir->role_declarations[i].column);
+    free(hir->role_declarations);
     for (size_t i = 0; i < hir->operation_count; ++i) {
         MilenaHIRDataOperation *op = &hir->operations[i];
         switch (op->kind) {
@@ -761,6 +764,42 @@ static bool hir_append_declared_column(MilenaDataHIR *hir,
     return true;
 }
 
+static HIRBuildResult hir_append_role_declaration(
+    MilenaDataHIR *hir, const ASTNode *node, MilenaHIRDataRole role) {
+    if (!hir || !node || !node->value || !node->value[0] ||
+        node->child_count != 0 || !node->type_name)
+        return HIR_BUILD_UNSUPPORTED;
+    const char *expected_type = role == MILENA_HIR_DATA_ROLE_CATEGORICAL_INPUT
+        ? "categorica" : "binaria";
+    if (strcmp(node->type_name, expected_type) != 0)
+        return HIR_BUILD_UNSUPPORTED;
+    for (size_t i = 0; i < hir->role_declaration_count; ++i) {
+        if (strcmp(hir->role_declarations[i].column.name, node->value) == 0)
+            return HIR_BUILD_UNSUPPORTED;
+    }
+    for (size_t i = 0; i < hir->declared_column_count; ++i) {
+        if (strcmp(hir->declared_schema[i].name, node->value) == 0)
+            return HIR_BUILD_UNSUPPORTED;
+    }
+    if (hir->role_declaration_count >=
+        SIZE_MAX / sizeof(*hir->role_declarations))
+        return HIR_BUILD_MEMORY;
+    MilenaHIRColumnRef column = hir_unresolved_column(node->value, node);
+    if (!column.name) return HIR_BUILD_MEMORY;
+    size_t count = hir->role_declaration_count + 1;
+    MilenaHIRDataRoleDeclaration *grown = (MilenaHIRDataRoleDeclaration *)realloc(
+        hir->role_declarations, count * sizeof(*grown));
+    if (!grown) {
+        hir_column_ref_release(&column);
+        return HIR_BUILD_MEMORY;
+    }
+    hir->role_declarations = grown;
+    grown[hir->role_declaration_count].column = column;
+    grown[hir->role_declaration_count].role = role;
+    hir->role_declaration_count = count;
+    return HIR_BUILD_OK;
+}
+
 static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output) {
     *output = NULL;
     if (!ast || ast->type != AST_PROGRAMA || ast->child_count != 1 ||
@@ -805,6 +844,19 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             if (!hir->source.path) { data_hir_release(hir); return HIR_BUILD_MEMORY; }
             continue;
         }
+        if (node->type == AST_DECLARACION_ENTRADA ||
+            node->type == AST_DECLARACION_SALIDA) {
+            MilenaHIRDataRole role = node->type == AST_DECLARACION_ENTRADA
+                ? MILENA_HIR_DATA_ROLE_CATEGORICAL_INPUT
+                : MILENA_HIR_DATA_ROLE_BINARY_OUTPUT;
+            HIRBuildResult role_result =
+                hir_append_role_declaration(hir, node, role);
+            if (role_result != HIR_BUILD_OK) {
+                data_hir_release(hir);
+                return role_result;
+            }
+            continue;
+        }
         if (node->type == AST_DECLARACION_VARIABLE) {
             if (!node->value || !node->type_name || node->child_count != 0) {
                 data_hir_release(hir); return HIR_BUILD_UNSUPPORTED;
@@ -830,6 +882,9 @@ static HIRBuildResult data_hir_build(const ASTNode *ast, MilenaDataHIR **output)
             bool duplicate = false;
             for (size_t j = 0; j < hir->declared_column_count; ++j)
                 duplicate |= strcmp(hir->declared_schema[j].name,
+                                    declared.name) == 0;
+            for (size_t j = 0; j < hir->role_declaration_count; ++j)
+                duplicate |= strcmp(hir->role_declarations[j].column.name,
                                     declared.name) == 0;
             if (duplicate || !hir_append_declared_column(hir, &declared)) {
                 hir_column_ref_release(&declared);
@@ -1480,6 +1535,29 @@ static MilenaStatus data_hir_bind_tables(MilenaDataHIR *hir,
             return MILENA_ERR_TYPE;
         }
     }
+    for (size_t i = 0; i < hir->role_declaration_count; ++i) {
+        MilenaHIRDataRoleDeclaration *declaration = &hir->role_declarations[i];
+        MilenaHIRColumnRef *column = &declaration->column;
+        if (!column->name || !column->name[0] ||
+            (declaration->role != MILENA_HIR_DATA_ROLE_CATEGORICAL_INPUT &&
+             declaration->role != MILENA_HIR_DATA_ROLE_BINARY_OUTPUT)) {
+            canonical_span_error(error, MILENA_ERR_UNSUPPORTED, &column->span,
+                "La declaración de rol no tiene una forma HIR válida");
+            return MILENA_ERR_UNSUPPORTED;
+        }
+        if (!column->span.has_source_span) column->span = hir->source.span;
+        for (size_t prior = 0; prior < i; ++prior) {
+            if (!hir->role_declarations[prior].column.name ||
+                strcmp(hir->role_declarations[prior].column.name,
+                       column->name) == 0) {
+                canonical_span_error(error, MILENA_ERR_TYPE, &column->span,
+                    "Una columna no puede tener declaraciones de rol duplicadas o en conflicto");
+                return MILENA_ERR_TYPE;
+            }
+        }
+        MilenaStatus status = hir_bind_column(table, hir, column, 0, false, error);
+        if (status != MILENA_OK) return status;
+    }
     for (size_t i = 0; i < hir->operation_count; ++i) {
         MilenaHIRDataOperation *op = &hir->operations[i];
         MilenaStatus status = MILENA_OK;
@@ -1967,6 +2045,8 @@ static bool hir_supports_data_ast_node(const ASTNode *node) {
         case AST_BLOQUE_ANALISIS:
         case AST_LLAMADA_CARGAR:
         case AST_DECLARACION_VARIABLE:
+        case AST_DECLARACION_ENTRADA:
+        case AST_DECLARACION_SALIDA:
         case AST_BLOQUE_TRANSFORMAR:
         case AST_COMANDO_TOTAL:
         case AST_COMANDO_PERIODO:

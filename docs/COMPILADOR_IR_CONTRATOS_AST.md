@@ -96,7 +96,7 @@ Los nombres de AST de este documento son identificadores internos, no sintaxis p
 - **Restricciones y errores:** el tipo literal admitido es exactamente `categorica`; el nombre debe ser no vacío, existir en el esquema/dataset consumido y no entrar en conflicto con otra declaración de esquema. No se extiende a otros tipos por similitud de nombre.
 - **Recursos:** metadato de esquema; no transforma las celdas. Errores de esquema rechazan la ejecución.
 - **Alias/compatibilidad:** ninguno documentado.
-- **Estado:** parser y runtime de lenguaje mapean el nodo a rol categórico de entrada en el esquema. El constructor actual de HIR de datos no consume este nodo y no se afirma lowering canónico.
+- **Estado:** parser y runtime de lenguaje mapean el nodo a rol categórico de entrada en el esquema. El HIR canónico de datos conserva una declaración de rol tipada y poseída, liga el nombre a una columna existente y retiene identidad, tipo físico, forma y span disponible. El rol es metadato: no altera ni convierte celdas ni crea una columna. El HIR estricto rechaza forma inválida, declaración duplicada/conflictiva o binding ausente; esta representación todavía no se baja a IR tipada/bytecode/VM.
 
 ### `AST_DECLARACION_SALIDA`
 
@@ -106,7 +106,7 @@ Los nombres de AST de este documento son identificadores internos, no sintaxis p
 - **Restricciones y errores:** el tipo literal admitido es exactamente `binaria`; el nombre debe ser no vacío, existir en el esquema/dataset consumido y no entrar en conflicto con otra declaración. No se admiten roles de salida de otros tipos.
 - **Recursos:** metadato de esquema, sujeto a los límites ordinarios del esquema/memoria.
 - **Alias/compatibilidad:** ninguno documentado.
-- **Estado:** parser y runtime de lenguaje mapean el nodo a rol binario de salida. El constructor actual de HIR de datos no consume este nodo; no se afirma lowering canónico.
+- **Estado:** parser y runtime de lenguaje mapean el nodo a rol binario de salida. El HIR canónico de datos conserva una declaración de rol tipada y poseída, liga el nombre a una columna existente y retiene identidad, tipo físico, forma y span disponible. El rol es metadato: no altera ni convierte celdas ni crea una columna. El HIR estricto rechaza forma inválida, declaración duplicada/conflictiva o binding ausente; esta representación todavía no se baja a IR tipada/bytecode/VM.
 
 ### `AST_BLOQUE_SELECCIONAR`
 

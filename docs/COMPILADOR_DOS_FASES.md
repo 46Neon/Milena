@@ -34,6 +34,8 @@ No se agregará un parser, un IR de lenguaje o un runtime competidor. La compati
 
 **Gate de salida:** cobertura por constructo cerrada o exclusión versionada; pruebas end-to-end y de error/cleanup; ausencia de fallback semántico silencioso; CI verde en el SHA exacto. Una HIR escalar o de datos parcial no satisface el gate.
 
+**Estado incremental:** el slice de roles de esquema implementa en la HIR de datos canónica `AST_DECLARACION_ENTRADA` (`categorica`) y `AST_DECLARACION_SALIDA` (`binaria`) como metadatos de columna poseídos: valida forma/payload y unicidad, liga la columna fuente y conserva identidad/tipo físico/forma/span disponible. No modifica valores ni crea columnas, y la columna ausente falla durante binding. El contrato y runtime existente siguen siendo el oráculo de esos roles; los nodos aún no se bajan a la IR tipada ni bytecode/VM. Las pruebas canónicas de fuente cubren las dos declaraciones válidas, tipo inválido, binding ausente, duplicado y conflicto; esta cobertura parcial no cierra la Fase 2 ni cambia el ledger AST→IR→bytecode de las fases posteriores.
+
 ## Fase 3 — IR, opcode y assembler
 
 **Objetivo:** traducir la HIR admitida a una representación de instrucciones tipada con una semántica inequívoca, preservando operandos, valores, strings, tipos, control de flujo y errores.

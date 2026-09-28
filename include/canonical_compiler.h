@@ -117,9 +117,9 @@ typedef struct MilenaScalarHIR {
 } MilenaScalarHIR;
 
 /* Typed table/data HIR. This deliberately closed subset has one program-local
- * dataset binding with loader-stamped path provenance; numeric product/filter,
- * month-from-date extraction, null/duplicate cleaning, column projection,
- * grouping, summary, and a borrowed-output export boundary. */
+ * dataset binding with loader-stamped path provenance; schema-role metadata,
+ * numeric product/filter, month-from-date extraction, null/duplicate cleaning,
+ * column projection, grouping, summary, and a borrowed-output export boundary. */
 typedef enum {
     MILENA_HIR_COLUMN_UNKNOWN,
     MILENA_HIR_COLUMN_NUMERIC,
@@ -139,6 +139,16 @@ typedef struct {
     size_t shape[1];
     MilenaHIRSourceSpan span;
 } MilenaHIRColumnRef;
+
+typedef enum {
+    MILENA_HIR_DATA_ROLE_CATEGORICAL_INPUT,
+    MILENA_HIR_DATA_ROLE_BINARY_OUTPUT
+} MilenaHIRDataRole;
+
+typedef struct {
+    MilenaHIRColumnRef column;
+    MilenaHIRDataRole role;
+} MilenaHIRDataRoleDeclaration;
 
 typedef struct {
     size_t max_input_rows;
@@ -203,6 +213,8 @@ typedef struct MilenaDataHIR {
     MilenaHIRDatasetSource source;
     MilenaHIRColumnRef *declared_schema;
     size_t declared_column_count;
+    MilenaHIRDataRoleDeclaration *role_declarations;
+    size_t role_declaration_count;
     MilenaHIRDataOperation *operations;
     size_t operation_count;
     char *export_path;

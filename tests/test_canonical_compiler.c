@@ -751,6 +751,8 @@ int main(void) {
     const char *data_source =
         ".analisis ventas {\n"
         " dataset cargar datos(\"entrada.csv\")\n"
+        " entrada categorica \"ciudad\"\n"
+        " salida binaria \"id\"\n"
         " .transformar dataset { #total(\"precio * cantidad\") }\n"
         " .filtrar { #condicion(\"total >= 10\") }\n"
         " .seleccionar { #columnas(\"id,total,ciudad\") }\n"
@@ -763,6 +765,13 @@ int main(void) {
           program.data_hir->source.resolved_dataset_id != 0 &&
           strcmp(program.data_hir->export_path, "salida.json") == 0 &&
           program.data_hir->operation_count == 3 &&
+          program.data_hir->role_declaration_count == 2 &&
+          program.data_hir->role_declarations[0].role ==
+              MILENA_HIR_DATA_ROLE_CATEGORICAL_INPUT &&
+          strcmp(program.data_hir->role_declarations[0].column.name, "ciudad") == 0 &&
+          program.data_hir->role_declarations[1].role ==
+              MILENA_HIR_DATA_ROLE_BINARY_OUTPUT &&
+          strcmp(program.data_hir->role_declarations[1].column.name, "id") == 0 &&
           program.data_hir->operations[1].as.filter.operation ==
               AST_OPERATOR_GREATER_EQUAL &&
           program.data_hir->operations[1].as.filter.threshold == 10.0 &&
@@ -801,6 +810,11 @@ int main(void) {
     CHECK(program.data_hir->schema_bound &&
           program.data_hir->operations[0].as.product.left.resolved_column_index == 1 &&
           program.data_hir->operations[0].as.product.left.type == MILENA_HIR_COLUMN_NUMERIC &&
+          program.data_hir->role_declarations[0].column.resolved_column_index == 3 &&
+          program.data_hir->role_declarations[0].column.type == MILENA_HIR_COLUMN_TEXT &&
+          program.data_hir->role_declarations[0].column.rank == 1 &&
+          program.data_hir->role_declarations[0].column.shape[0] == data_table.row_count &&
+          program.data_hir->role_declarations[1].column.resolved_column_index == 0 &&
           program.data_hir->operations[2].as.select.columns[1].resolved_column_index == 4 &&
           program.data_hir->operations[2].as.select.columns[2].type == MILENA_HIR_COLUMN_TEXT,
           "el binder debe resolver columnas, tipos, formas e identidades estables");
@@ -836,6 +850,64 @@ int main(void) {
           &sentinel, &error) == MILENA_ERR_OVERFLOW && sentinel.row_count == 1 &&
           milena_table_column_index(&sentinel, "total") >= 0,
           "el límite de filas debe fallar sin publicar ni filtrar parcialmente la salida previa");
+
+    /* Role declarations are typed schema metadata, not column creation or
+       value conversion; invalid duplicates/conflicts never reach legacy input. */
+    MilenaCanonicalProgram roles_program;
+    MilenaCanonicalCompilerInput roles_input = {0};
+    milena_canonical_program_init(&roles_program);
+    const char *duplicate_role_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        "entrada categorica \"ciudad\" entrada categorica \"ciudad\" }";
+    CHECK(milena_canonical_program_parse(&roles_program, duplicate_role_source,
+          &error) == MILENA_OK && roles_program.data_hir == NULL &&
+          milena_canonical_hir_input(&roles_program, &roles_input, &error) ==
+              MILENA_ERR_UNSUPPORTED && roles_input.ast == NULL &&
+          roles_input.data_hir == NULL,
+          "una declaración de rol duplicada debe fallar cerrada sin fallback legado");
+    milena_canonical_program_release(&roles_program);
+
+    milena_canonical_program_init(&roles_program);
+    const char *conflicting_role_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        "entrada categorica \"id\" salida binaria \"id\" }";
+    CHECK(milena_canonical_program_parse(&roles_program, conflicting_role_source,
+          &error) == MILENA_OK && roles_program.data_hir == NULL &&
+          milena_canonical_hir_input(&roles_program, &roles_input, &error) ==
+              MILENA_ERR_UNSUPPORTED && roles_input.ast == NULL,
+          "roles de entrada/salida en una misma columna deben rechazarse sin fallback");
+    milena_canonical_program_release(&roles_program);
+
+    milena_canonical_program_init(&roles_program);
+    const char *variable_role_conflict_source =
+        ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+        "variable ciudad texto entrada categorica \"ciudad\" }";
+    CHECK(milena_canonical_program_parse(&roles_program,
+          variable_role_conflict_source, &error) == MILENA_OK &&
+          roles_program.data_hir == NULL &&
+          milena_canonical_hir_input(&roles_program, &roles_input, &error) ==
+              MILENA_ERR_UNSUPPORTED && roles_input.ast == NULL,
+          "un rol que duplica una declaración de esquema debe fallar cerrada");
+    milena_canonical_program_release(&roles_program);
+
+    milena_canonical_program_init(&roles_program);
+    CHECK(milena_canonical_program_parse(&roles_program,
+          ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+          "entrada numerica \"ciudad\" }", &error) != MILENA_OK &&
+          roles_program.ast == NULL,
+          "el tipo de rol distinto del literal categórica debe rechazarse en parser");
+    milena_canonical_program_release(&roles_program);
+
+    milena_canonical_program_init(&roles_program);
+    CHECK(milena_canonical_program_parse(&roles_program,
+          ".analisis ventas { dataset cargar datos(\"entrada.csv\") "
+          "salida binaria \"ausente\" }", &error) == MILENA_OK &&
+          roles_program.data_hir != NULL &&
+          milena_canonical_program_bind_table(&roles_program, &data_table,
+          &error) == MILENA_ERR_TYPE && error.line > 0 &&
+          !roles_program.data_hir->schema_bound,
+          "la columna de rol ausente debe fallar con ubicación durante el bind");
+    milena_canonical_program_release(&roles_program);
 
     milena_canonical_program_release(&program);
     CHECK(milena_table_validate(&data_table, &error) == MILENA_OK,
