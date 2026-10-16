@@ -6,6 +6,7 @@
 #include "table.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +19,8 @@
 #define CONTEXT_PATH "tests/bytecode_data_runtime_context.milena"
 #define LIMIT_PATH "tests/bytecode_data_runtime_limits.csv"
 #define BLOCKED_PATH "tests/bytecode_data_runtime_blocked"
+static int skipped_subtests;
+
 #define CHECK(condition, message)                                                \
     do {                                                                        \
         if (!(condition)) {                                                     \
@@ -59,6 +62,17 @@ static int file_absent(const char *path) {
     FILE *file = fopen(path, "rb");
     if (!file) return 1;
     fclose(file);
+    return 0;
+}
+
+static int hard_link_unavailable_error(int error_number) {
+    if (error_number == EPERM || error_number == EACCES) return 1;
+#ifdef EOPNOTSUPP
+    if (error_number == EOPNOTSUPP) return 1;
+#endif
+#if defined(ENOTSUP) && (!defined(EOPNOTSUPP) || ENOTSUP != EOPNOTSUPP)
+    if (error_number == ENOTSUP) return 1;
+#endif
     return 0;
 }
 
@@ -313,17 +327,26 @@ static int test_alias_rejection_and_existing_output_preservation(void) {
     free(bytes);
 
     remove_if_exists("tests/bytecode_data_runtime_hardlink.csv");
-    CHECK(link(INPUT_PATH, "tests/bytecode_data_runtime_hardlink.csv") == 0,
-          "create hard-link alias fixture");
-    CHECK(compile_plan("bytecode_data_runtime_input.csv",
-                       "bytecode_data_runtime_hardlink.csv", "valor",
-                       MILENA_BYTECODE_DATA_SUM, &bytes, &length),
-          "encode inode alias plan");
-    CHECK(milena_bytecode_run_data(bytes, length, CONTEXT_PATH, NULL, &error) ==
-              MILENA_ERR_ARGUMENT,
-          "same-device/inode output alias must be refused");
-    free(bytes);
-    remove_if_exists("tests/bytecode_data_runtime_hardlink.csv");
+    if (link(INPUT_PATH, "tests/bytecode_data_runtime_hardlink.csv") == 0) {
+        CHECK(compile_plan("bytecode_data_runtime_input.csv",
+                           "bytecode_data_runtime_hardlink.csv", "valor",
+                           MILENA_BYTECODE_DATA_SUM, &bytes, &length),
+              "encode inode alias plan");
+        CHECK(milena_bytecode_run_data(bytes, length, CONTEXT_PATH, NULL,
+                                       &error) == MILENA_ERR_ARGUMENT,
+              "same-device/inode output alias must be refused");
+        free(bytes);
+        remove_if_exists("tests/bytecode_data_runtime_hardlink.csv");
+    } else {
+        int link_error = errno;
+        CHECK(hard_link_unavailable_error(link_error),
+              "create hard-link alias fixture");
+        fprintf(stderr,
+                "SKIP hard-link alias subtest: filesystem denies hard links "
+                "(errno=%d); inode-alias rejection was not exercised\n",
+                link_error);
+        ++skipped_subtests;
+    }
 
     CHECK(write_bytes("tests/preserved.json", "original\n", sizeof("original\n") - 1u),
           "write existing destination");
@@ -435,6 +458,11 @@ int main(void) {
     remove_if_exists("tests/limit-field.json");
     remove_if_exists("tests/preserved.json");
     remove_if_exists("tests/report-preserved.json");
-    puts("bytecode data runtime tests passed");
+    if (skipped_subtests == 0) {
+        puts("bytecode data runtime tests passed");
+    } else {
+        printf("bytecode data runtime tests passed; %d subtest(s) skipped\n",
+               skipped_subtests);
+    }
     return 0;
 }

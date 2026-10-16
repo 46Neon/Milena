@@ -256,17 +256,19 @@ Descarga y compila:
 ```bash
 git clone https://github.com/46Neon/Milena.git
 cd Milena
-make
+make termux-build
 ```
 
-Ejecuta las pruebas y un ejemplo:
+Comprueba la compilación y ejecuta las pruebas y un ejemplo:
 
 ```bash
-make test
+./milena --version
+./milena --self-check
+make TERMUX=1 CC=clang test
 ./milena run examples/estadistica.milena
 ```
 
-Termux utiliza las mismas fuentes C17 y el mismo pipeline canónico. La validación automatizada principal se ejecuta actualmente en Linux y Windows; cualquier diferencia específica de Android o Termux debe reportarse con el dispositivo, la versión de Termux y el commit utilizado.
+Termux utiliza las mismas fuentes C17 y el mismo pipeline canónico. `run` usa el intérprete; `vm` ejecuta únicamente los subconjuntos compilables y verificados; `build` no genera AOT en Android/Termux (ese backend está limitado a Linux x86-64). La compilación fuente y el `self-check` se verificaron manualmente en Termux/AArch64; la aceptación y publicación del paquete Termux, y su instalación mediante `pkg install`, siguen pendientes. Si el sistema de archivos deniega enlaces duros, la prueba de alias por inode se marca explícitamente como omitida y no cuenta como verificación de ese caso. Para reportar diferencias específicas, incluye dispositivo, versión de Termux y commit.
 
 ## Instalación y empaquetado por plataformas
 
@@ -276,13 +278,13 @@ Los comandos objetivo, la arquitectura de cada artefacto, su disponibilidad y lo
 |---|---|---|
 | Windows x64 | `winget install --id 46Neon.Milena --exact` | Manifiestos adjuntos a una Release; publicación/indexación WinGet y prueba limpia pendientes. |
 | Debian/Ubuntu Linux amd64 | `sudo apt install milena` | `.deb` local/de Release; repositorio APT Linux firmado y registrado pendiente. |
-| Android/Termux AArch64 | `pkg install milena` | Receta candidata; aceptación/publicación y prueba en Android/Bionic pendientes. |
+| Android/Termux AArch64 | `pkg install milena` | Compilación fuente y self-check verificados manualmente; paquete publicado e instalación con `pkg` pendientes. |
 
 Los paquetes Linux y Termux son diferentes aunque ambos usen formato `.deb`: Linux usa su ABI y rutas `/usr`; Termux usa Bionic y `$PREFIX`. El workflow `.github/workflows/publish-apt.yml` corresponde al repositorio Termux/AArch64, no al canal APT de Debian/Ubuntu. Consulta la matriz para los gates y límites exactos por canal.
 
 ## Estado del proyecto
 
-Milena ya es un runtime funcional y verificable, no solamente una idea conceptual ni una colección de ejemplos aislados. Cuenta con un pipeline lexer → parser → AST → semántica → runtime, ejecución de arreglos, datasets y tablas, análisis estadístico, operaciones SST, integración financiera inicial, reportes reproducibles y validación automatizada en Linux y Windows.
+Milena ya es un runtime funcional y verificable, no solamente una idea conceptual ni una colección de ejemplos aislados. Cuenta con un pipeline lexer → parser → AST → semántica → runtime, ejecución de arreglos, datasets y tablas, análisis estadístico, operaciones SST, integración financiera inicial y reportes reproducibles. La suite automatizada principal se ejecuta en Linux y Windows; la compilación fuente y el self-check también se verificaron manualmente en Termux/AArch64, sin que eso equivalga a certificar el paquete publicado.
 
 El proyecto se encuentra en una etapa de **consolidación avanzada del núcleo del lenguaje**. La arquitectura principal está implementada y validada, mientras que la sintaxis, las APIs y los módulos de alto nivel continúan evolucionando.
 
@@ -302,7 +304,7 @@ No es solamente un ejercicio educativo, pero tampoco se presenta todavía como u
 
 ## Compilación nativa AOT (subconjunto de fase 1)
 
-En hosts POSIX con un compilador C17 disponible, `milena build programa.milena -o programa` genera un ejecutable nativo a partir de la IR tipada canónica verificada. No ejecuta ni empaqueta bytecode. El alcance está limitado a funciones escalares `F64`, comparaciones booleanas, CFG y llamadas internas verificadas; las operaciones no representadas se rechazan. Windows conserva el comando, pero el backend AOT no está habilitado allí. Consulta [el contrato y el subconjunto exacto de AOT](docs/NATIVE_AOT.md).
+El backend AOT de `milena build programa.milena -o programa` genera ejecutables nativos únicamente en Linux x86-64, a partir de la IR tipada canónica verificada; no ejecuta ni empaqueta bytecode. El alcance está limitado a funciones escalares `F64`, comparaciones booleanas, CFG y llamadas internas verificadas; las operaciones no representadas se rechazan. En Windows, Android/Termux y otros destinos, el comando se conserva pero el backend AOT no está habilitado. Consulta [el contrato y el subconjunto exacto de AOT](docs/NATIVE_AOT.md).
 
 ## Contribuir
 

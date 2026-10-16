@@ -409,14 +409,14 @@ MilenaBytecodeStatus milena_bytecode_verify_data(
 
     section_bytes = data_read_u32(bytes + section_start + 8u);
     string_table_bytes = data_read_u32(bytes + section_start + 48u);
-    if (section_bytes > SIZE_MAX - MILENA_BYTECODE_HEADER_SIZE)
+    if (!data_add_size((size_t)section_bytes, MILENA_BYTECODE_HEADER_SIZE,
+                       &module_section_length))
         return data_fail(diagnostic, MILENA_BC_BAD_FORMAT, section_start + 8u,
                          "DPLN section length overflows host size");
     if ((uint64_t)section_bytes !=
         (uint64_t)(length - MILENA_BYTECODE_HEADER_SIZE))
         return data_fail(diagnostic, MILENA_BC_BAD_FORMAT, section_start + 8u,
                          "DPLN section length does not match module length");
-    module_section_length = MILENA_BYTECODE_HEADER_SIZE + (size_t)section_bytes;
     if (module_section_length != length ||
         section_bytes < DATA_FIXED_SECTION_SIZE ||
         (uint64_t)string_table_bytes !=
