@@ -44,7 +44,7 @@ Los nombres de AST de este documento son identificadores internos, no sintaxis p
 - **Restricciones y errores:** cada orden se valida antes de ejecutarse. `total` exige exactamente dos nombres de columna, separados por un `*` independiente, sin tokens finales; las dos entradas deben existir y ser numéricas, `total` no debe existir ya, y un producto no finito/overflow falla. `periodo` solo acepta el payload exacto `mes de fecha`; exige columna de texto `fecha`, ausencia previa de `periodo` y fechas ISO `YYYY-MM-DD` con año 0001–9999 y día válido del calendario gregoriano (incluidas reglas de año bisiesto). Fechas con sufijo, ancho distinto, día/mes imposible o año 0000 fallan; no se normalizan.
 - **Recursos:** opera sobre tablas en memoria y asigna columna de salida; la memoria disponible/overflow son límites operativos. Ante error no se publica una columna incompleta.
 - **Alias/compatibilidad:** se conserva explícitamente la forma histórica `#periodo extraer("mes de fecha")`, que se normaliza al mismo `AST_COMANDO_PERIODO`; no crea `AST_COMANDO_EXTRAER`. El alias solo cambia la grafía, no amplía los valores admitidos.
-- **Estado:** el runtime tabular ejecuta `#total` y `#periodo`; la HIR de datos del compilador admite `#total`, pero no baja `#periodo` y por eso la compilación HIR cerrada no cubre esa operación. Este documento no afirma que el bloque completo se baje a IR/bytecode/VM.
+- **Estado:** el runtime tabular ejecuta `#total` y `#periodo`; la HIR de datos baja el payload tipado de `#periodo("mes de fecha")` a `MILENA_HIR_DATA_PERIOD` y lo enlaza/ejecuta en el slice acotado descrito abajo. No implica lowering completo del bloque a IR/bytecode/VM.
 
 ### `AST_COMANDO_TOTAL`
 
