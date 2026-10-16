@@ -1,4 +1,4 @@
-.analisis estadistica {
+.analisis resumen {
     arreglo valores = [1, 2, 3, 4];
 
     suma(valores);
