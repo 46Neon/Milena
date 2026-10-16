@@ -1411,7 +1411,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             Token command_start = parser->current;
                             parser_advance(parser);
                             if (parser_match(parser, TOKEN_KW_TOTAL)) {
-                                Token command_start = parser->previous;
+                                Token total_command_start = parser->previous;
                                 parser_advance(parser);
                                 if (parser_expect(parser, TOKEN_PAR_IZQ, "Se esperaba '('") ) {
                                     if (parser_expect(parser, TOKEN_CADENA, "Se esperaba cadena")) {
@@ -1419,7 +1419,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                                         ASTNode *total = ast_create_leaf(
                                             AST_COMANDO_TOTAL, expression_token.lexeme);
                                         if (!total) {
-                                            parser_error_at(parser, &command_start,
+                                            parser_error_at(parser, &total_command_start,
                                                 "Sin memoria para comando total");
                                             break;
                                         }
@@ -1865,7 +1865,7 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                     }
                     if (parser_match(parser, TOKEN_LLAVE_IZQ)) {
                         parser_advance(parser);
-                        Token block_start = parser->previous;
+                        Token named_block_start = parser->previous;
                         ASTNode *filtrar = ast_create(selecting ? AST_BLOQUE_SELECCIONAR :
                                                        (joining ? AST_BLOQUE_UNIR : AST_BLOQUE_FILTRAR));
                         if (!filtrar) {
@@ -2045,9 +2045,9 @@ static ASTNode* parse_bloque_analisis(Parser *parser) {
                             parser_expect(parser, TOKEN_LLAVE_DER, "Se esperaba '}'");
                         Token block_end = parser->previous;
                         if (!parser->has_error && filtrar &&
-                            block_start.type != TOKEN_EOF &&
+                            named_block_start.type != TOKEN_EOF &&
                             block_end.type == TOKEN_LLAVE_DER)
-                            (void)ast_set_source_span(filtrar, &block_start, &block_end);
+                            (void)ast_set_source_span(filtrar, &named_block_start, &block_end);
                         if (filtering && !parser->has_error && filtrar &&
                             filtrar->child_count != 1) {
                             parser_error_at(parser, &named_block_token,
