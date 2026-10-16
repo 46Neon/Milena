@@ -42,7 +42,8 @@ static bool ensure_directory(const char *path)
 {
     struct stat status;
     if (mkdir(path, (mode_t)0755) == 0) {
-        return true;
+        /* mkdir mode is masked by umask; the package fixture needs exact modes. */
+        return chmod(path, (mode_t)0755) == 0;
     }
     if (errno != EEXIST || stat(path, &status) != 0 || !S_ISDIR(status.st_mode)) {
         return false;
@@ -949,6 +950,8 @@ int main(void)
     char artifact_root[PATH_CAPACITY];
     bool recipe_created;
     bool artifact_created;
+    /* Exercise package staging with a restrictive caller umask. */
+    (void)umask((mode_t)0077);
     recipe_created = make_temp_directory(recipe_root, "milena-termux-recipe");
     artifact_created = make_temp_directory(artifact_root, "milena-termux-boundary");
     if (!recipe_created || !artifact_created) {
