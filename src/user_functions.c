@@ -5,13 +5,6 @@
 #include <math.h>
 
 static void node_destroy(MilenaFunctionNode *n) { size_t i; if (!n) return; for (i=0;i<n->child_count;i++) node_destroy(n->children[i]); free(n->children); free(n->name); free(n); }
-static char *copy_text(const char *text) {
-    size_t n; char *copy;
-    if (!text) return NULL;
-    n = strlen(text) + 1; copy = (char *)malloc(n);
-    if (copy) memcpy(copy, text, n);
-    return copy;
-}
 static void set_error(char *error, size_t size, const char *message) {
     if (error && size) { snprintf(error, size, "%s", message); }
 }

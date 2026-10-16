@@ -409,9 +409,9 @@ static MilenaStatus read_record_bounded(CsvBoundedInput *input, char **record,
         goto fail;
     }
     {
-        MilenaStatus status = grow_bytes(record, &capacity, length + 1);
-        if (status != MILENA_OK) {
-            milena_error_set(error, status, start_line, 1, 0,
+        MilenaStatus grow_status = grow_bytes(record, &capacity, length + 1);
+        if (grow_status != MILENA_OK) {
+            milena_error_set(error, grow_status, start_line, 1, 0,
                              "Memoria insuficiente leyendo CSV");
             goto fail;
         }
