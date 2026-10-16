@@ -59,12 +59,12 @@ Los nombres de AST de este documento son identificadores internos, no sintaxis p
 ### `AST_COMANDO_PERIODO`
 
 - **Sintaxis:** `#periodo("mes de fecha")`, dentro de `.transformar`.
-- **Forma AST:** hoja `AST_COMANDO_PERIODO`, con `value` igual al texto entre comillas y sin hijos. La forma histórica con `extraer` produce exactamente este mismo tipo de nodo.
+- **Forma AST:** hoja `AST_COMANDO_PERIODO`, con `value` igual al texto entre comillas, sin hijos, y payload tipado `AST_PERIOD_MONTH_FROM_DATE`. La forma histórica con `extraer` produce exactamente este mismo tipo de nodo.
 - **Semántica:** lee `fecha` (texto) y agrega texto `periodo`, con año y mes `YYYY-MM`; conserva nulos fila a fila.
 - **Restricciones y errores:** payload literal exacto `mes de fecha`; columna `fecha` de texto; columna de salida `periodo` ausente. Cada valor no nulo debe ser ISO `YYYY-MM-DD`, con dígitos ASCII y fecha real del calendario gregoriano, año 0001–9999; se rechazan fechas inválidas, sufijos y espacios. No se infiere ni se convierte otro formato.
 - **Recursos:** columna derivada residente en memoria; errores de validación o asignación no dejan salida parcial.
 - **Alias/compatibilidad:** `#periodo extraer("mes de fecha")` es alias histórico explícito y se normaliza a este nodo. Ninguna otra forma de `extraer` queda habilitada.
-- **Estado:** runtime tabular implementa el cálculo y la validación estricta del calendario; el constructor actual de HIR de datos no baja `AST_COMANDO_PERIODO`. No está disponible como lowering completo de IR/bytecode/VM.
+- **Estado:** runtime tabular implementa el cálculo y la validación estricta del calendario; el constructor y binder de HIR de datos bajan y resuelven este slice, que ejecuta con `milena_table_add_month`. No está disponible como lowering completo de IR/bytecode/VM.
 
 ### `AST_BLOQUE_FILTRAR`
 

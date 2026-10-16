@@ -154,6 +154,11 @@ typedef enum {
 } ASTStreamOperation;
 
 typedef enum {
+    AST_PERIOD_OPERATION_NONE = 0,
+    AST_PERIOD_MONTH_FROM_DATE
+} ASTPeriodOperation;
+
+typedef enum {
     AST_AGGREGATE_OPERATION_NONE = 0,
     AST_AGGREGATE_OPERATION_SUM,
     AST_AGGREGATE_OPERATION_MEAN,
@@ -254,6 +259,9 @@ typedef struct ASTNode {
     ASTAggregateOperation aggregate_operation;
     char *aggregate_column;
     bool has_aggregate_metric;
+    /* Closed typed operation for #periodo; value remains its spelling. */
+    ASTPeriodOperation period_operation;
+    bool has_period_operation;
     /* Owned typed payloads; legacy value/type_name remain compatibility mirrors. */
     ASTDataSourcePayload data_source;
     ASTDataColumnPayload data_column;
@@ -336,6 +344,7 @@ ASTFilterPredicateStatus ast_set_filter_predicate(ASTNode *node,
 /* Set typed canonical metric data while preserving the legacy value spelling. */
 bool ast_set_aggregate_metric(ASTNode *node, ASTAggregateOperation operation,
                               const char *column);
+bool ast_set_period_operation(ASTNode *node, ASTPeriodOperation operation);
 /* Typed, independently owned mirrors for the admitted canonical data-summary nodes. */
 bool ast_set_data_source_declaration(ASTNode *node, const char *path);
 bool ast_set_data_column_declaration(ASTNode *node, const char *name,

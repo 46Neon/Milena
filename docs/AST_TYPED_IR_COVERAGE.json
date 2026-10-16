@@ -825,5 +825,14 @@
       "lowering_evidence": "No complete AST-to-typed-IR lowering evidence; active source-surface aggregate is 0/68 full, 7 partial, 61 not lowered, with 4 reserved enum slots outside that denominator.",
       "completion_evidence": null
     }
+  ],
+  "phase2_hir_slices": [
+    {
+      "ast_variant": "AST_COMANDO_PERIODO",
+      "operation": "MILENA_HIR_DATA_PERIOD / AST_PERIOD_MONTH_FROM_DATE",
+      "lowering_source": "src/canonical_compiler.c:data_hir_build",
+      "reference_execution": "milena_table_add_month",
+      "scope": "Bounded HIR construction, schema binding and reference execution only; not end-to-end typed IR/bytecode/VM coverage."
+    }
   ]
 }
