@@ -39,12 +39,12 @@ Los nombres de AST de este documento son identificadores internos, no sintaxis p
 ### `AST_BLOQUE_TRANSFORMAR`
 
 - **Sintaxis:** `.transformar [dataset] { #total("col_a * col_b") #periodo("mes de fecha") }`. `dataset` es opcional. El cuerpo admite comandos `#total` y `#periodo` en orden de fuente. El bloque vacío es una transformación identidad (no agrega ni modifica columnas).
-- **Forma AST:** nodo `AST_BLOQUE_TRANSFORMAR` con hijos hoja `AST_COMANDO_TOTAL` y/o `AST_COMANDO_PERIODO`, que guardan en `value` el texto exacto entre comillas.
+- **Forma AST:** nodo `AST_BLOQUE_TRANSFORMAR` con hijos hoja `AST_COMANDO_TOTAL` y/o `AST_COMANDO_PERIODO`; ambos conservan en `value` el texto exacto entre comillas, y el período lleva además el payload `AST_PERIOD_MONTH_FROM_DATE` y su span completo.
 - **Semántica:** `#total` agrega la columna numérica `total` con el producto fila a fila de las columnas indicadas; los nulos se propagan. `#periodo` agrega la columna de texto `periodo` derivando `YYYY-MM` de la columna de texto `fecha`; los nulos se propagan.
 - **Restricciones y errores:** cada orden se valida antes de ejecutarse. `total` exige exactamente dos nombres de columna, separados por un `*` independiente, sin tokens finales; las dos entradas deben existir y ser numéricas, `total` no debe existir ya, y un producto no finito/overflow falla. `periodo` solo acepta el payload exacto `mes de fecha`; exige columna de texto `fecha`, ausencia previa de `periodo` y fechas ISO `YYYY-MM-DD` con año 0001–9999 y día válido del calendario gregoriano (incluidas reglas de año bisiesto). Fechas con sufijo, ancho distinto, día/mes imposible o año 0000 fallan; no se normalizan.
 - **Recursos:** opera sobre tablas en memoria y asigna columna de salida; la memoria disponible/overflow son límites operativos. Ante error no se publica una columna incompleta.
 - **Alias/compatibilidad:** se conserva explícitamente la forma histórica `#periodo extraer("mes de fecha")`, que se normaliza al mismo `AST_COMANDO_PERIODO`; no crea `AST_COMANDO_EXTRAER`. El alias solo cambia la grafía, no amplía los valores admitidos.
-- **Estado:** el runtime tabular ejecuta `#total` y `#periodo`; la HIR de datos del compilador admite `#total`, pero no baja `#periodo` y por eso la compilación HIR cerrada no cubre esa operación. Este documento no afirma que el bloque completo se baje a IR/bytecode/VM.
+- **Estado:** el runtime tabular ejecuta `#total` y `#periodo`; la HIR de datos baja el payload tipado de `#periodo("mes de fecha")` a `MILENA_HIR_DATA_PERIOD` y lo enlaza/ejecuta en el slice acotado descrito abajo. No implica lowering completo del bloque a IR/bytecode/VM.
 
 ### `AST_COMANDO_TOTAL`
 
@@ -59,12 +59,12 @@ Los nombres de AST de este documento son identificadores internos, no sintaxis p
 ### `AST_COMANDO_PERIODO`
 
 - **Sintaxis:** `#periodo("mes de fecha")`, dentro de `.transformar`.
-- **Forma AST:** hoja `AST_COMANDO_PERIODO`, con `value` igual al texto entre comillas y sin hijos. La forma histórica con `extraer` produce exactamente este mismo tipo de nodo.
+- **Forma AST:** hoja `AST_COMANDO_PERIODO`, con `value` igual al texto entre comillas, sin hijos, y payload tipado `AST_PERIOD_MONTH_FROM_DATE`. La forma histórica con `extraer` produce exactamente este mismo tipo de nodo.
 - **Semántica:** lee `fecha` (texto) y agrega texto `periodo`, con año y mes `YYYY-MM`; conserva nulos fila a fila.
 - **Restricciones y errores:** payload literal exacto `mes de fecha`; columna `fecha` de texto; columna de salida `periodo` ausente. Cada valor no nulo debe ser ISO `YYYY-MM-DD`, con dígitos ASCII y fecha real del calendario gregoriano, año 0001–9999; se rechazan fechas inválidas, sufijos y espacios. No se infiere ni se convierte otro formato.
 - **Recursos:** columna derivada residente en memoria; errores de validación o asignación no dejan salida parcial.
 - **Alias/compatibilidad:** `#periodo extraer("mes de fecha")` es alias histórico explícito y se normaliza a este nodo. Ninguna otra forma de `extraer` queda habilitada.
-- **Estado:** runtime tabular implementa el cálculo y la validación estricta del calendario; el constructor actual de HIR de datos no baja `AST_COMANDO_PERIODO`. No está disponible como lowering completo de IR/bytecode/VM.
+- **Estado:** runtime tabular implementa el cálculo y la validación estricta del calendario; el constructor y binder de HIR de datos bajan y resuelven este slice, que ejecuta con `milena_table_add_month`. No está disponible como lowering completo de IR/bytecode/VM.
 
 ### `AST_BLOQUE_FILTRAR`
 
